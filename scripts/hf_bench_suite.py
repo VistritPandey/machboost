@@ -140,19 +140,14 @@ def build_fixtures(root: Path, selected: list[str]) -> list[Fixture]:
     if code:
         marker = "def parse_args"
         code_slice = excerpt_after(code, marker, chars=1400)
-        prefix = code_slice[:260]
-        code_prompt = (
-            "You are editing this Python file. Continue the excerpt exactly from the file content below. "
-            "Do not explain.\n\n"
-            "<file>\n"
-            + code_slice
-            + "\n</file>\n\n<excerpt>\n"
-            + prefix
-        )
+        arg_start = code_slice.find('    parser.add_argument("--model"')
+        if arg_start >= 0:
+            code_slice = code_slice[arg_start:]
+        code_prompt = code_slice[:360]
         fixtures["prompt_visible_code"] = Fixture(
             name="prompt_visible_code",
             workflow="code_completion",
-            description="Code continuation where the target span is visible in the prompt.",
+            description="Raw code continuation over repeated argparse option declarations.",
             expectation="positive",
             prompt_path=write_file(root / "prompt_visible_code" / "prompt.txt", code_prompt),
             context_path=write_file(root / "prompt_visible_code" / "context.py", code_slice),
@@ -252,17 +247,11 @@ def test_profile_balanced_uses_safe_defaults():
     assert profile.keep_awake is True
     assert profile.env["MACHBOOST_PROFILE"] == "balanced"
 """
-    tests_prompt = (
-        "You are editing this Python test file. Continue the excerpt exactly from the file below.\n\n"
-        "<file>\n"
-        + tests_context
-        + "</file>\n\n<excerpt>\n"
-        + tests_context[:260]
-    )
+    tests_prompt = tests_context[:210]
     fixtures["test_boilerplate"] = Fixture(
         name="test_boilerplate",
         workflow="test_generation",
-        description="Unit-test boilerplate continuation with repeated assertion patterns.",
+        description="Raw unit-test boilerplate continuation with repeated assertion patterns.",
         expectation="positive",
         prompt_path=write_file(root / "test_boilerplate" / "prompt.txt", tests_prompt),
         context_path=write_file(root / "test_boilerplate" / "context.py", tests_context),
