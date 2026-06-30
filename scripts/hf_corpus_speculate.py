@@ -60,8 +60,11 @@ class RunStats:
     accepted_draft_tokens: int
     accepted_draft_spans: int
     normal_tokens: int
+    prefill_ms: int
+    decode_ms: int
     elapsed_ms: int
     tokens_per_second: float
+    decode_tokens_per_second: float
     output: str
 
 
@@ -440,7 +443,9 @@ def baseline_generate(model, tokenizer, prompt_ids: list[int], max_new_tokens: i
     forwards = 0
     start = time.perf_counter()
     current_logits, past_key_values = prefill(model, generated, device)
+    prefill_elapsed = time.perf_counter() - start
     forwards += 1
+    decode_start = time.perf_counter()
 
     while len(output_tokens) < max_new_tokens:
         token = next_greedy_from_logits(current_logits)
@@ -451,6 +456,7 @@ def baseline_generate(model, tokenizer, prompt_ids: list[int], max_new_tokens: i
         current_logits, past_key_values = advance_cache(model, past_key_values, token, device)
         forwards += 1
 
+    decode_elapsed = time.perf_counter() - decode_start
     elapsed = time.perf_counter() - start
     output = tokenizer.decode(output_tokens, skip_special_tokens=True)
     return RunStats(
@@ -460,8 +466,11 @@ def baseline_generate(model, tokenizer, prompt_ids: list[int], max_new_tokens: i
         accepted_draft_tokens=0,
         accepted_draft_spans=0,
         normal_tokens=len(output_tokens),
+        prefill_ms=int(prefill_elapsed * 1000),
+        decode_ms=int(decode_elapsed * 1000),
         elapsed_ms=int(elapsed * 1000),
         tokens_per_second=(len(output_tokens) / elapsed) if elapsed > 0 else 0,
+        decode_tokens_per_second=(len(output_tokens) / decode_elapsed) if decode_elapsed > 0 else 0,
         output=output,
     )
 
@@ -489,7 +498,9 @@ def speculative_generate(
     normal_tokens = 0
     start = time.perf_counter()
     current_logits, past_key_values = prefill(model, generated, device)
+    prefill_elapsed = time.perf_counter() - start
     forwards += 1
+    decode_start = time.perf_counter()
 
     while len(output_tokens) < max_new_tokens:
         candidates = find_candidates(generated, source_tokens, index, ngram, max_draft_tokens, candidate_limit)
@@ -530,6 +541,7 @@ def speculative_generate(
         current_logits, past_key_values = advance_cache(model, past_key_values, token, device)
         forwards += 1
 
+    decode_elapsed = time.perf_counter() - decode_start
     elapsed = time.perf_counter() - start
     output = tokenizer.decode(output_tokens, skip_special_tokens=True)
     return RunStats(
@@ -539,8 +551,11 @@ def speculative_generate(
         accepted_draft_tokens=accepted_draft_tokens,
         accepted_draft_spans=accepted_draft_spans,
         normal_tokens=normal_tokens,
+        prefill_ms=int(prefill_elapsed * 1000),
+        decode_ms=int(decode_elapsed * 1000),
         elapsed_ms=int(elapsed * 1000),
         tokens_per_second=(len(output_tokens) / elapsed) if elapsed > 0 else 0,
+        decode_tokens_per_second=(len(output_tokens) / decode_elapsed) if decode_elapsed > 0 else 0,
         output=output,
     )
 
@@ -830,8 +845,16 @@ def main(argv: list[str]) -> int:
             return 0
         print(f"baseline: {result['baseline']['elapsed_ms']}ms, {result['baseline']['tokens_per_second']:.2f} tok/s")
         print(
+            "baseline decode: "
+            f"{result['baseline']['decode_ms']}ms, {result['baseline']['decode_tokens_per_second']:.2f} tok/s"
+        )
+        print(
             "speculative: "
             f"{result['speculative']['elapsed_ms']}ms, {result['speculative']['tokens_per_second']:.2f} tok/s"
+        )
+        print(
+            "speculative decode: "
+            f"{result['speculative']['decode_ms']}ms, {result['speculative']['decode_tokens_per_second']:.2f} tok/s"
         )
         print(f"wall-clock speedup: {result['wall_clock_speedup']:.2f}x")
         print(f"forward reduction: {result['forward_reduction_percent']:.1f}%")
