@@ -53,4 +53,4 @@ For existing services like an already-running Ollama daemon, profile env vars wi
 
 `machboost simulate-draft` estimates how many serial decode steps a local corpus drafter could save on a known prompt/output transcript. The simulation is idealized; real acceleration requires runtime verification integration.
 
-`scripts/hf_corpus_speculate.py` is an experimental Hugging Face verifier loop. It compares baseline greedy generation against local-corpus speculative generation for causal language models where MachBoost can inspect logits directly.
+`scripts/hf_corpus_speculate.py` is an experimental Hugging Face verifier loop. It compares KV-cache baseline greedy generation against local-corpus speculative generation for causal language models where MachBoost can inspect logits directly.
