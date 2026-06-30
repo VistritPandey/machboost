@@ -83,6 +83,23 @@ class CompareStats:
     note: str
 
 
+@dataclass
+class AutoDraftStats:
+    schema_version: str
+    model: str
+    prompt_tokens: int
+    context_tokens: int
+    max_new_tokens: int
+    ngram: int
+    warmup_tokens: int
+    baseline: RunStats
+    runs: list[CompareStats]
+    best_max_draft_tokens: int
+    best_wall_clock_speedup: float
+    best_forward_reduction_percent: float
+    verdict: str
+
+
 def read_text(path: str) -> str:
     return Path(path).read_text(encoding="utf-8", errors="ignore")
 
@@ -374,7 +391,7 @@ def speculative_generate(
     )
 
 
-def run_compare(args: argparse.Namespace) -> CompareStats:
+def load_runtime(args: argparse.Namespace):
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -387,12 +404,18 @@ def run_compare(args: argparse.Namespace) -> CompareStats:
     )
     model.to(device)
     model.eval()
+    return tokenizer, model, device
 
+
+def prepare_inputs(args: argparse.Namespace, tokenizer) -> tuple[list[int], list[int]]:
     prompt = read_text(args.prompt)
     context = read_context(args.context, args.max_context_chars)
     prompt_ids = tokenizer.encode(prompt, add_special_tokens=False)
     source_ids = tokenizer.encode(prompt + context, add_special_tokens=False)
+    return prompt_ids, source_ids
 
+
+def compare_with_runtime(args: argparse.Namespace, tokenizer, model, device, prompt_ids, source_ids) -> CompareStats:
     warmup_model(model, prompt_ids, device)
     if args.warmup_tokens > 0:
         _ = baseline_generate(model, tokenizer, prompt_ids, args.warmup_tokens, device)
@@ -453,6 +476,102 @@ def run_compare(args: argparse.Namespace) -> CompareStats:
     )
 
 
+def run_compare(args: argparse.Namespace) -> CompareStats:
+    tokenizer, model, device = load_runtime(args)
+    prompt_ids, source_ids = prepare_inputs(args, tokenizer)
+    return compare_with_runtime(args, tokenizer, model, device, prompt_ids, source_ids)
+
+
+def parse_draft_sweep(value: str) -> list[int]:
+    drafts: list[int] = []
+    for part in value.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        drafts.append(int(part))
+    return drafts or [2, 4, 6, 8]
+
+
+def run_auto_draft(args: argparse.Namespace) -> AutoDraftStats:
+    tokenizer, model, device = load_runtime(args)
+    prompt_ids, source_ids = prepare_inputs(args, tokenizer)
+    warmup_model(model, prompt_ids, device)
+    if args.warmup_tokens > 0:
+        _ = baseline_generate(model, tokenizer, prompt_ids, args.warmup_tokens, device)
+
+    baseline = baseline_generate(model, tokenizer, prompt_ids, args.max_new_tokens, device)
+    runs: list[CompareStats] = []
+    best: CompareStats | None = None
+
+    for draft_tokens in parse_draft_sweep(args.draft_sweep):
+        trial_args = argparse.Namespace(**vars(args))
+        trial_args.max_draft_tokens = draft_tokens
+        speculative = speculative_generate(
+            model,
+            tokenizer,
+            prompt_ids,
+            source_ids,
+            trial_args.max_new_tokens,
+            trial_args.ngram,
+            trial_args.max_draft_tokens,
+            device,
+            trial_args.candidate_limit,
+        )
+        speedup = baseline.elapsed_ms / speculative.elapsed_ms if speculative.elapsed_ms > 0 else 0
+        forward_reduction = (
+            ((baseline.model_forwards - speculative.model_forwards) / baseline.model_forwards) * 100
+            if baseline.model_forwards
+            else 0
+        )
+        if speculative.accepted_draft_tokens == 0:
+            verdict = "no_draft_acceptance"
+        elif forward_reduction >= 20:
+            verdict = "mechanism_viable"
+        elif forward_reduction >= 5:
+            verdict = "weak_mechanism_signal"
+        else:
+            verdict = "no_clear_mechanism_gain"
+        result = CompareStats(
+            schema_version="machboost.hf_corpus_speculate.v1",
+            model=args.model,
+            prompt_tokens=len(prompt_ids),
+            context_tokens=len(source_ids) - len(prompt_ids),
+            max_new_tokens=args.max_new_tokens,
+            ngram=args.ngram,
+            max_draft_tokens=draft_tokens,
+            warmup_tokens=args.warmup_tokens,
+            baseline=baseline,
+            speculative=speculative,
+            output_match=baseline.output == speculative.output,
+            wall_clock_speedup=speedup,
+            forward_reduction_percent=forward_reduction,
+            verdict=verdict,
+            note="Prototype verifier using Hugging Face KV cache. Forward reduction is the main mechanism metric; wall-clock is hardware/runtime dependent.",
+        )
+        runs.append(result)
+        if result.output_match and (best is None or result.wall_clock_speedup > best.wall_clock_speedup):
+            best = result
+
+    if best is None:
+        best = max(runs, key=lambda item: item.wall_clock_speedup)
+    verdict = "mechanism_viable" if best.output_match and best.forward_reduction_percent >= 20 else best.verdict
+    return AutoDraftStats(
+        schema_version="machboost.hf_auto_draft.v1",
+        model=args.model,
+        prompt_tokens=len(prompt_ids),
+        context_tokens=len(source_ids) - len(prompt_ids),
+        max_new_tokens=args.max_new_tokens,
+        ngram=args.ngram,
+        warmup_tokens=args.warmup_tokens,
+        baseline=baseline,
+        runs=runs,
+        best_max_draft_tokens=best.max_draft_tokens,
+        best_wall_clock_speedup=best.wall_clock_speedup,
+        best_forward_reduction_percent=best.forward_reduction_percent,
+        verdict=verdict,
+    )
+
+
 def run_self_test() -> dict:
     source = [1, 2, 3, 4, 5, 6, 7, 8]
     generated = [1, 2, 3, 4]
@@ -477,6 +596,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--max-draft-tokens", type=int, default=16)
     parser.add_argument("--candidate-limit", type=int, default=4)
     parser.add_argument("--warmup-tokens", type=int, default=4)
+    parser.add_argument("--auto-draft", action="store_true")
+    parser.add_argument("--draft-sweep", default="2,4,6,8")
     parser.add_argument("--max-context-chars", type=int, default=200_000)
     parser.add_argument("--device", choices=["auto", "cpu", "mps"], default="auto")
     parser.add_argument("--local-files-only", action="store_true")
@@ -492,13 +613,18 @@ def main(argv: list[str]) -> int:
     else:
         if not args.prompt:
             raise SystemExit("--prompt is required unless --self-test is used")
-        result = asdict(run_compare(args))
+        result = asdict(run_auto_draft(args) if args.auto_draft else run_compare(args))
 
     if args.json or args.self_test:
         print(json.dumps(result, indent=2))
     else:
         print(f"model: {result['model']}")
         print(f"verdict: {result['verdict']}")
+        if "best_max_draft_tokens" in result:
+            print(f"best max draft tokens: {result['best_max_draft_tokens']}")
+            print(f"best wall-clock speedup: {result['best_wall_clock_speedup']:.2f}x")
+            print(f"best forward reduction: {result['best_forward_reduction_percent']:.1f}%")
+            return 0
         print(f"baseline: {result['baseline']['elapsed_ms']}ms, {result['baseline']['tokens_per_second']:.2f} tok/s")
         print(
             "speculative: "
