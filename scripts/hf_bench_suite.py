@@ -23,10 +23,26 @@ SCHEMA_VERSION = "machboost.hf_bench_suite.v1"
 @dataclass
 class Fixture:
     name: str
+    workflow: str
     description: str
+    expectation: str
     prompt_path: str
     context_path: str
     source_mode: str
+
+
+DEFAULT_FIXTURES = ["prompt_visible_readme", "prompt_visible_code", "controlled_context", "hidden_readme"]
+USE_CASE_FIXTURES = [
+    "prompt_visible_readme",
+    "prompt_visible_code",
+    "rag_answer",
+    "log_template",
+    "json_config",
+    "test_boilerplate",
+    "repo_chat_quote",
+    "controlled_context",
+]
+NEGATIVE_FIXTURES = ["hidden_readme", "creative_open", "short_answer"]
 
 
 def repo_root() -> Path:
@@ -46,6 +62,22 @@ def excerpt_after(text: str, marker: str, chars: int = 420) -> str:
     return text[pos : pos + chars]
 
 
+def expand_selected(raw_names: list[str], fixtures: dict[str, Fixture]) -> list[str]:
+    expanded: list[str] = []
+    aliases = {
+        "default": DEFAULT_FIXTURES,
+        "use_cases": USE_CASE_FIXTURES,
+        "negative_controls": NEGATIVE_FIXTURES,
+        "all": list(fixtures.keys()),
+    }
+    for name in raw_names:
+        names = aliases.get(name, [name])
+        for item in names:
+            if item in fixtures and item not in expanded:
+                expanded.append(item)
+    return expanded
+
+
 def build_fixtures(root: Path, selected: list[str]) -> list[Fixture]:
     project = repo_root()
     fixtures: dict[str, Fixture] = {}
@@ -59,7 +91,9 @@ def build_fixtures(root: Path, selected: list[str]) -> list[Fixture]:
     )
     fixtures["controlled_context"] = Fixture(
         name="controlled_context",
+        workflow="controlled",
         description="Best-case local context where the continuation is directly present.",
+        expectation="positive",
         prompt_path=write_file(root / "controlled_context" / "prompt.txt", controlled_prompt),
         context_path=write_file(root / "controlled_context" / "context.txt", controlled_context),
         source_mode="context",
@@ -79,7 +113,9 @@ def build_fixtures(root: Path, selected: list[str]) -> list[Fixture]:
         )
         fixtures["prompt_visible_readme"] = Fixture(
             name="prompt_visible_readme",
+            workflow="docs_continuation",
             description="README continuation where the model and drafter both see the reference text.",
+            expectation="positive",
             prompt_path=write_file(root / "prompt_visible_readme" / "prompt.txt", prompt_visible),
             context_path=write_file(root / "prompt_visible_readme" / "context.md", readme),
             source_mode="prompt-context",
@@ -91,7 +127,9 @@ def build_fixtures(root: Path, selected: list[str]) -> list[Fixture]:
         )
         fixtures["hidden_readme"] = Fixture(
             name="hidden_readme",
+            workflow="hidden_context",
             description="Negative control: drafter sees README context, but the model only sees the short prompt.",
+            expectation="negative",
             prompt_path=write_file(root / "hidden_readme" / "prompt.txt", hidden_prompt),
             context_path=write_file(root / "hidden_readme" / "context.md", readme),
             source_mode="context",
@@ -113,12 +151,172 @@ def build_fixtures(root: Path, selected: list[str]) -> list[Fixture]:
         )
         fixtures["prompt_visible_code"] = Fixture(
             name="prompt_visible_code",
+            workflow="code_completion",
             description="Code continuation where the target span is visible in the prompt.",
+            expectation="positive",
             prompt_path=write_file(root / "prompt_visible_code" / "prompt.txt", code_prompt),
             context_path=write_file(root / "prompt_visible_code" / "context.py", code_slice),
             source_mode="prompt-context",
         )
 
+    rag_context = """# Retrieval chunk: onboarding policy
+The local assistant must answer with the policy text exactly when asked about machine benchmark records.
+Policy: Benchmark records must include model name, fixture name, repeat count, exact-match rate, total tokens per second, decode tokens per second, selected draft length, and forward reduction.
+
+# Retrieval chunk: output rule
+When the user asks what a benchmark record contains, answer by copying the Policy sentence.
+"""
+    rag_prompt = (
+        "Use the retrieved chunks below to answer the question. Copy the answer sentence exactly.\n\n"
+        "<retrieved>\n"
+        + rag_context
+        + "</retrieved>\n\nQuestion: What must benchmark records include?\nAnswer:"
+    )
+    fixtures["rag_answer"] = Fixture(
+        name="rag_answer",
+        workflow="rag_answer",
+        description="RAG-style answer where the model should copy a retrieved policy sentence.",
+        expectation="positive",
+        prompt_path=write_file(root / "rag_answer" / "prompt.txt", rag_prompt),
+        context_path=write_file(root / "rag_answer" / "context.md", rag_context),
+        source_mode="prompt-context",
+    )
+
+    log_context = """2026-06-30T14:00:00Z level=INFO worker=ingest shard=01 step=read status=ok duration_ms=18
+2026-06-30T14:00:01Z level=INFO worker=ingest shard=01 step=parse status=ok duration_ms=22
+2026-06-30T14:00:02Z level=INFO worker=ingest shard=01 step=embed status=ok duration_ms=41
+2026-06-30T14:00:03Z level=INFO worker=ingest shard=01 step=store status=ok duration_ms=27
+2026-06-30T14:00:04Z level=INFO worker=ingest shard=01 step=commit status=ok duration_ms=12
+"""
+    log_prompt = (
+        "Continue the operational log exactly from the known run below.\n\n"
+        "<log>\n"
+        + log_context
+        + "</log>\n\nNext line:\n2026-06-30T14:00:02Z level=INFO worker=ingest"
+    )
+    fixtures["log_template"] = Fixture(
+        name="log_template",
+        workflow="log_generation",
+        description="Structured log continuation with repeated tokens and fields.",
+        expectation="positive",
+        prompt_path=write_file(root / "log_template" / "prompt.txt", log_prompt),
+        context_path=write_file(root / "log_template" / "context.log", log_context),
+        source_mode="prompt-context",
+    )
+
+    json_context = """{
+  "profile": "sustained",
+  "workload": "llm",
+  "model": "Qwen/Qwen2.5-3B-Instruct",
+  "metrics": {
+    "exact_match_rate": 1.0,
+    "baseline_decode_tokens_per_second": 33.40,
+    "boosted_decode_tokens_per_second": 60.90,
+    "selected_draft_tokens": 8,
+    "forward_reduction_percent": 56.25
+  },
+  "safety": {
+    "mutates_global_state": false,
+    "uploads_telemetry": false
+  }
+}
+"""
+    json_prompt = (
+        "Continue this JSON configuration exactly from the document below.\n\n"
+        "<json>\n"
+        + json_context
+        + "</json>\n\n{\n  \"profile\": \"sustained\",\n  \"workload\": \"llm\",\n  \"model\":"
+    )
+    fixtures["json_config"] = Fixture(
+        name="json_config",
+        workflow="structured_config",
+        description="JSON/config continuation with repeated keys and predictable structure.",
+        expectation="positive",
+        prompt_path=write_file(root / "json_config" / "prompt.txt", json_prompt),
+        context_path=write_file(root / "json_config" / "context.json", json_context),
+        source_mode="prompt-context",
+    )
+
+    tests_context = """def test_profile_sustained_keeps_awake():
+    profile = resolve_profile("sustained", "generic")
+    assert profile.keep_awake is True
+    assert profile.env["MACHBOOST_PROFILE"] == "sustained"
+
+def test_profile_quiet_avoids_keep_awake():
+    profile = resolve_profile("quiet", "generic")
+    assert profile.keep_awake is False
+    assert profile.env["MACHBOOST_PROFILE"] == "quiet"
+
+def test_profile_balanced_uses_safe_defaults():
+    profile = resolve_profile("balanced", "generic")
+    assert profile.keep_awake is True
+    assert profile.env["MACHBOOST_PROFILE"] == "balanced"
+"""
+    tests_prompt = (
+        "You are editing this Python test file. Continue the excerpt exactly from the file below.\n\n"
+        "<file>\n"
+        + tests_context
+        + "</file>\n\n<excerpt>\n"
+        + tests_context[:260]
+    )
+    fixtures["test_boilerplate"] = Fixture(
+        name="test_boilerplate",
+        workflow="test_generation",
+        description="Unit-test boilerplate continuation with repeated assertion patterns.",
+        expectation="positive",
+        prompt_path=write_file(root / "test_boilerplate" / "prompt.txt", tests_prompt),
+        context_path=write_file(root / "test_boilerplate" / "context.py", tests_context),
+        source_mode="prompt-context",
+    )
+
+    repo_answer_context = """Command examples:
+- machboost doctor
+- machboost doctor --json
+- machboost run --profile sustained --workload generic -- echo ok
+- machboost bench command -- sleep 1
+- python3 scripts/hf_bench_suite.py --model local-or-hf-model --repeat 5 --local-files-only
+"""
+    repo_answer_prompt = (
+        "Answer by copying the benchmark-suite command from the command examples. Do not explain.\n\n"
+        "<examples>\n"
+        + repo_answer_context
+        + "</examples>\n\nBenchmark-suite command:"
+    )
+    fixtures["repo_chat_quote"] = Fixture(
+        name="repo_chat_quote",
+        workflow="repo_chat",
+        description="Repo-chat answer that quotes an exact command from local documentation.",
+        expectation="positive",
+        prompt_path=write_file(root / "repo_chat_quote" / "prompt.txt", repo_answer_prompt),
+        context_path=write_file(root / "repo_chat_quote" / "context.md", repo_answer_context),
+        source_mode="prompt-context",
+    )
+
+    creative_context = "The cache stores benchmark rows, fixture metadata, and JSON output paths."
+    fixtures["creative_open"] = Fixture(
+        name="creative_open",
+        workflow="creative_generation",
+        description="Negative control: open-ended generation should not benefit from local lookup.",
+        expectation="negative",
+        prompt_path=write_file(
+            root / "creative_open" / "prompt.txt",
+            "Write two fresh sentences about why local tools can make developers feel more capable.",
+        ),
+        context_path=write_file(root / "creative_open" / "context.txt", creative_context),
+        source_mode="context",
+    )
+
+    fixtures["short_answer"] = Fixture(
+        name="short_answer",
+        workflow="short_answer",
+        description="Negative control: very short answers should not amortize speculation overhead.",
+        expectation="negative",
+        prompt_path=write_file(root / "short_answer" / "prompt.txt", "Answer with exactly one word: yes or no?"),
+        context_path=write_file(root / "short_answer" / "context.txt", "yes no maybe benchmark profile context"),
+        source_mode="context",
+    )
+
+    selected = expand_selected(selected, fixtures)
     missing = [name for name in selected if name not in fixtures]
     if missing:
         raise SystemExit(f"unknown or unavailable fixture(s): {', '.join(missing)}")
@@ -155,7 +353,7 @@ def common_int(values: list[int]) -> int:
     return Counter(values).most_common(1)[0][0]
 
 
-def summarize_fixture(name: str, description: str, records: list[dict[str, Any]]) -> dict[str, Any]:
+def summarize_fixture(fixture: Fixture, records: list[dict[str, Any]]) -> dict[str, Any]:
     chosen = [record["best_run"] for record in records]
     baselines = [record["result"]["baseline"] for record in records]
     specs = [run["speculative"] for run in chosen]
@@ -166,8 +364,10 @@ def summarize_fixture(name: str, description: str, records: list[dict[str, Any]]
         if base.get("decode_tokens_per_second", 0.0) > 0
     ]
     return {
-        "fixture": name,
-        "description": description,
+        "fixture": fixture.name,
+        "workflow": fixture.workflow,
+        "expectation": fixture.expectation,
+        "description": fixture.description,
         "repeats": len(records),
         "exact_match_rate": pct(exact_count, len(records)),
         "median_baseline_tokens_per_second": median([base["tokens_per_second"] for base in baselines]),
@@ -280,7 +480,7 @@ def run_suite(args: argparse.Namespace, fixture_root: Path) -> dict[str, Any]:
                 fixture_records.append(record)
                 records.append(record)
         if not args.dry_run:
-            summaries.append(summarize_fixture(fixture.name, fixture.description, fixture_records))
+            summaries.append(summarize_fixture(fixture, fixture_records))
         else:
             records.extend(fixture_records)
 
@@ -315,6 +515,8 @@ def format_table(result: dict[str, Any]) -> str:
         return "No benchmark rows."
     headers = [
         "fixture",
+        "workflow",
+        "expect",
         "match",
         "total tok/s",
         "decode tok/s",
@@ -328,6 +530,8 @@ def format_table(result: dict[str, Any]) -> str:
         table_rows.append(
             [
                 row["fixture"],
+                row["workflow"],
+                row["expectation"],
                 f"{row['exact_match_rate'] * 100:.0f}%",
                 f"{row['median_baseline_tokens_per_second']:.2f}->{row['median_boosted_tokens_per_second']:.2f}",
                 (
@@ -398,7 +602,16 @@ def run_self_test() -> dict[str, Any]:
             },
         },
     ]
-    summary = summarize_fixture("fake", "fake fixture", fake)
+    fixture = Fixture(
+        name="fake",
+        workflow="self_test",
+        description="fake fixture",
+        expectation="positive",
+        prompt_path="",
+        context_path="",
+        source_mode="context",
+    )
+    summary = summarize_fixture(fixture, fake)
     ok = (
         summary["exact_match_rate"] == 1.0
         and summary["selected_draft_tokens"] == 4
