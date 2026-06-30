@@ -16,6 +16,7 @@ machboost bench ollama --model qwen3:8b --tokens 32
 machboost overlap --prompt prompt.txt --output output.txt --context .
 machboost draft --prefix prefix.txt --context .
 machboost simulate-draft --prompt prompt.txt --output output.txt --context .
+python3 scripts/hf_corpus_speculate.py --prompt prompt.txt --context . --model local-or-hf-model
 machboost profile init
 ```
 
@@ -51,3 +52,5 @@ For existing services like an already-running Ollama daemon, profile env vars wi
 `machboost draft` proposes candidate continuations from local context by matching the current prefix against repo or document text. This is the local corpus drafter that can later feed a decoder-level verifier.
 
 `machboost simulate-draft` estimates how many serial decode steps a local corpus drafter could save on a known prompt/output transcript. The simulation is idealized; real acceleration requires runtime verification integration.
+
+`scripts/hf_corpus_speculate.py` is an experimental Hugging Face verifier loop. It compares baseline greedy generation against local-corpus speculative generation for causal language models where MachBoost can inspect logits directly.
