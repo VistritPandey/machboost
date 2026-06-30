@@ -78,6 +78,7 @@ class CompareStats:
     max_new_tokens: int
     ngram: int
     max_draft_tokens: int
+    draft_policy: str
     source_mode: str
     verify_mode: str
     anchor_tokens: int
@@ -101,6 +102,7 @@ class AutoDraftStats:
     source_tokens: int
     max_new_tokens: int
     ngram: int
+    draft_policy: str
     source_mode: str
     verify_mode: str
     anchor_tokens: int
@@ -488,6 +490,10 @@ def speculative_generate(
     verify_mode: str,
     min_verify_margin: float,
     anchor_tokens: int,
+    draft_policy: str,
+    initial_draft_tokens: int,
+    min_draft_tokens: int,
+    draft_step: int,
 ) -> RunStats:
     generated = list(prompt_ids)
     output_tokens: list[int] = []
@@ -501,9 +507,12 @@ def speculative_generate(
     prefill_elapsed = time.perf_counter() - start
     forwards += 1
     decode_start = time.perf_counter()
+    current_draft_tokens = max_draft_tokens
+    if draft_policy == "adaptive":
+        current_draft_tokens = min(max_draft_tokens, max(min_draft_tokens, initial_draft_tokens))
 
     while len(output_tokens) < max_new_tokens:
-        candidates = find_candidates(generated, source_tokens, index, ngram, max_draft_tokens, candidate_limit)
+        candidates = find_candidates(generated, source_tokens, index, ngram, current_draft_tokens, candidate_limit)
         accepted: list[int] = []
         for candidate in candidates:
             remaining = max_new_tokens - len(output_tokens)
@@ -526,11 +535,15 @@ def speculative_generate(
                 output_tokens.extend(accepted)
                 accepted_draft_tokens += len(accepted)
                 accepted_draft_spans += 1
+                if draft_policy == "adaptive" and len(accepted) >= current_draft_tokens:
+                    current_draft_tokens = min(max_draft_tokens, current_draft_tokens + draft_step)
                 break
         if len(output_tokens) >= max_new_tokens:
             break
         if candidates and accepted:
             continue
+        if draft_policy == "adaptive":
+            current_draft_tokens = max(min_draft_tokens, current_draft_tokens - draft_step)
 
         token = next_greedy_from_logits(current_logits)
         generated.append(token)
@@ -616,6 +629,10 @@ def compare_with_runtime(
             args.verify_mode,
             args.min_verify_margin,
             args.anchor_tokens,
+            args.draft_policy,
+            args.initial_draft_tokens,
+            args.min_draft_tokens,
+            args.draft_step,
         )
     baseline = baseline_generate(model, tokenizer, prompt_ids, args.max_new_tokens, device)
     speculative = speculative_generate(
@@ -631,6 +648,10 @@ def compare_with_runtime(
         args.verify_mode,
         args.min_verify_margin,
         args.anchor_tokens,
+        args.draft_policy,
+        args.initial_draft_tokens,
+        args.min_draft_tokens,
+        args.draft_step,
     )
 
     speedup = baseline.elapsed_ms / speculative.elapsed_ms if speculative.elapsed_ms > 0 else 0
@@ -659,6 +680,7 @@ def compare_with_runtime(
         max_new_tokens=args.max_new_tokens,
         ngram=args.ngram,
         max_draft_tokens=args.max_draft_tokens,
+        draft_policy=args.draft_policy,
         source_mode=args.source_mode,
         verify_mode=args.verify_mode,
         anchor_tokens=args.anchor_tokens,
@@ -717,6 +739,10 @@ def run_auto_draft(args: argparse.Namespace) -> AutoDraftStats:
             trial_args.verify_mode,
             trial_args.min_verify_margin,
             trial_args.anchor_tokens,
+            trial_args.draft_policy,
+            trial_args.initial_draft_tokens,
+            trial_args.min_draft_tokens,
+            trial_args.draft_step,
         )
         speedup = baseline.elapsed_ms / speculative.elapsed_ms if speculative.elapsed_ms > 0 else 0
         forward_reduction = (
@@ -744,6 +770,7 @@ def run_auto_draft(args: argparse.Namespace) -> AutoDraftStats:
             max_new_tokens=args.max_new_tokens,
             ngram=args.ngram,
             max_draft_tokens=draft_tokens,
+            draft_policy=args.draft_policy,
             source_mode=args.source_mode,
             verify_mode=args.verify_mode,
             anchor_tokens=args.anchor_tokens,
@@ -772,6 +799,7 @@ def run_auto_draft(args: argparse.Namespace) -> AutoDraftStats:
         source_tokens=len(source_ids),
         max_new_tokens=args.max_new_tokens,
         ngram=args.ngram,
+        draft_policy=args.draft_policy,
         source_mode=args.source_mode,
         verify_mode=args.verify_mode,
         anchor_tokens=args.anchor_tokens,
@@ -808,6 +836,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--max-new-tokens", type=int, default=64)
     parser.add_argument("--ngram", type=int, default=4)
     parser.add_argument("--max-draft-tokens", type=int, default=16)
+    parser.add_argument("--draft-policy", choices=["fixed", "adaptive"], default="fixed")
+    parser.add_argument("--initial-draft-tokens", type=int, default=2)
+    parser.add_argument("--min-draft-tokens", type=int, default=1)
+    parser.add_argument("--draft-step", type=int, default=2)
     parser.add_argument("--candidate-limit", type=int, default=4)
     parser.add_argument("--warmup-tokens", type=int, default=4)
     parser.add_argument("--auto-draft", action="store_true")
