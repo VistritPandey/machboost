@@ -73,8 +73,10 @@ class CompareStats:
     max_new_tokens: int
     ngram: int
     max_draft_tokens: int
+    warmup_tokens: int
     baseline: RunStats
     speculative: RunStats
+    output_match: bool
     wall_clock_speedup: float
     forward_reduction_percent: float
     verdict: str
@@ -213,12 +215,19 @@ def pick_device(requested: str):
     return "cpu"
 
 
-def next_greedy_token(model, input_ids):
+def next_greedy_from_logits(logits) -> int:
     import torch
 
+    return int(torch.argmax(logits, dim=-1).item())
+
+
+def prefill(model, token_ids: list[int], device: str):
+    import torch
+
+    input_ids = torch.tensor([token_ids], dtype=torch.long, device=device)
     with torch.no_grad():
-        logits = model(input_ids).logits[:, -1, :]
-        return int(torch.argmax(logits, dim=-1).item())
+        output = model(input_ids, use_cache=True)
+    return output.logits[:, -1, :], output.past_key_values
 
 
 def warmup_model(model, prompt_ids: list[int], device: str) -> None:
@@ -228,46 +237,59 @@ def warmup_model(model, prompt_ids: list[int], device: str) -> None:
         return
     input_ids = torch.tensor([prompt_ids], dtype=torch.long, device=device)
     with torch.no_grad():
-        _ = model(input_ids).logits[:, -1, :]
+        _ = model(input_ids, use_cache=True).logits[:, -1, :]
 
 
-def verify_candidate(model, prefix_ids, candidate: Candidate, device: str) -> tuple[list[int], int]:
+def advance_cache(model, past_key_values, token: int, device: str):
     import torch
 
-    accepted: list[int] = []
-    ids = prefix_ids + candidate.tokens
-    input_ids = torch.tensor([ids], dtype=torch.long, device=device)
+    input_ids = torch.tensor([[token]], dtype=torch.long, device=device)
     with torch.no_grad():
-        logits = model(input_ids).logits
+        output = model(input_ids, past_key_values=past_key_values, use_cache=True)
+    return output.logits[:, -1, :], output.past_key_values
 
-    # logits at prefix_len - 1 predicts candidate[0], then each candidate token
-    # predicts the next one.
-    prefix_len = len(prefix_ids)
-    for offset, token in enumerate(candidate.tokens):
-        logit_pos = prefix_len + offset - 1
-        predicted = int(torch.argmax(logits[0, logit_pos, :]).item())
-        if predicted != token:
-            break
-        accepted.append(token)
-    return accepted, 1
+
+def verify_candidate_cached(model, current_logits, past_key_values, candidate_tokens: list[int], device: str):
+    import torch
+
+    if not candidate_tokens:
+        return [], past_key_values, current_logits, 0
+    if next_greedy_from_logits(current_logits) != candidate_tokens[0]:
+        return [], past_key_values, current_logits, 0
+
+    input_ids = torch.tensor([candidate_tokens], dtype=torch.long, device=device)
+    with torch.no_grad():
+        output = model(input_ids, past_key_values=past_key_values, use_cache=True)
+
+    logits = output.logits
+    for offset in range(1, len(candidate_tokens)):
+        predicted = next_greedy_from_logits(logits[:, offset - 1, :])
+        if predicted != candidate_tokens[offset]:
+            return [], past_key_values, current_logits, 1
+    return candidate_tokens, output.past_key_values, logits[:, -1, :], 1
 
 
 def baseline_generate(model, tokenizer, prompt_ids: list[int], max_new_tokens: int, device: str) -> RunStats:
-    import torch
-
     generated = list(prompt_ids)
+    output_tokens: list[int] = []
     forwards = 0
     start = time.perf_counter()
-    for _ in range(max_new_tokens):
-        input_ids = torch.tensor([generated], dtype=torch.long, device=device)
-        token = next_greedy_token(model, input_ids)
-        forwards += 1
+    current_logits, past_key_values = prefill(model, generated, device)
+    forwards += 1
+
+    while len(output_tokens) < max_new_tokens:
+        token = next_greedy_from_logits(current_logits)
+        output_tokens.append(token)
         generated.append(token)
+        if len(output_tokens) >= max_new_tokens:
+            break
+        current_logits, past_key_values = advance_cache(model, past_key_values, token, device)
+        forwards += 1
+
     elapsed = time.perf_counter() - start
-    output_tokens = generated[len(prompt_ids) :]
     output = tokenizer.decode(output_tokens, skip_special_tokens=True)
     return RunStats(
-        mode="baseline",
+        mode="baseline_cached",
         generated_tokens=len(output_tokens),
         model_forwards=forwards,
         accepted_draft_tokens=0,
@@ -290,8 +312,6 @@ def speculative_generate(
     device: str,
     candidate_limit: int,
 ) -> RunStats:
-    import torch
-
     generated = list(prompt_ids)
     output_tokens: list[int] = []
     index = build_index(source_tokens, ngram)
@@ -300,15 +320,26 @@ def speculative_generate(
     accepted_draft_spans = 0
     normal_tokens = 0
     start = time.perf_counter()
+    current_logits, past_key_values = prefill(model, generated, device)
+    forwards += 1
 
     while len(output_tokens) < max_new_tokens:
         candidates = find_candidates(generated, source_tokens, index, ngram, max_draft_tokens, candidate_limit)
+        accepted: list[int] = []
         for candidate in candidates:
-            accepted, verify_forwards = verify_candidate(model, generated, candidate, device)
-            forwards += verify_forwards
             remaining = max_new_tokens - len(output_tokens)
-            accepted = accepted[:remaining]
+            candidate_tokens = candidate.tokens[:remaining]
+            accepted, next_past, next_logits, verify_forwards = verify_candidate_cached(
+                model,
+                current_logits,
+                past_key_values,
+                candidate_tokens,
+                device,
+            )
+            forwards += verify_forwards
             if accepted:
+                past_key_values = next_past
+                current_logits = next_logits
                 generated.extend(accepted)
                 output_tokens.extend(accepted)
                 accepted_draft_tokens += len(accepted)
@@ -319,17 +350,19 @@ def speculative_generate(
         if candidates and accepted:
             continue
 
-        input_ids = torch.tensor([generated], dtype=torch.long, device=device)
-        token = next_greedy_token(model, input_ids)
-        forwards += 1
+        token = next_greedy_from_logits(current_logits)
         generated.append(token)
         output_tokens.append(token)
         normal_tokens += 1
+        if len(output_tokens) >= max_new_tokens:
+            break
+        current_logits, past_key_values = advance_cache(model, past_key_values, token, device)
+        forwards += 1
 
     elapsed = time.perf_counter() - start
     output = tokenizer.decode(output_tokens, skip_special_tokens=True)
     return RunStats(
-        mode="corpus_speculative",
+        mode="corpus_speculative_cached",
         generated_tokens=len(output_tokens),
         model_forwards=forwards,
         accepted_draft_tokens=accepted_draft_tokens,
@@ -361,6 +394,19 @@ def run_compare(args: argparse.Namespace) -> CompareStats:
     source_ids = tokenizer.encode(prompt + context, add_special_tokens=False)
 
     warmup_model(model, prompt_ids, device)
+    if args.warmup_tokens > 0:
+        _ = baseline_generate(model, tokenizer, prompt_ids, args.warmup_tokens, device)
+        _ = speculative_generate(
+            model,
+            tokenizer,
+            prompt_ids,
+            source_ids,
+            args.warmup_tokens,
+            args.ngram,
+            args.max_draft_tokens,
+            device,
+            args.candidate_limit,
+        )
     baseline = baseline_generate(model, tokenizer, prompt_ids, args.max_new_tokens, device)
     speculative = speculative_generate(
         model,
@@ -396,12 +442,14 @@ def run_compare(args: argparse.Namespace) -> CompareStats:
         max_new_tokens=args.max_new_tokens,
         ngram=args.ngram,
         max_draft_tokens=args.max_draft_tokens,
+        warmup_tokens=args.warmup_tokens,
         baseline=baseline,
         speculative=speculative,
+        output_match=baseline.output == speculative.output,
         wall_clock_speedup=speedup,
         forward_reduction_percent=forward_reduction,
         verdict=verdict,
-        note="Prototype verifier. It uses full-prefix forwards, so wall-clock may understate a cache-integrated implementation.",
+        note="Prototype verifier using Hugging Face KV cache. Forward reduction is the main mechanism metric; wall-clock is hardware/runtime dependent.",
     )
 
 
@@ -428,6 +476,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--ngram", type=int, default=4)
     parser.add_argument("--max-draft-tokens", type=int, default=16)
     parser.add_argument("--candidate-limit", type=int, default=4)
+    parser.add_argument("--warmup-tokens", type=int, default=4)
     parser.add_argument("--max-context-chars", type=int, default=200_000)
     parser.add_argument("--device", choices=["auto", "cpu", "mps"], default="auto")
     parser.add_argument("--local-files-only", action="store_true")
@@ -458,6 +507,7 @@ def main(argv: list[str]) -> int:
         print(f"wall-clock speedup: {result['wall_clock_speedup']:.2f}x")
         print(f"forward reduction: {result['forward_reduction_percent']:.1f}%")
         print(f"accepted draft tokens: {result['speculative']['accepted_draft_tokens']}")
+        print(f"output match: {result['output_match']}")
         print(result["note"])
     return 0
 
