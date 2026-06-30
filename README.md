@@ -64,4 +64,5 @@ Useful verifier options:
 - `--auto-draft --draft-sweep 2,4,6,8,10`: benchmark multiple draft lengths in one model load.
 - `--source-mode prompt-context|context|prompt`: choose where local draft candidates come from.
 - `--verify-mode block|hybrid|sequential`: trade off speed and strictness. `hybrid --anchor-tokens 1` verifies a short prefix step-by-step, then block-verifies the rest.
+- `--draft-policy fixed|adaptive`: use fixed draft lengths or shrink/grow draft length during generation.
 - `--min-verify-margin 1.0`: reject low-confidence draft tokens when testing safer block verification.
