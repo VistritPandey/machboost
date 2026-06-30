@@ -1,0 +1,47 @@
+# machboost
+
+`machboost` is a Mac-first CLI for running heavy local workloads under safe performance profiles. It is generic by design: LLM inference is the first smart preset, but the same runner works for builds, renders, exports, data jobs, and arbitrary commands.
+
+It does not claim to allocate fake hardware percentages like `gpu: 90%`. Instead it applies real local controls: keep-awake wrapping, per-process environment hints, diagnostics, benchmarking, and reusable YAML profiles.
+
+## Commands
+
+```sh
+machboost doctor
+machboost doctor --json
+machboost run --profile sustained --workload generic -- echo ok
+machboost bench command -- sleep 1
+machboost bench compare --profile sustained --workload build --repeat 3 -- make test
+machboost bench ollama --model qwen3:8b --tokens 32
+machboost overlap --prompt prompt.txt --output output.txt --context .
+machboost profile init
+```
+
+## Profiles
+
+- `sustained`: keeps the Mac awake and uses full-thread hints for supported workloads.
+- `balanced`: conservative defaults for normal local work.
+- `quiet`: avoids keep-awake behavior and uses reduced thread hints.
+
+## Workloads
+
+- `generic`: process wrapper only.
+- `llm`: Ollama/llama.cpp-oriented hints.
+- `build`: common build parallelism environment hints.
+- `render`: common numerical/render thread environment hints.
+
+`machboost` v1 is local-only. It does not change global shell config, `launchctl`, Ollama service state, Docker Desktop settings, system power settings, or upload telemetry.
+
+## With vs without benchmark
+
+Use `bench compare` to run the same command once without `machboost` and once with a selected profile, repeated as many times as you choose:
+
+```sh
+machboost bench compare --profile sustained --workload generic --repeat 3 -- ./your-heavy-job
+```
+
+For existing services like an already-running Ollama daemon, profile env vars will not affect that service unless `machboost` launches it. Use `bench compare` for commands that run inside the measured process, and use `bench ollama` to measure current Ollama API performance.
+
+## Research tools
+
+`machboost overlap` measures how much of a generated output can be recovered from the prompt and optional local context. High overlap means a future corpus-lookup speculative decoder may be able to reduce serial token generation steps.
