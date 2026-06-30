@@ -19,6 +19,7 @@ machboost simulate-draft --prompt prompt.txt --output output.txt --context .
 python3 scripts/hf_corpus_speculate.py --prompt prompt.txt --context . --model local-or-hf-model
 python3 scripts/hf_corpus_speculate.py --prompt prompt.txt --context . --model local-or-hf-model --auto-draft --verify-mode hybrid --anchor-tokens 1
 python3 scripts/hf_bench_suite.py --model local-or-hf-model --repeat 5 --local-files-only
+python3 scripts/hf_bench_suite.py --fixtures use_cases,negative_controls --repeat 1 --local-files-only --output results.json
 machboost profile init
 ```
 
@@ -58,6 +59,7 @@ For existing services like an already-running Ollama daemon, profile env vars wi
 `scripts/hf_corpus_speculate.py` is an experimental Hugging Face verifier loop. It compares KV-cache baseline greedy generation against local-corpus speculative generation for causal language models where MachBoost can inspect logits directly.
 
 `scripts/hf_bench_suite.py` runs repeatable benchmark fixtures and reports median total/decode tokens per second, exact-match rate, accepted draft tokens, forward reduction, and selected draft length.
+Fixture aliases include `default`, `use_cases`, `negative_controls`, and `all`.
 
 Useful verifier options:
 
