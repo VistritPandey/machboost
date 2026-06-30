@@ -9,6 +9,7 @@ tokens with the target model.
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import sys
 import time
@@ -70,9 +71,12 @@ class CompareStats:
     model: str
     prompt_tokens: int
     context_tokens: int
+    source_tokens: int
     max_new_tokens: int
     ngram: int
     max_draft_tokens: int
+    source_mode: str
+    verify_mode: str
     warmup_tokens: int
     baseline: RunStats
     speculative: RunStats
@@ -89,8 +93,11 @@ class AutoDraftStats:
     model: str
     prompt_tokens: int
     context_tokens: int
+    source_tokens: int
     max_new_tokens: int
     ngram: int
+    source_mode: str
+    verify_mode: str
     warmup_tokens: int
     baseline: RunStats
     runs: list[CompareStats]
@@ -266,7 +273,27 @@ def advance_cache(model, past_key_values, token: int, device: str):
     return output.logits[:, -1, :], output.past_key_values
 
 
-def verify_candidate_cached(model, current_logits, past_key_values, candidate_tokens: list[int], device: str):
+def clone_cache(past_key_values):
+    if isinstance(past_key_values, tuple):
+        return tuple(
+            tuple(item.clone() if hasattr(item, "clone") else item for item in layer)
+            for layer in past_key_values
+        )
+    if hasattr(past_key_values, "layers"):
+        cloned = copy.copy(past_key_values)
+        cloned.layers = []
+        for layer in past_key_values.layers:
+            layer_clone = copy.copy(layer)
+            if hasattr(layer, "keys"):
+                layer_clone.keys = layer.keys.clone()
+            if hasattr(layer, "values"):
+                layer_clone.values = layer.values.clone()
+            cloned.layers.append(layer_clone)
+        return cloned
+    return copy.deepcopy(past_key_values)
+
+
+def verify_candidate_block(model, current_logits, past_key_values, candidate_tokens: list[int], device: str):
     import torch
 
     if not candidate_tokens:
@@ -274,9 +301,10 @@ def verify_candidate_cached(model, current_logits, past_key_values, candidate_to
     if next_greedy_from_logits(current_logits) != candidate_tokens[0]:
         return [], past_key_values, current_logits, 0
 
+    trial_past = clone_cache(past_key_values)
     input_ids = torch.tensor([candidate_tokens], dtype=torch.long, device=device)
     with torch.no_grad():
-        output = model(input_ids, past_key_values=past_key_values, use_cache=True)
+        output = model(input_ids, past_key_values=trial_past, use_cache=True)
 
     logits = output.logits
     for offset in range(1, len(candidate_tokens)):
@@ -284,6 +312,36 @@ def verify_candidate_cached(model, current_logits, past_key_values, candidate_to
         if predicted != candidate_tokens[offset]:
             return [], past_key_values, current_logits, 1
     return candidate_tokens, output.past_key_values, logits[:, -1, :], 1
+
+
+def verify_candidate_sequential(model, current_logits, past_key_values, candidate_tokens: list[int], device: str):
+    if not candidate_tokens:
+        return [], past_key_values, current_logits, 0
+
+    accepted: list[int] = []
+    trial_past = clone_cache(past_key_values)
+    trial_logits = current_logits
+    forwards = 0
+    for token in candidate_tokens:
+        if next_greedy_from_logits(trial_logits) != token:
+            return [], past_key_values, current_logits, forwards
+        accepted.append(token)
+        trial_logits, trial_past = advance_cache(model, trial_past, token, device)
+        forwards += 1
+    return accepted, trial_past, trial_logits, forwards
+
+
+def verify_candidate_cached(
+    model,
+    current_logits,
+    past_key_values,
+    candidate_tokens: list[int],
+    device: str,
+    verify_mode: str,
+):
+    if verify_mode == "sequential":
+        return verify_candidate_sequential(model, current_logits, past_key_values, candidate_tokens, device)
+    return verify_candidate_block(model, current_logits, past_key_values, candidate_tokens, device)
 
 
 def baseline_generate(model, tokenizer, prompt_ids: list[int], max_new_tokens: int, device: str) -> RunStats:
@@ -328,6 +386,7 @@ def speculative_generate(
     max_draft_tokens: int,
     device: str,
     candidate_limit: int,
+    verify_mode: str,
 ) -> RunStats:
     generated = list(prompt_ids)
     output_tokens: list[int] = []
@@ -352,6 +411,7 @@ def speculative_generate(
                 past_key_values,
                 candidate_tokens,
                 device,
+                verify_mode,
             )
             forwards += verify_forwards
             if accepted:
@@ -407,15 +467,30 @@ def load_runtime(args: argparse.Namespace):
     return tokenizer, model, device
 
 
-def prepare_inputs(args: argparse.Namespace, tokenizer) -> tuple[list[int], list[int]]:
+def prepare_inputs(args: argparse.Namespace, tokenizer) -> tuple[list[int], list[int], int]:
     prompt = read_text(args.prompt)
     context = read_context(args.context, args.max_context_chars)
     prompt_ids = tokenizer.encode(prompt, add_special_tokens=False)
-    source_ids = tokenizer.encode(prompt + context, add_special_tokens=False)
-    return prompt_ids, source_ids
+    context_ids = tokenizer.encode(context, add_special_tokens=False)
+    if args.source_mode == "context":
+        source_text = context
+    elif args.source_mode == "prompt":
+        source_text = prompt
+    else:
+        source_text = prompt + context
+    source_ids = tokenizer.encode(source_text, add_special_tokens=False)
+    return prompt_ids, source_ids, len(context_ids)
 
 
-def compare_with_runtime(args: argparse.Namespace, tokenizer, model, device, prompt_ids, source_ids) -> CompareStats:
+def compare_with_runtime(
+    args: argparse.Namespace,
+    tokenizer,
+    model,
+    device,
+    prompt_ids,
+    source_ids,
+    context_token_count: int,
+) -> CompareStats:
     warmup_model(model, prompt_ids, device)
     if args.warmup_tokens > 0:
         _ = baseline_generate(model, tokenizer, prompt_ids, args.warmup_tokens, device)
@@ -429,6 +504,7 @@ def compare_with_runtime(args: argparse.Namespace, tokenizer, model, device, pro
             args.max_draft_tokens,
             device,
             args.candidate_limit,
+            args.verify_mode,
         )
     baseline = baseline_generate(model, tokenizer, prompt_ids, args.max_new_tokens, device)
     speculative = speculative_generate(
@@ -441,6 +517,7 @@ def compare_with_runtime(args: argparse.Namespace, tokenizer, model, device, pro
         args.max_draft_tokens,
         device,
         args.candidate_limit,
+        args.verify_mode,
     )
 
     speedup = baseline.elapsed_ms / speculative.elapsed_ms if speculative.elapsed_ms > 0 else 0
@@ -449,7 +526,10 @@ def compare_with_runtime(args: argparse.Namespace, tokenizer, model, device, pro
         if baseline.model_forwards
         else 0
     )
-    if speculative.accepted_draft_tokens == 0:
+    output_match = baseline.output == speculative.output
+    if not output_match:
+        verdict = "output_mismatch"
+    elif speculative.accepted_draft_tokens == 0:
         verdict = "no_draft_acceptance"
     elif forward_reduction >= 20:
         verdict = "mechanism_viable"
@@ -461,14 +541,17 @@ def compare_with_runtime(args: argparse.Namespace, tokenizer, model, device, pro
         schema_version="machboost.hf_corpus_speculate.v1",
         model=args.model,
         prompt_tokens=len(prompt_ids),
-        context_tokens=len(source_ids) - len(prompt_ids),
+        context_tokens=context_token_count,
+        source_tokens=len(source_ids),
         max_new_tokens=args.max_new_tokens,
         ngram=args.ngram,
         max_draft_tokens=args.max_draft_tokens,
+        source_mode=args.source_mode,
+        verify_mode=args.verify_mode,
         warmup_tokens=args.warmup_tokens,
         baseline=baseline,
         speculative=speculative,
-        output_match=baseline.output == speculative.output,
+        output_match=output_match,
         wall_clock_speedup=speedup,
         forward_reduction_percent=forward_reduction,
         verdict=verdict,
@@ -478,8 +561,8 @@ def compare_with_runtime(args: argparse.Namespace, tokenizer, model, device, pro
 
 def run_compare(args: argparse.Namespace) -> CompareStats:
     tokenizer, model, device = load_runtime(args)
-    prompt_ids, source_ids = prepare_inputs(args, tokenizer)
-    return compare_with_runtime(args, tokenizer, model, device, prompt_ids, source_ids)
+    prompt_ids, source_ids, context_token_count = prepare_inputs(args, tokenizer)
+    return compare_with_runtime(args, tokenizer, model, device, prompt_ids, source_ids, context_token_count)
 
 
 def parse_draft_sweep(value: str) -> list[int]:
@@ -494,7 +577,7 @@ def parse_draft_sweep(value: str) -> list[int]:
 
 def run_auto_draft(args: argparse.Namespace) -> AutoDraftStats:
     tokenizer, model, device = load_runtime(args)
-    prompt_ids, source_ids = prepare_inputs(args, tokenizer)
+    prompt_ids, source_ids, context_token_count = prepare_inputs(args, tokenizer)
     warmup_model(model, prompt_ids, device)
     if args.warmup_tokens > 0:
         _ = baseline_generate(model, tokenizer, prompt_ids, args.warmup_tokens, device)
@@ -516,6 +599,7 @@ def run_auto_draft(args: argparse.Namespace) -> AutoDraftStats:
             trial_args.max_draft_tokens,
             device,
             trial_args.candidate_limit,
+            trial_args.verify_mode,
         )
         speedup = baseline.elapsed_ms / speculative.elapsed_ms if speculative.elapsed_ms > 0 else 0
         forward_reduction = (
@@ -523,7 +607,10 @@ def run_auto_draft(args: argparse.Namespace) -> AutoDraftStats:
             if baseline.model_forwards
             else 0
         )
-        if speculative.accepted_draft_tokens == 0:
+        output_match = baseline.output == speculative.output
+        if not output_match:
+            verdict = "output_mismatch"
+        elif speculative.accepted_draft_tokens == 0:
             verdict = "no_draft_acceptance"
         elif forward_reduction >= 20:
             verdict = "mechanism_viable"
@@ -535,14 +622,17 @@ def run_auto_draft(args: argparse.Namespace) -> AutoDraftStats:
             schema_version="machboost.hf_corpus_speculate.v1",
             model=args.model,
             prompt_tokens=len(prompt_ids),
-            context_tokens=len(source_ids) - len(prompt_ids),
+            context_tokens=context_token_count,
+            source_tokens=len(source_ids),
             max_new_tokens=args.max_new_tokens,
             ngram=args.ngram,
             max_draft_tokens=draft_tokens,
+            source_mode=args.source_mode,
+            verify_mode=args.verify_mode,
             warmup_tokens=args.warmup_tokens,
             baseline=baseline,
             speculative=speculative,
-            output_match=baseline.output == speculative.output,
+            output_match=output_match,
             wall_clock_speedup=speedup,
             forward_reduction_percent=forward_reduction,
             verdict=verdict,
@@ -559,9 +649,12 @@ def run_auto_draft(args: argparse.Namespace) -> AutoDraftStats:
         schema_version="machboost.hf_auto_draft.v1",
         model=args.model,
         prompt_tokens=len(prompt_ids),
-        context_tokens=len(source_ids) - len(prompt_ids),
+        context_tokens=context_token_count,
+        source_tokens=len(source_ids),
         max_new_tokens=args.max_new_tokens,
         ngram=args.ngram,
+        source_mode=args.source_mode,
+        verify_mode=args.verify_mode,
         warmup_tokens=args.warmup_tokens,
         baseline=baseline,
         runs=runs,
@@ -598,6 +691,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--warmup-tokens", type=int, default=4)
     parser.add_argument("--auto-draft", action="store_true")
     parser.add_argument("--draft-sweep", default="2,4,6,8")
+    parser.add_argument("--source-mode", choices=["prompt-context", "context", "prompt"], default="prompt-context")
+    parser.add_argument("--verify-mode", choices=["block", "sequential"], default="block")
     parser.add_argument("--max-context-chars", type=int, default=200_000)
     parser.add_argument("--device", choices=["auto", "cpu", "mps"], default="auto")
     parser.add_argument("--local-files-only", action="store_true")
