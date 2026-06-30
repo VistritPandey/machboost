@@ -14,6 +14,8 @@ machboost bench command -- sleep 1
 machboost bench compare --profile sustained --workload build --repeat 3 -- make test
 machboost bench ollama --model qwen3:8b --tokens 32
 machboost overlap --prompt prompt.txt --output output.txt --context .
+machboost draft --prefix prefix.txt --context .
+machboost simulate-draft --prompt prompt.txt --output output.txt --context .
 machboost profile init
 ```
 
@@ -45,3 +47,7 @@ For existing services like an already-running Ollama daemon, profile env vars wi
 ## Research tools
 
 `machboost overlap` measures how much of a generated output can be recovered from the prompt and optional local context. High overlap means a future corpus-lookup speculative decoder may be able to reduce serial token generation steps.
+
+`machboost draft` proposes candidate continuations from local context by matching the current prefix against repo or document text. This is the local corpus drafter that can later feed a decoder-level verifier.
+
+`machboost simulate-draft` estimates how many serial decode steps a local corpus drafter could save on a known prompt/output transcript. The simulation is idealized; real acceleration requires runtime verification integration.
