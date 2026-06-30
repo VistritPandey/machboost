@@ -77,6 +77,7 @@ class CompareStats:
     max_draft_tokens: int
     source_mode: str
     verify_mode: str
+    anchor_tokens: int
     min_verify_margin: float
     warmup_tokens: int
     baseline: RunStats
@@ -99,6 +100,7 @@ class AutoDraftStats:
     ngram: int
     source_mode: str
     verify_mode: str
+    anchor_tokens: int
     min_verify_margin: float
     warmup_tokens: int
     baseline: RunStats
@@ -362,6 +364,49 @@ def verify_candidate_sequential(
     return accepted, trial_past, trial_logits, forwards
 
 
+def verify_candidate_hybrid(
+    model,
+    current_logits,
+    past_key_values,
+    candidate_tokens: list[int],
+    device: str,
+    min_verify_margin: float,
+    anchor_tokens: int,
+):
+    if not candidate_tokens:
+        return [], past_key_values, current_logits, 0
+
+    anchored: list[int] = []
+    trial_past = clone_cache(past_key_values)
+    trial_logits = current_logits
+    forwards = 0
+    anchor_count = min(max(0, anchor_tokens), len(candidate_tokens))
+
+    for token in candidate_tokens[:anchor_count]:
+        if not token_passes_margin(trial_logits, token, min_verify_margin):
+            return [], past_key_values, current_logits, forwards
+        anchored.append(token)
+        trial_logits, trial_past = advance_cache(model, trial_past, token, device)
+        forwards += 1
+
+    tail = candidate_tokens[anchor_count:]
+    if not tail:
+        return anchored, trial_past, trial_logits, forwards
+
+    tail_accepted, tail_past, tail_logits, tail_forwards = verify_candidate_block(
+        model,
+        trial_logits,
+        trial_past,
+        tail,
+        device,
+        min_verify_margin,
+    )
+    forwards += tail_forwards
+    if not tail_accepted:
+        return [], past_key_values, current_logits, forwards
+    return anchored + tail_accepted, tail_past, tail_logits, forwards
+
+
 def verify_candidate_cached(
     model,
     current_logits,
@@ -370,10 +415,21 @@ def verify_candidate_cached(
     device: str,
     verify_mode: str,
     min_verify_margin: float,
+    anchor_tokens: int,
 ):
     if verify_mode == "sequential":
         return verify_candidate_sequential(
             model, current_logits, past_key_values, candidate_tokens, device, min_verify_margin
+        )
+    if verify_mode == "hybrid":
+        return verify_candidate_hybrid(
+            model,
+            current_logits,
+            past_key_values,
+            candidate_tokens,
+            device,
+            min_verify_margin,
+            anchor_tokens,
         )
     return verify_candidate_block(model, current_logits, past_key_values, candidate_tokens, device, min_verify_margin)
 
@@ -422,6 +478,7 @@ def speculative_generate(
     candidate_limit: int,
     verify_mode: str,
     min_verify_margin: float,
+    anchor_tokens: int,
 ) -> RunStats:
     generated = list(prompt_ids)
     output_tokens: list[int] = []
@@ -448,6 +505,7 @@ def speculative_generate(
                 device,
                 verify_mode,
                 min_verify_margin,
+                anchor_tokens,
             )
             forwards += verify_forwards
             if accepted:
@@ -542,6 +600,7 @@ def compare_with_runtime(
             args.candidate_limit,
             args.verify_mode,
             args.min_verify_margin,
+            args.anchor_tokens,
         )
     baseline = baseline_generate(model, tokenizer, prompt_ids, args.max_new_tokens, device)
     speculative = speculative_generate(
@@ -556,6 +615,7 @@ def compare_with_runtime(
         args.candidate_limit,
         args.verify_mode,
         args.min_verify_margin,
+        args.anchor_tokens,
     )
 
     speedup = baseline.elapsed_ms / speculative.elapsed_ms if speculative.elapsed_ms > 0 else 0
@@ -586,6 +646,7 @@ def compare_with_runtime(
         max_draft_tokens=args.max_draft_tokens,
         source_mode=args.source_mode,
         verify_mode=args.verify_mode,
+        anchor_tokens=args.anchor_tokens,
         min_verify_margin=args.min_verify_margin,
         warmup_tokens=args.warmup_tokens,
         baseline=baseline,
@@ -640,6 +701,7 @@ def run_auto_draft(args: argparse.Namespace) -> AutoDraftStats:
             trial_args.candidate_limit,
             trial_args.verify_mode,
             trial_args.min_verify_margin,
+            trial_args.anchor_tokens,
         )
         speedup = baseline.elapsed_ms / speculative.elapsed_ms if speculative.elapsed_ms > 0 else 0
         forward_reduction = (
@@ -669,6 +731,7 @@ def run_auto_draft(args: argparse.Namespace) -> AutoDraftStats:
             max_draft_tokens=draft_tokens,
             source_mode=args.source_mode,
             verify_mode=args.verify_mode,
+            anchor_tokens=args.anchor_tokens,
             min_verify_margin=args.min_verify_margin,
             warmup_tokens=args.warmup_tokens,
             baseline=baseline,
@@ -696,6 +759,7 @@ def run_auto_draft(args: argparse.Namespace) -> AutoDraftStats:
         ngram=args.ngram,
         source_mode=args.source_mode,
         verify_mode=args.verify_mode,
+        anchor_tokens=args.anchor_tokens,
         min_verify_margin=args.min_verify_margin,
         warmup_tokens=args.warmup_tokens,
         baseline=baseline,
@@ -734,7 +798,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--auto-draft", action="store_true")
     parser.add_argument("--draft-sweep", default="2,4,6,8")
     parser.add_argument("--source-mode", choices=["prompt-context", "context", "prompt"], default="prompt-context")
-    parser.add_argument("--verify-mode", choices=["block", "sequential"], default="block")
+    parser.add_argument("--verify-mode", choices=["block", "sequential", "hybrid"], default="block")
+    parser.add_argument("--anchor-tokens", type=int, default=1)
     parser.add_argument("--min-verify-margin", type=float, default=0.0)
     parser.add_argument("--max-context-chars", type=int, default=200_000)
     parser.add_argument("--device", choices=["auto", "cpu", "mps"], default="auto")
