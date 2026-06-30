@@ -18,6 +18,7 @@ machboost draft --prefix prefix.txt --context .
 machboost simulate-draft --prompt prompt.txt --output output.txt --context .
 python3 scripts/hf_corpus_speculate.py --prompt prompt.txt --context . --model local-or-hf-model
 python3 scripts/hf_corpus_speculate.py --prompt prompt.txt --context . --model local-or-hf-model --auto-draft --verify-mode hybrid --anchor-tokens 1
+python3 scripts/hf_bench_suite.py --model local-or-hf-model --repeat 5 --local-files-only
 machboost profile init
 ```
 
@@ -55,6 +56,8 @@ For existing services like an already-running Ollama daemon, profile env vars wi
 `machboost simulate-draft` estimates how many serial decode steps a local corpus drafter could save on a known prompt/output transcript. The simulation is idealized; real acceleration requires runtime verification integration.
 
 `scripts/hf_corpus_speculate.py` is an experimental Hugging Face verifier loop. It compares KV-cache baseline greedy generation against local-corpus speculative generation for causal language models where MachBoost can inspect logits directly.
+
+`scripts/hf_bench_suite.py` runs repeatable benchmark fixtures and reports median total/decode tokens per second, exact-match rate, accepted draft tokens, forward reduction, and selected draft length.
 
 Useful verifier options:
 
