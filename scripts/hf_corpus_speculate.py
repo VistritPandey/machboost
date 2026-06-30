@@ -77,6 +77,7 @@ class CompareStats:
     max_draft_tokens: int
     source_mode: str
     verify_mode: str
+    min_verify_margin: float
     warmup_tokens: int
     baseline: RunStats
     speculative: RunStats
@@ -98,6 +99,7 @@ class AutoDraftStats:
     ngram: int
     source_mode: str
     verify_mode: str
+    min_verify_margin: float
     warmup_tokens: int
     baseline: RunStats
     runs: list[CompareStats]
@@ -245,6 +247,22 @@ def next_greedy_from_logits(logits) -> int:
     return int(torch.argmax(logits, dim=-1).item())
 
 
+def greedy_token_and_margin(logits) -> tuple[int, float]:
+    import torch
+
+    flat = logits.reshape(-1)
+    if flat.numel() < 2:
+        return int(torch.argmax(flat).item()), float("inf")
+    values, indices = torch.topk(flat, k=2)
+    margin = float((values[0] - values[1]).detach().cpu().item())
+    return int(indices[0].item()), margin
+
+
+def token_passes_margin(logits, expected_token: int, min_margin: float) -> bool:
+    token, margin = greedy_token_and_margin(logits)
+    return token == expected_token and margin >= min_margin
+
+
 def prefill(model, token_ids: list[int], device: str):
     import torch
 
@@ -293,12 +311,19 @@ def clone_cache(past_key_values):
     return copy.deepcopy(past_key_values)
 
 
-def verify_candidate_block(model, current_logits, past_key_values, candidate_tokens: list[int], device: str):
+def verify_candidate_block(
+    model,
+    current_logits,
+    past_key_values,
+    candidate_tokens: list[int],
+    device: str,
+    min_verify_margin: float,
+):
     import torch
 
     if not candidate_tokens:
         return [], past_key_values, current_logits, 0
-    if next_greedy_from_logits(current_logits) != candidate_tokens[0]:
+    if not token_passes_margin(current_logits, candidate_tokens[0], min_verify_margin):
         return [], past_key_values, current_logits, 0
 
     trial_past = clone_cache(past_key_values)
@@ -308,13 +333,19 @@ def verify_candidate_block(model, current_logits, past_key_values, candidate_tok
 
     logits = output.logits
     for offset in range(1, len(candidate_tokens)):
-        predicted = next_greedy_from_logits(logits[:, offset - 1, :])
-        if predicted != candidate_tokens[offset]:
+        if not token_passes_margin(logits[:, offset - 1, :], candidate_tokens[offset], min_verify_margin):
             return [], past_key_values, current_logits, 1
     return candidate_tokens, output.past_key_values, logits[:, -1, :], 1
 
 
-def verify_candidate_sequential(model, current_logits, past_key_values, candidate_tokens: list[int], device: str):
+def verify_candidate_sequential(
+    model,
+    current_logits,
+    past_key_values,
+    candidate_tokens: list[int],
+    device: str,
+    min_verify_margin: float,
+):
     if not candidate_tokens:
         return [], past_key_values, current_logits, 0
 
@@ -323,7 +354,7 @@ def verify_candidate_sequential(model, current_logits, past_key_values, candidat
     trial_logits = current_logits
     forwards = 0
     for token in candidate_tokens:
-        if next_greedy_from_logits(trial_logits) != token:
+        if not token_passes_margin(trial_logits, token, min_verify_margin):
             return [], past_key_values, current_logits, forwards
         accepted.append(token)
         trial_logits, trial_past = advance_cache(model, trial_past, token, device)
@@ -338,10 +369,13 @@ def verify_candidate_cached(
     candidate_tokens: list[int],
     device: str,
     verify_mode: str,
+    min_verify_margin: float,
 ):
     if verify_mode == "sequential":
-        return verify_candidate_sequential(model, current_logits, past_key_values, candidate_tokens, device)
-    return verify_candidate_block(model, current_logits, past_key_values, candidate_tokens, device)
+        return verify_candidate_sequential(
+            model, current_logits, past_key_values, candidate_tokens, device, min_verify_margin
+        )
+    return verify_candidate_block(model, current_logits, past_key_values, candidate_tokens, device, min_verify_margin)
 
 
 def baseline_generate(model, tokenizer, prompt_ids: list[int], max_new_tokens: int, device: str) -> RunStats:
@@ -387,6 +421,7 @@ def speculative_generate(
     device: str,
     candidate_limit: int,
     verify_mode: str,
+    min_verify_margin: float,
 ) -> RunStats:
     generated = list(prompt_ids)
     output_tokens: list[int] = []
@@ -412,6 +447,7 @@ def speculative_generate(
                 candidate_tokens,
                 device,
                 verify_mode,
+                min_verify_margin,
             )
             forwards += verify_forwards
             if accepted:
@@ -505,6 +541,7 @@ def compare_with_runtime(
             device,
             args.candidate_limit,
             args.verify_mode,
+            args.min_verify_margin,
         )
     baseline = baseline_generate(model, tokenizer, prompt_ids, args.max_new_tokens, device)
     speculative = speculative_generate(
@@ -518,6 +555,7 @@ def compare_with_runtime(
         device,
         args.candidate_limit,
         args.verify_mode,
+        args.min_verify_margin,
     )
 
     speedup = baseline.elapsed_ms / speculative.elapsed_ms if speculative.elapsed_ms > 0 else 0
@@ -548,6 +586,7 @@ def compare_with_runtime(
         max_draft_tokens=args.max_draft_tokens,
         source_mode=args.source_mode,
         verify_mode=args.verify_mode,
+        min_verify_margin=args.min_verify_margin,
         warmup_tokens=args.warmup_tokens,
         baseline=baseline,
         speculative=speculative,
@@ -600,6 +639,7 @@ def run_auto_draft(args: argparse.Namespace) -> AutoDraftStats:
             device,
             trial_args.candidate_limit,
             trial_args.verify_mode,
+            trial_args.min_verify_margin,
         )
         speedup = baseline.elapsed_ms / speculative.elapsed_ms if speculative.elapsed_ms > 0 else 0
         forward_reduction = (
@@ -629,6 +669,7 @@ def run_auto_draft(args: argparse.Namespace) -> AutoDraftStats:
             max_draft_tokens=draft_tokens,
             source_mode=args.source_mode,
             verify_mode=args.verify_mode,
+            min_verify_margin=args.min_verify_margin,
             warmup_tokens=args.warmup_tokens,
             baseline=baseline,
             speculative=speculative,
@@ -655,6 +696,7 @@ def run_auto_draft(args: argparse.Namespace) -> AutoDraftStats:
         ngram=args.ngram,
         source_mode=args.source_mode,
         verify_mode=args.verify_mode,
+        min_verify_margin=args.min_verify_margin,
         warmup_tokens=args.warmup_tokens,
         baseline=baseline,
         runs=runs,
@@ -693,6 +735,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--draft-sweep", default="2,4,6,8")
     parser.add_argument("--source-mode", choices=["prompt-context", "context", "prompt"], default="prompt-context")
     parser.add_argument("--verify-mode", choices=["block", "sequential"], default="block")
+    parser.add_argument("--min-verify-margin", type=float, default=0.0)
     parser.add_argument("--max-context-chars", type=int, default=200_000)
     parser.add_argument("--device", choices=["auto", "cpu", "mps"], default="auto")
     parser.add_argument("--local-files-only", action="store_true")
