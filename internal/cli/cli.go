@@ -38,6 +38,10 @@ func Execute(args []string, stdout, stderr io.Writer) int {
 		return runBench(args[1:], stdout, stderr)
 	case "overlap":
 		return runOverlap(args[1:], stdout, stderr)
+	case "draft":
+		return runDraft(args[1:], stdout, stderr)
+	case "simulate-draft":
+		return runSimulateDraft(args[1:], stdout, stderr)
 	case "profile":
 		return runProfile(args[1:], stdout, stderr)
 	default:
@@ -358,6 +362,122 @@ func runOverlap(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+func runDraft(args []string, stdout, stderr io.Writer) int {
+	prefixPath := ""
+	contextPath := ""
+	ngram := 4
+	maxDraftTokens := 32
+	limit := 5
+	jsonOut := false
+
+	fs := flag.NewFlagSet("draft", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	fs.StringVar(&prefixPath, "prefix", "", "prefix transcript file")
+	fs.StringVar(&contextPath, "context", "", "context file or directory")
+	fs.IntVar(&ngram, "ngram", ngram, "minimum matched suffix size")
+	fs.IntVar(&maxDraftTokens, "max-tokens", maxDraftTokens, "maximum draft tokens per candidate")
+	fs.IntVar(&limit, "limit", limit, "maximum candidates")
+	fs.BoolVar(&jsonOut, "json", false, "print JSON")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if prefixPath == "" || contextPath == "" {
+		fmt.Fprintln(stderr, "missing required flags; use: machboost draft --prefix prefix.txt --context path")
+		return 2
+	}
+
+	report, err := overlap.DraftCandidates(overlap.CandidateOptions{
+		PrefixPath:     prefixPath,
+		ContextPath:    contextPath,
+		NGram:          ngram,
+		MaxDraftTokens: maxDraftTokens,
+		Limit:          limit,
+	})
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if jsonOut {
+		data, err := overlap.MarshalCandidateReport(report)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		fmt.Fprintln(stdout, string(data))
+		return 0
+	}
+
+	fmt.Fprintf(stdout, "machboost draft: verdict=%s candidates=%d\n", report.Verdict, len(report.Candidates))
+	fmt.Fprintf(stdout, "tokens: prefix=%d context=%d, context files=%d\n",
+		report.PrefixTokens, report.ContextTokens, report.ContextFilesScanned)
+	for i, candidate := range report.Candidates {
+		fmt.Fprintf(stdout, "\ncandidate %d: score=%.2f matched_suffix_tokens=%d draft_tokens=%d\n",
+			i+1, candidate.Score, candidate.MatchedSuffixTokens, candidate.TokenCount)
+		fmt.Fprintf(stdout, "matched suffix: %s\n", candidate.MatchedSuffix)
+		fmt.Fprintf(stdout, "draft: %s\n", candidate.DraftText)
+	}
+	return 0
+}
+
+func runSimulateDraft(args []string, stdout, stderr io.Writer) int {
+	promptPath := ""
+	outputPath := ""
+	contextPath := ""
+	ngram := 4
+	maxDraftTokens := 32
+	jsonOut := false
+
+	fs := flag.NewFlagSet("simulate-draft", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	fs.StringVar(&promptPath, "prompt", "", "prompt/input transcript file")
+	fs.StringVar(&outputPath, "output", "", "known generated output file")
+	fs.StringVar(&contextPath, "context", "", "optional context file or directory")
+	fs.IntVar(&ngram, "ngram", ngram, "minimum copied n-gram size")
+	fs.IntVar(&maxDraftTokens, "max-tokens", maxDraftTokens, "maximum draft tokens per verification pass")
+	fs.BoolVar(&jsonOut, "json", false, "print JSON")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if promptPath == "" || outputPath == "" {
+		fmt.Fprintln(stderr, "missing required flags; use: machboost simulate-draft --prompt prompt.txt --output output.txt [--context dir]")
+		return 2
+	}
+
+	sim, err := overlap.SimulateDraft(overlap.DraftOptions{
+		PromptPath:     promptPath,
+		OutputPath:     outputPath,
+		ContextPath:    contextPath,
+		NGram:          ngram,
+		MaxDraftTokens: maxDraftTokens,
+	})
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if jsonOut {
+		data, err := overlap.MarshalDraftSimulation(sim)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		fmt.Fprintln(stdout, string(data))
+		return 0
+	}
+
+	fmt.Fprintf(stdout, "machboost simulate-draft: verdict=%s\n", sim.Verdict)
+	fmt.Fprintf(stdout, "baseline decode steps: %d\n", sim.BaselineDecodeSteps)
+	fmt.Fprintf(stdout, "simulated verify passes: %d\n", sim.SimulatedVerifyPasses)
+	fmt.Fprintf(stdout, "accepted draft tokens: %d in %d span(s)\n", sim.AcceptedDraftTokens, sim.AcceptedDraftSpans)
+	fmt.Fprintf(stdout, "normal decode tokens: %d\n", sim.NormalDecodeTokens)
+	fmt.Fprintf(stdout, "longest accepted draft: %d tokens\n", sim.LongestAcceptedDraft)
+	fmt.Fprintf(stdout, "step reduction: %.1f%%, estimated speedup: %.2fx\n", sim.StepReductionPercent, sim.EstimatedSpeedup)
+	if sim.ContextFilesScanned > 0 {
+		fmt.Fprintf(stdout, "context files scanned: %d\n", sim.ContextFilesScanned)
+	}
+	fmt.Fprintln(stdout, "note: simulation is idealized; real acceleration requires decoder verification integration.")
+	return 0
+}
+
 func runProfile(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprintln(stderr, "missing profile subcommand: init")
@@ -387,6 +507,8 @@ Usage:
   machboost bench compare [--profile name] [--workload type] [--repeat n] [--json] -- <command...>
   machboost bench ollama [--model name] [--tokens n] [--ctx n] [--json]
   machboost overlap --prompt prompt.txt --output output.txt [--context path] [--json]
+  machboost draft --prefix prefix.txt --context path [--json]
+  machboost simulate-draft --prompt prompt.txt --output output.txt [--context path] [--json]
   machboost profile init`)
 }
 
