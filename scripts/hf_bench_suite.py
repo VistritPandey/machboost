@@ -219,6 +219,14 @@ def command_for_fixture(args: argparse.Namespace, fixture: Fixture) -> list[str]
         "--auto-draft",
         "--draft-sweep",
         args.draft_sweep,
+        "--draft-policy",
+        args.draft_policy,
+        "--initial-draft-tokens",
+        str(args.initial_draft_tokens),
+        "--min-draft-tokens",
+        str(args.min_draft_tokens),
+        "--draft-step",
+        str(args.draft_step),
         "--json",
     ]
     if args.local_files_only:
@@ -283,6 +291,10 @@ def run_suite(args: argparse.Namespace, fixture_root: Path) -> dict[str, Any]:
         "max_new_tokens": args.max_new_tokens,
         "verify_mode": args.verify_mode,
         "anchor_tokens": args.anchor_tokens,
+        "draft_policy": args.draft_policy,
+        "initial_draft_tokens": args.initial_draft_tokens,
+        "min_draft_tokens": args.min_draft_tokens,
+        "draft_step": args.draft_step,
         "draft_sweep": args.draft_sweep,
         "fixtures": [asdict(fixture) for fixture in fixtures],
         "summaries": summaries,
@@ -405,6 +417,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--candidate-limit", type=int, default=8)
     parser.add_argument("--warmup-tokens", type=int, default=4)
     parser.add_argument("--draft-sweep", default="2,4,6,8,10")
+    parser.add_argument("--draft-policy", choices=["fixed", "adaptive"], default="fixed")
+    parser.add_argument("--initial-draft-tokens", type=int, default=2)
+    parser.add_argument("--min-draft-tokens", type=int, default=1)
+    parser.add_argument("--draft-step", type=int, default=2)
     parser.add_argument("--verify-mode", choices=["block", "hybrid", "sequential"], default="hybrid")
     parser.add_argument("--anchor-tokens", type=int, default=1)
     parser.add_argument("--min-verify-margin", type=float, default=0.0)
