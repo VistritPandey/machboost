@@ -318,6 +318,38 @@ def clone_cache(past_key_values):
     return copy.deepcopy(past_key_values)
 
 
+def cache_length(past_key_values) -> int | None:
+    if isinstance(past_key_values, tuple):
+        for layer in past_key_values:
+            for item in layer:
+                if hasattr(item, "shape") and len(item.shape) >= 3:
+                    return int(item.shape[-2])
+    if hasattr(past_key_values, "layers"):
+        for layer in past_key_values.layers:
+            keys = getattr(layer, "keys", None)
+            if keys is not None and hasattr(keys, "shape") and len(keys.shape) >= 3:
+                return int(keys.shape[-2])
+    return None
+
+
+def crop_cache(past_key_values, max_length: int):
+    if hasattr(past_key_values, "crop"):
+        past_key_values.crop(max_length)
+        return past_key_values
+    if isinstance(past_key_values, tuple):
+        cropped_layers = []
+        for layer in past_key_values:
+            cropped_items = []
+            for item in layer:
+                if hasattr(item, "shape") and len(item.shape) >= 3:
+                    cropped_items.append(item[..., :max_length, :])
+                else:
+                    cropped_items.append(item)
+            cropped_layers.append(tuple(cropped_items))
+        return tuple(cropped_layers)
+    return past_key_values
+
+
 def verify_candidate_block(
     model,
     current_logits,
@@ -334,6 +366,7 @@ def verify_candidate_block(
         return [], past_key_values, current_logits, 0
 
     trial_past = clone_cache(past_key_values)
+    base_cache_length = cache_length(trial_past)
     input_ids = torch.tensor([candidate_tokens], dtype=torch.long, device=device)
     with torch.no_grad():
         output = model(input_ids, past_key_values=trial_past, use_cache=True)
@@ -341,7 +374,11 @@ def verify_candidate_block(
     logits = output.logits
     for offset in range(1, len(candidate_tokens)):
         if not token_passes_margin(logits[:, offset - 1, :], candidate_tokens[offset], min_verify_margin):
-            return [], past_key_values, current_logits, 1
+            accepted = candidate_tokens[:offset]
+            next_past = output.past_key_values
+            if base_cache_length is not None:
+                next_past = crop_cache(next_past, base_cache_length + len(accepted))
+            return accepted, next_past, logits[:, offset - 1, :], 1
     return candidate_tokens, output.past_key_values, logits[:, -1, :], 1
 
 
@@ -362,6 +399,8 @@ def verify_candidate_sequential(
     forwards = 0
     for token in candidate_tokens:
         if not token_passes_margin(trial_logits, token, min_verify_margin):
+            if accepted:
+                return accepted, trial_past, trial_logits, forwards
             return [], past_key_values, current_logits, forwards
         accepted.append(token)
         trial_logits, trial_past = advance_cache(model, trial_past, token, device)
@@ -408,6 +447,8 @@ def verify_candidate_hybrid(
     )
     forwards += tail_forwards
     if not tail_accepted:
+        if anchored:
+            return anchored, trial_past, trial_logits, forwards
         return [], past_key_values, current_logits, forwards
     return anchored + tail_accepted, tail_past, tail_logits, forwards
 
