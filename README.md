@@ -19,7 +19,7 @@ machboost simulate-draft --prompt prompt.txt --output output.txt --context .
 python3 scripts/hf_corpus_speculate.py --prompt prompt.txt --context . --model local-or-hf-model
 python3 scripts/hf_corpus_speculate.py --prompt prompt.txt --context . --model local-or-hf-model --auto-draft --verify-mode hybrid --anchor-tokens 1
 python3 scripts/hf_bench_suite.py --model local-or-hf-model --repeat 5 --local-files-only
-python3 scripts/hf_bench_suite.py --fixtures use_cases,negative_controls --repeat 1 --local-files-only --output results.json
+python3 scripts/hf_bench_suite.py --runner in-process --fixtures use_cases,negative_controls --repeat 3 --local-files-only --output results.json
 machboost profile init
 ```
 
