@@ -2,9 +2,9 @@
 """Benchmark HF, MLX, and Ollama paths with fresh prompts.
 
 The goal is not to hide backend differences. Hugging Face has a cache-aware
-verifier prototype, MLX currently uses the package verifier adapter, and Ollama
-HTTP is measured as a wrapper because its public API does not expose verifier
-hooks.
+verifier prototype, MLX uses the package cache-aware verifier adapter, and
+Ollama HTTP is measured as a wrapper because its public API does not expose
+verifier hooks.
 """
 
 from __future__ import annotations
@@ -212,11 +212,13 @@ def run_mlx(args: argparse.Namespace, fixtures: list[Fixture]) -> list[BenchRow]
         prompt_tokens = service.encode(fixture.prompt)
         source_tokens = service.encode(fixture.prompt + "\n" + fixture.context)
 
+        service.reset_cache()
         service.forward_calls = 0
         baseline_tokens, baseline_elapsed = serial_mlx_generate(service, prompt_tokens, args.max_new_tokens)
         baseline_forwards = service.forward_calls
         baseline_output = service.decode(baseline_tokens)
 
+        service.reset_cache()
         service.forward_calls = 0
         boosted = machboost(
             service,
@@ -235,7 +237,7 @@ def run_mlx(args: argparse.Namespace, fixtures: list[Fixture]) -> list[BenchRow]
                 model=args.mlx_model,
                 fixture=fixture.name,
                 nonce=fixture.nonce,
-                mode="stateless_verifier_adapter",
+                mode="cache_aware_verifier_adapter",
                 output_match=baseline_tokens == boosted_tokens,
                 baseline_ms=baseline_elapsed * 1000,
                 boosted_ms=boosted_elapsed * 1000,
@@ -243,12 +245,12 @@ def run_mlx(args: argparse.Namespace, fixtures: list[Fixture]) -> list[BenchRow]
                 boosted_tokens_per_second=tokens_per_second(len(boosted_tokens), boosted_elapsed),
                 speedup=(baseline_elapsed / boosted_elapsed) if boosted_elapsed > 0 else 0.0,
                 baseline_forwards=baseline_forwards,
-                boosted_forwards=stats.target_calls,
+                boosted_forwards=service.forward_calls,
                 accepted_draft_tokens=stats.accepted_draft_tokens,
                 generated_tokens=len(boosted_tokens),
                 baseline_output_preview=preview(baseline_output),
                 boosted_output_preview=preview(boosted_output),
-                note="MLX path uses the package adapter; this v0 verifier is not KV-cache optimized yet.",
+                note="MLX path uses the package cache-aware verifier adapter with MLX prompt cache.",
             )
         )
     return rows
