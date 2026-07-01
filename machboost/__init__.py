@@ -1,3 +1,4 @@
+from .accelerator import Accelerator, AcceleratorResult
 from .core import (
     BoostedService,
     Candidate,
@@ -8,6 +9,8 @@ from .core import (
 )
 
 __all__ = [
+    "Accelerator",
+    "AcceleratorResult",
     "BoostedService",
     "Candidate",
     "CorpusDrafter",
