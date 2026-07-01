@@ -756,6 +756,18 @@ def parse_draft_sweep(value: str) -> list[int]:
 def run_auto_draft(args: argparse.Namespace) -> AutoDraftStats:
     tokenizer, model, device = load_runtime(args)
     prompt_ids, source_ids, context_token_count = prepare_inputs(args, tokenizer)
+    return auto_draft_with_runtime(args, tokenizer, model, device, prompt_ids, source_ids, context_token_count)
+
+
+def auto_draft_with_runtime(
+    args: argparse.Namespace,
+    tokenizer,
+    model,
+    device,
+    prompt_ids,
+    source_ids,
+    context_token_count: int,
+) -> AutoDraftStats:
     warmup_model(model, prompt_ids, device)
     if args.warmup_tokens > 0:
         _ = baseline_generate(model, tokenizer, prompt_ids, args.warmup_tokens, device)
