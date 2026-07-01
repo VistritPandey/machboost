@@ -102,6 +102,47 @@ print(text)
 print(stats.estimated_speedup)
 ```
 
+Benchmark and calibrate before turning the layer on for repeated traffic:
+
+```python
+from machboost import GatePolicy
+
+result = boost.benchmark(
+    "Continue the rollout checklist from the local docs:",
+    max_tokens=64,
+    gate_policy=GatePolicy(min_speedup=1.05, min_acceptance_rate=0.10),
+)
+
+print(result.output_match)
+print(result.speedup)
+print(result.decision.enabled)
+
+calibration = boost.calibrate(
+    [
+        "Continue the rollout checklist from the local docs:",
+        "Copy the JSON deployment policy from the local config:",
+    ],
+    max_tokens=32,
+)
+
+print(calibration.summary)
+print(boost.boost_enabled)
+```
+
+`Accelerator.generate(...)` uses the verifier-backed boosted path while `boost.boost_enabled` is true. If calibration disables the layer, generation falls back to the exact serial baseline path.
+
+The same high-level API is available for Hugging Face causal language models:
+
+```python
+from machboost import Accelerator
+
+boost = Accelerator.from_huggingface(
+    "Qwen/Qwen2.5-3B-Instruct",
+    context_paths=["./docs", "./src"],
+    local_files_only=True,
+)
+```
+
 For custom runtimes, wrap your own verifier-capable service directly:
 
 ```python
@@ -203,3 +244,5 @@ print(ollama.capabilities().native_verification)
 ```
 
 The public Ollama HTTP API does not expose logits, token IDs, or KV-cache verifier hooks, so this adapter reports `native_verification=False`. Exact MachBoost acceleration for Ollama needs a native runner hook or patched Ollama runner.
+
+That means Ollama HTTP support is useful for benchmarking, repeatable options, and capability detection, but it is intentionally treated as limited mode for exact draft-token acceleration.
