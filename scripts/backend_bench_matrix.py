@@ -33,6 +33,8 @@ SCHEMA_VERSION = "machboost.backend_bench_matrix.v1"
 @dataclass(frozen=True)
 class Fixture:
     name: str
+    workflow: str
+    expectation: str
     prompt: str
     context: str
     nonce: str
@@ -43,6 +45,8 @@ class BenchRow:
     backend: str
     model: str
     fixture: str
+    workflow: str
+    expectation: str
     nonce: str
     mode: str
     output_match: bool
@@ -80,7 +84,14 @@ def build_fixture(name: str, nonce: str) -> Fixture:
             "</document>\n\n"
             "Continuation:\nPolicy: MachBoost benchmark records must include"
         )
-        return Fixture(name=name, prompt=prompt, context=context, nonce=nonce)
+        return Fixture(
+            name=name,
+            workflow="policy_quote",
+            expectation="positive",
+            prompt=prompt,
+            context=context,
+            nonce=nonce,
+        )
     if name == "json":
         context = (
             "{\n"
@@ -99,7 +110,108 @@ def build_fixture(name: str, nonce: str) -> Fixture:
             f'  "nonce": "{nonce}",\n'
             '  "backend":'
         )
-        return Fixture(name=name, prompt=prompt, context=context, nonce=nonce)
+        return Fixture(
+            name=name,
+            workflow="structured_config",
+            expectation="positive",
+            prompt=prompt,
+            context=context,
+            nonce=nonce,
+        )
+    if name == "rag":
+        context = (
+            f"Retrieval note {nonce}\n"
+            "Answer sentence: The acceleration layer verifies local-context draft tokens against the target model before accepting them.\n"
+            "Support sentence: Rejected draft tokens fall back to the target model path.\n"
+        )
+        prompt = (
+            "Answer by copying the answer sentence exactly from the retrieved note.\n\n"
+            "<retrieved>\n"
+            f"{context}"
+            "</retrieved>\n\n"
+            "Question: How does the acceleration layer stay exact?\n"
+            "Answer:"
+        )
+        return Fixture(
+            name=name,
+            workflow="rag_answer",
+            expectation="positive",
+            prompt=prompt,
+            context=context,
+            nonce=nonce,
+        )
+    if name == "code":
+        context = (
+            f"# nonce: {nonce}\n"
+            "def format_backend_row(row):\n"
+            "    return f\"{row['backend']} | {row['model']} | {row['speedup']:.2f}x | {row['output_match']}\"\n\n"
+            "def format_summary(rows):\n"
+            "    return \"\\n\".join(format_backend_row(row) for row in rows)\n"
+        )
+        prompt = (
+            "Continue this Python code exactly from the source file.\n\n"
+            "<source>\n"
+            f"{context}"
+            "</source>\n\n"
+            f"# nonce: {nonce}\n"
+            "def format_backend_row(row):\n"
+            "    return"
+        )
+        return Fixture(
+            name=name,
+            workflow="code_completion",
+            expectation="positive",
+            prompt=prompt,
+            context=context,
+            nonce=nonce,
+        )
+    if name == "repo_quote":
+        context = (
+            f"Command note {nonce}\n"
+            "Run the Python benchmark suite with:\n"
+            "python3 scripts/backend_bench_matrix.py --backends mlx --fixtures policy,json,rag,code --repeat 5\n"
+        )
+        prompt = (
+            "Copy the benchmark command exactly from the command note.\n\n"
+            "<note>\n"
+            f"{context}"
+            "</note>\n\n"
+            "Benchmark command:"
+        )
+        return Fixture(
+            name=name,
+            workflow="repo_quote",
+            expectation="positive",
+            prompt=prompt,
+            context=context,
+            nonce=nonce,
+        )
+    if name == "creative_open":
+        context = (
+            f"Cache note {nonce}: benchmark rows, fixture metadata, and JSON output paths are stored locally."
+        )
+        prompt = (
+            f"Write two fresh sentences about why local developer tools can feel empowering. Include nonce {nonce}."
+        )
+        return Fixture(
+            name=name,
+            workflow="creative_generation",
+            expectation="negative",
+            prompt=prompt,
+            context=context,
+            nonce=nonce,
+        )
+    if name == "short_answer":
+        context = f"{nonce} yes no maybe benchmark profile context"
+        prompt = f"Answer with exactly one word, yes or no. Nonce: {nonce}."
+        return Fixture(
+            name=name,
+            workflow="short_answer",
+            expectation="negative",
+            prompt=prompt,
+            context=context,
+            nonce=nonce,
+        )
     raise ValueError(f"unknown fixture: {name}")
 
 
@@ -173,6 +285,8 @@ def run_hf(args: argparse.Namespace, fixtures: list[Fixture]) -> list[BenchRow]:
                     backend="huggingface",
                     model=args.hf_model,
                     fixture=fixture.name,
+                    workflow=fixture.workflow,
+                    expectation=fixture.expectation,
                     nonce=fixture.nonce,
                     mode="native_verifier_kv_cache",
                     output_match=result.output_match,
@@ -236,6 +350,8 @@ def run_mlx(args: argparse.Namespace, fixtures: list[Fixture]) -> list[BenchRow]
                 backend="mlx",
                 model=args.mlx_model,
                 fixture=fixture.name,
+                workflow=fixture.workflow,
+                expectation=fixture.expectation,
                 nonce=fixture.nonce,
                 mode="cache_aware_verifier_adapter",
                 output_match=baseline_tokens == boosted_tokens,
@@ -313,6 +429,8 @@ def run_ollama(args: argparse.Namespace, fixtures: list[Fixture]) -> list[BenchR
                 backend="ollama",
                 model=args.ollama_model,
                 fixture=fixture.name,
+                workflow=fixture.workflow,
+                expectation=fixture.expectation,
                 nonce=fixture.nonce,
                 mode="http_wrapper_no_native_verifier",
                 output_match=baseline_output == boosted_output,
@@ -356,11 +474,59 @@ def summarize(rows: Iterable[BenchRow]) -> list[dict[str, Any]]:
                 "rows": count,
                 "output_match_rate": sum(1 for row in backend_rows if row.output_match) / count if count else 0,
                 "median_speedup": median([row.speedup for row in backend_rows]),
+                "p90_speedup": percentile([row.speedup for row in backend_rows], 90),
+                "mean_speedup": mean([row.speedup for row in backend_rows]),
                 "median_baseline_tokens_per_second": median(
                     [row.baseline_tokens_per_second for row in backend_rows]
                 ),
                 "median_boosted_tokens_per_second": median([row.boosted_tokens_per_second for row in backend_rows]),
+                "p90_boosted_tokens_per_second": percentile(
+                    [row.boosted_tokens_per_second for row in backend_rows], 90
+                ),
                 "median_accepted_draft_tokens": median([row.accepted_draft_tokens for row in backend_rows]),
+                "median_forward_reduction_percent": median(
+                    [
+                        ((row.baseline_forwards - row.boosted_forwards) / row.baseline_forwards) * 100
+                        for row in backend_rows
+                        if row.baseline_forwards > 0
+                    ]
+                ),
+            }
+        )
+    return summaries
+
+
+def summarize_by_fixture(rows: Iterable[BenchRow]) -> list[dict[str, Any]]:
+    grouped: dict[tuple[str, str], list[BenchRow]] = {}
+    for row in rows:
+        grouped.setdefault((row.backend, row.fixture), []).append(row)
+
+    summaries = []
+    for (backend, fixture), fixture_rows in sorted(grouped.items()):
+        count = len(fixture_rows)
+        first = fixture_rows[0]
+        summaries.append(
+            {
+                "backend": backend,
+                "fixture": fixture,
+                "workflow": first.workflow,
+                "expectation": first.expectation,
+                "rows": count,
+                "output_match_rate": sum(1 for row in fixture_rows if row.output_match) / count if count else 0,
+                "median_speedup": median([row.speedup for row in fixture_rows]),
+                "p90_speedup": percentile([row.speedup for row in fixture_rows], 90),
+                "median_baseline_tokens_per_second": median(
+                    [row.baseline_tokens_per_second for row in fixture_rows]
+                ),
+                "median_boosted_tokens_per_second": median([row.boosted_tokens_per_second for row in fixture_rows]),
+                "median_accepted_draft_tokens": median([row.accepted_draft_tokens for row in fixture_rows]),
+                "median_forward_reduction_percent": median(
+                    [
+                        ((row.baseline_forwards - row.boosted_forwards) / row.baseline_forwards) * 100
+                        for row in fixture_rows
+                        if row.baseline_forwards > 0
+                    ]
+                ),
             }
         )
     return summaries
@@ -376,10 +542,29 @@ def median(values: list[float | int]) -> float:
     return (ordered[mid - 1] + ordered[mid]) / 2
 
 
+def mean(values: list[float | int]) -> float:
+    if not values:
+        return 0.0
+    return sum(float(value) for value in values) / len(values)
+
+
+def percentile(values: list[float | int], pct: float) -> float:
+    ordered = sorted(float(value) for value in values)
+    if not ordered:
+        return 0.0
+    if len(ordered) == 1:
+        return ordered[0]
+    rank = (pct / 100) * (len(ordered) - 1)
+    lower = int(rank)
+    upper = min(lower + 1, len(ordered) - 1)
+    fraction = rank - lower
+    return ordered[lower] + (ordered[upper] - ordered[lower]) * fraction
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Benchmark MachBoost across HF, MLX, and Ollama backends.")
     parser.add_argument("--backends", default="all", help="Comma-separated: hf,mlx,ollama,all")
-    parser.add_argument("--fixtures", default="policy,json")
+    parser.add_argument("--fixtures", default="policy,json,rag,code,repo_quote,creative_open,short_answer")
     parser.add_argument("--repeat", type=int, default=1)
     parser.add_argument("--seed", default="machboost")
     parser.add_argument("--max-new-tokens", type=int, default=24)
@@ -428,6 +613,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "verify_mode": args.verify_mode,
         },
         "summaries": summarize(rows),
+        "fixture_summaries": summarize_by_fixture(rows),
         "rows": data_rows,
     }
 
@@ -438,6 +624,7 @@ def main(argv: list[str]) -> int:
         result = {
             "schema_version": SCHEMA_VERSION + ".self_test",
             "ok": build_fixture("policy", "mb-test").nonce == "mb-test"
+            and build_fixture("creative_open", "mb-test").expectation == "negative"
             and selected_backends("all") == {"hf", "mlx", "ollama"},
         }
     else:
