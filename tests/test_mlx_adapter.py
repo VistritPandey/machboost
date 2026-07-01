@@ -63,6 +63,23 @@ class FakeCache:
             del self.tokens[-n:]
 
 
+class CloneableFakeCache:
+    def __init__(self, tokens=None):
+        self.tokens = list(tokens or [])
+
+    @property
+    def state(self):
+        return list(self.tokens)
+
+    @property
+    def meta_state(self):
+        return None
+
+    @classmethod
+    def from_state(cls, state, meta_state):
+        return cls(state)
+
+
 class CachedTinyMLXModel(TinyMLXModel):
     layers = [object()]
 
@@ -97,6 +114,15 @@ def cache_service(target, prompt_len):
         cache_factory=lambda model: [FakeCache()],
         cache_trimmer=lambda cache, n: cache[0].trim(n),
         cache_can_trim=lambda cache: True,
+    )
+
+
+def cloneable_cache_service(target, prompt_len):
+    return MLXCausalLMService(
+        CachedTinyMLXModel(target, prompt_len=prompt_len),
+        mx_module=FakeMX,
+        cache_factory=lambda model: [CloneableFakeCache()],
+        cache_can_trim=lambda cache: False,
     )
 
 
@@ -186,6 +212,18 @@ class MLXAdapterTest(unittest.TestCase):
         self.assertEqual(service._cache[0].trims, [2])
         self.assertEqual(service.next_token(prompt + (1,)), 2)
         self.assertEqual(service.forward_calls, 2)
+
+    def test_cached_verify_clones_non_trimmable_cache_before_rejection(self):
+        prompt = (100, 101, 102)
+        service = cloneable_cache_service((1, 2, 3, 4), prompt_len=len(prompt))
+
+        accepted, residual = service.verify(prompt, (1, 99, 100))
+
+        self.assertEqual(accepted, 1)
+        self.assertEqual(residual, 2)
+        self.assertEqual(service._cache[0].tokens, list(prompt + (1,)))
+        self.assertEqual(service.next_token(prompt + (1,)), 2)
+        self.assertEqual(service.forward_calls, 3)
 
 
 if __name__ == "__main__":
