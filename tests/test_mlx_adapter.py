@@ -48,6 +48,58 @@ class TinyMLXModel:
         return [rows]
 
 
+class FakeCache:
+    def __init__(self):
+        self.tokens = []
+        self.trims = []
+
+    @property
+    def state(self):
+        return tuple(self.tokens)
+
+    def trim(self, n):
+        self.trims.append(n)
+        if n > 0:
+            del self.tokens[-n:]
+
+
+class CachedTinyMLXModel(TinyMLXModel):
+    layers = [object()]
+
+    def __init__(self, target_tokens, prompt_len):
+        super().__init__(target_tokens, prompt_len)
+        self.inputs = []
+
+    def __call__(self, input_ids, cache=None):
+        tokens = list(input_ids[0])
+        self.inputs.append(tuple(tokens))
+        offset = len(cache[0].tokens) if cache is not None else 0
+        if cache is not None:
+            cache[0].tokens.extend(tokens)
+
+        rows = []
+        for pos in range(len(tokens)):
+            absolute_pos = offset + pos
+            target_offset = absolute_pos - self.prompt_len + 1
+            token = 0
+            if 0 <= target_offset < len(self.target_tokens):
+                token = self.target_tokens[target_offset]
+            row = [0.0] * self.vocab_size
+            row[token] = 10.0
+            rows.append(row)
+        return [rows]
+
+
+def cache_service(target, prompt_len):
+    return MLXCausalLMService(
+        CachedTinyMLXModel(target, prompt_len=prompt_len),
+        mx_module=FakeMX,
+        cache_factory=lambda model: [FakeCache()],
+        cache_trimmer=lambda cache, n: cache[0].trim(n),
+        cache_can_trim=lambda cache: True,
+    )
+
+
 class MLXAdapterTest(unittest.TestCase):
     def test_next_token_uses_last_logits(self):
         service = MLXCausalLMService(TinyMLXModel((1, 2, 3), prompt_len=3), mx_module=FakeMX)
@@ -97,6 +149,43 @@ class MLXAdapterTest(unittest.TestCase):
         self.assertEqual(stats.target_calls, 2)
         self.assertEqual(stats.accepted_draft_tokens, len(target))
         self.assertGreaterEqual(stats.estimated_speedup, 4.0)
+
+    def test_cached_next_token_extends_existing_cache(self):
+        prompt = (100, 101, 102)
+        service = cache_service((1, 2, 3), prompt_len=len(prompt))
+
+        self.assertEqual(service.next_token(prompt), 1)
+        self.assertEqual(service.next_token(prompt + (1,)), 2)
+        self.assertEqual(service.next_token(prompt + (1, 2)), 3)
+
+        self.assertEqual(service.forward_calls, 3)
+        self.assertEqual(service.model.inputs, [prompt, (1,), (2,)])
+
+    def test_cached_verify_commits_accepted_candidate(self):
+        prompt = (100, 101, 102)
+        service = cache_service((1, 2, 3, 4, 5), prompt_len=len(prompt))
+
+        accepted, residual = service.verify(prompt, (1, 2, 3, 4))
+
+        self.assertEqual(accepted, 4)
+        self.assertIsNone(residual)
+        self.assertEqual(service.forward_calls, 2)
+        self.assertEqual(service._cache[0].tokens, list(prompt + (1, 2, 3, 4)))
+        self.assertEqual(service.next_token(prompt + (1, 2, 3, 4)), 5)
+        self.assertEqual(service.forward_calls, 2)
+
+    def test_cached_verify_trims_rejected_tail(self):
+        prompt = (100, 101, 102)
+        service = cache_service((1, 2, 3, 4), prompt_len=len(prompt))
+
+        accepted, residual = service.verify(prompt, (1, 99, 100))
+
+        self.assertEqual(accepted, 1)
+        self.assertEqual(residual, 2)
+        self.assertEqual(service._cache[0].tokens, list(prompt + (1,)))
+        self.assertEqual(service._cache[0].trims, [2])
+        self.assertEqual(service.next_token(prompt + (1,)), 2)
+        self.assertEqual(service.forward_calls, 2)
 
 
 if __name__ == "__main__":
