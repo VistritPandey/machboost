@@ -1,0 +1,180 @@
+{
+  "schema_version": "machboost.backend_bench_matrix.v1",
+  "fixtures": [
+    {
+      "name": "policy",
+      "prompt": "Continue the memo exactly from the document. Do not add commentary.\n\n<document>\nBenchmark memo mb-aa031f1ec5\nPolicy: MachBoost benchmark records must include backend, model, fixture, nonce, exact output match, baseline tokens per second, boosted tokens per second, and accepted draft tokens.\nReason: the record must prove speed without changing model output.\n</document>\n\nContinuation:\nPolicy: MachBoost benchmark records must include",
+      "context": "Benchmark memo mb-aa031f1ec5\nPolicy: MachBoost benchmark records must include backend, model, fixture, nonce, exact output match, baseline tokens per second, boosted tokens per second, and accepted draft tokens.\nReason: the record must prove speed without changing model output.\n",
+      "nonce": "mb-aa031f1ec5"
+    },
+    {
+      "name": "json",
+      "prompt": "Continue this JSON exactly from the source document.\n\n<source>\n{\n  \"nonce\": \"mb-7921ec56f3\",\n  \"backend\": \"machboost\",\n  \"accuracy_rule\": \"boosted output must match baseline output exactly\",\n  \"metrics\": [\"tokens_per_second\", \"wall_clock_ms\", \"accepted_draft_tokens\"]\n}\n</source>\n\n{\n  \"nonce\": \"mb-7921ec56f3\",\n  \"backend\":",
+      "context": "{\n  \"nonce\": \"mb-7921ec56f3\",\n  \"backend\": \"machboost\",\n  \"accuracy_rule\": \"boosted output must match baseline output exactly\",\n  \"metrics\": [\"tokens_per_second\", \"wall_clock_ms\", \"accepted_draft_tokens\"]\n}\n",
+      "nonce": "mb-7921ec56f3"
+    }
+  ],
+  "settings": {
+    "backends": [
+      "hf",
+      "mlx",
+      "ollama"
+    ],
+    "repeat": 1,
+    "max_new_tokens": 24,
+    "ngram": 2,
+    "max_draft_tokens": 8,
+    "verify_mode": "hybrid"
+  },
+  "summaries": [
+    {
+      "backend": "huggingface",
+      "rows": 2,
+      "output_match_rate": 1.0,
+      "median_speedup": 2.0972853429089753,
+      "median_baseline_tokens_per_second": 24.730783554422345,
+      "median_boosted_tokens_per_second": 51.813161088886346,
+      "median_accepted_draft_tokens": 24.0
+    },
+    {
+      "backend": "mlx",
+      "rows": 2,
+      "output_match_rate": 1.0,
+      "median_speedup": 5.592133580361756,
+      "median_baseline_tokens_per_second": 15.813798392777743,
+      "median_boosted_tokens_per_second": 88.37491219449021,
+      "median_accepted_draft_tokens": 23.0
+    },
+    {
+      "backend": "ollama",
+      "rows": 2,
+      "output_match_rate": 1.0,
+      "median_speedup": 1.0067025904974638,
+      "median_baseline_tokens_per_second": 75.3719204239581,
+      "median_boosted_tokens_per_second": 75.87726229401918,
+      "median_accepted_draft_tokens": 0.0
+    }
+  ],
+  "rows": [
+    {
+      "backend": "huggingface",
+      "model": "Qwen/Qwen2.5-3B-Instruct",
+      "fixture": "policy",
+      "nonce": "mb-aa031f1ec5",
+      "mode": "native_verifier_kv_cache",
+      "output_match": true,
+      "baseline_ms": 982.0,
+      "boosted_ms": 468.0,
+      "baseline_tokens_per_second": 24.419956089849038,
+      "boosted_tokens_per_second": 51.20487918318195,
+      "speedup": 2.0982905982905984,
+      "baseline_forwards": 24,
+      "boosted_forwards": 7,
+      "accepted_draft_tokens": 24,
+      "generated_tokens": 24,
+      "baseline_output_preview": "backend, model, fixture, nonce, exact output match, baseline tokens per second, boosted tokens per second, and accepted",
+      "boosted_output_preview": "backend, model, fixture, nonce, exact output match, baseline tokens per second, boosted tokens per second, and accepted",
+      "note": "HF path uses the cache-aware prototype verifier."
+    },
+    {
+      "backend": "huggingface",
+      "model": "Qwen/Qwen2.5-3B-Instruct",
+      "fixture": "json",
+      "nonce": "mb-7921ec56f3",
+      "mode": "native_verifier_kv_cache",
+      "output_match": true,
+      "baseline_ms": 958.0,
+      "boosted_ms": 457.0,
+      "baseline_tokens_per_second": 25.041611018995653,
+      "boosted_tokens_per_second": 52.42144299459075,
+      "speedup": 2.096280087527352,
+      "baseline_forwards": 24,
+      "boosted_forwards": 7,
+      "accepted_draft_tokens": 24,
+      "generated_tokens": 24,
+      "baseline_output_preview": "\"machboost\", \"accuracy_rule\": \"boosted output must match baseline output exactly\", \"metrics\": [\"",
+      "boosted_output_preview": "\"machboost\", \"accuracy_rule\": \"boosted output must match baseline output exactly\", \"metrics\": [\"",
+      "note": "HF path uses the cache-aware prototype verifier."
+    },
+    {
+      "backend": "mlx",
+      "model": "mlx-community/Qwen3.5-0.8B-MLX-4bit",
+      "fixture": "policy",
+      "nonce": "mb-aa031f1ec5",
+      "mode": "stateless_verifier_adapter",
+      "output_match": true,
+      "baseline_ms": 1462.3410000003787,
+      "boosted_ms": 266.1100830009673,
+      "baseline_tokens_per_second": 16.41204069365065,
+      "boosted_tokens_per_second": 90.1882398793313,
+      "speedup": 5.495248370558974,
+      "baseline_forwards": 24,
+      "boosted_forwards": 4,
+      "accepted_draft_tokens": 23,
+      "generated_tokens": 24,
+      "baseline_output_preview": "backend, model, fixture, nonce, exact output match, baseline tokens per second, boosted tokens per second, and accepted",
+      "boosted_output_preview": "backend, model, fixture, nonce, exact output match, baseline tokens per second, boosted tokens per second, and accepted",
+      "note": "MLX path uses the package adapter; this v0 verifier is not KV-cache optimized yet."
+    },
+    {
+      "backend": "mlx",
+      "model": "mlx-community/Qwen3.5-0.8B-MLX-4bit",
+      "fixture": "json",
+      "nonce": "mb-7921ec56f3",
+      "mode": "stateless_verifier_adapter",
+      "output_match": true,
+      "baseline_ms": 1577.3330829997576,
+      "boosted_ms": 277.25925000049756,
+      "baseline_tokens_per_second": 15.215556091904837,
+      "boosted_tokens_per_second": 86.56158450964911,
+      "speedup": 5.689018790164537,
+      "baseline_forwards": 24,
+      "boosted_forwards": 4,
+      "accepted_draft_tokens": 23,
+      "generated_tokens": 24,
+      "baseline_output_preview": "\"machboost\", \"accuracy_rule\": \"boosted output must match baseline output exactly\", \"metrics",
+      "boosted_output_preview": "\"machboost\", \"accuracy_rule\": \"boosted output must match baseline output exactly\", \"metrics",
+      "note": "MLX path uses the package adapter; this v0 verifier is not KV-cache optimized yet."
+    },
+    {
+      "backend": "ollama",
+      "model": "medgemma1.5:latest",
+      "fixture": "policy",
+      "nonce": "mb-aa031f1ec5",
+      "mode": "http_wrapper_no_native_verifier",
+      "output_match": true,
+      "baseline_ms": 3344.1815,
+      "boosted_ms": 2513.34075,
+      "baseline_tokens_per_second": 75.39511753784677,
+      "boosted_tokens_per_second": 76.40343560782117,
+      "speedup": 1.0133737847078526,
+      "baseline_forwards": 24,
+      "boosted_forwards": 24,
+      "accepted_draft_tokens": 0,
+      "generated_tokens": 24,
+      "baseline_output_preview": "<original_text>: Policy: MachBoost benchmark records must include backend, model, fixture, nonce, exact output match",
+      "boosted_output_preview": "<original_text>: Policy: MachBoost benchmark records must include backend, model, fixture, nonce, exact output match",
+      "note": "Ollama HTTP exposes wrapper metrics only; speedup is eval-token/sec ratio, not total wall time, to avoid model-load/cache effects."
+    },
+    {
+      "backend": "ollama",
+      "model": "medgemma1.5:latest",
+      "fixture": "json",
+      "nonce": "mb-7921ec56f3",
+      "mode": "http_wrapper_no_native_verifier",
+      "output_match": true,
+      "baseline_ms": 2524.617834,
+      "boosted_ms": 2536.068334,
+      "baseline_tokens_per_second": 75.34872331006942,
+      "boosted_tokens_per_second": 75.3510889802172,
+      "speedup": 1.000031396287075,
+      "baseline_forwards": 24,
+      "boosted_forwards": 24,
+      "accepted_draft_tokens": 0,
+      "generated_tokens": 24,
+      "baseline_output_preview": "<unused94>thought The user wants me to continue the JSON object provided in the source. The source provides a partial JSON",
+      "boosted_output_preview": "<unused94>thought The user wants me to continue the JSON object provided in the source. The source provides a partial JSON",
+      "note": "Ollama HTTP exposes wrapper metrics only; speedup is eval-token/sec ratio, not total wall time, to avoid model-load/cache effects."
+    }
+  ]
+}
