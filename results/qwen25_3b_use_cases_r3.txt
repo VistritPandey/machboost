@@ -1,0 +1,13 @@
+fixture               | workflow            | expect   | match | total tok/s  | decode tok/s | speedup | decode speedup | forwards | draft
+--------------------- | ------------------- | -------- | ----- | ------------ | ------------ | ------- | -------------- | -------- | -----
+prompt_visible_readme | docs_continuation   | positive | 100%  | 12.18->19.26 | 14.65->26.13 | 1.58x   | 1.78x          | 32->9    | 10   
+prompt_visible_code   | code_completion     | positive | 100%  | 29.45->41.92 | 30.23->43.53 | 1.42x   | 1.44x          | 32->18   | 8    
+rag_answer            | rag_answer          | positive | 100%  | 28.32->63.54 | 29.03->67.80 | 2.24x   | 2.32x          | 32->9    | 10   
+log_template          | log_generation      | positive | 100%  | 23.40->35.90 | 23.93->37.12 | 1.53x   | 1.55x          | 32->15   | 8    
+json_config           | structured_config   | positive | 100%  | 26.57->55.10 | 27.23->58.00 | 2.19x   | 2.25x          | 32->9    | 10   
+test_boilerplate      | test_generation     | positive | 100%  | 29.29->52.01 | 30.08->54.49 | 1.73x   | 1.75x          | 32->15   | 10   
+repo_chat_quote       | repo_chat           | positive | 100%  | 29.59->31.85 | 30.39->33.08 | 1.08x   | 1.09x          | 32->27   | 6    
+controlled_context    | controlled          | positive | 100%  | 32.21->61.42 | 33.10->64.87 | 1.92x   | 1.97x          | 32->13   | 10   
+hidden_readme         | hidden_context      | negative | 100%  | 31.10->31.04 | 32.09->31.85 | 1.01x   | 1.01x          | 32->32   | 8    
+creative_open         | creative_generation | negative | 100%  | 32.58->32.73 | 33.50->33.65 | 1.01x   | 1.00x          | 32->32   | 4    
+short_answer          | short_answer        | negative | 100%  | 32.02->33.24 | 32.92->34.14 | 1.04x   | 1.04x          | 32->32   | 2    
