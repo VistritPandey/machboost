@@ -99,6 +99,8 @@ Try the local demos:
 python3 examples/python/verifier_service_demo.py
 python3 examples/python/black_box_service_demo.py
 python3 examples/python/hf_adapter_demo.py
+python3 examples/python/mlx_adapter_demo.py
+python3 examples/python/ollama_adapter_demo.py
 ```
 
 ### Hugging Face adapter
@@ -129,3 +131,48 @@ tokens, stats = boosted.generate(prompt_tokens, max_tokens=64)
 print(service.decode(tokens))
 print(stats.estimated_speedup)
 ```
+
+### MLX adapter
+
+Install with optional Mac-native adapter dependencies:
+
+```sh
+pip install "machboost[mlx]"
+```
+
+Then wrap an `mlx-lm` causal model:
+
+```python
+from machboost import machboost
+from machboost.adapters import MLXCausalLMService
+
+service = MLXCausalLMService.from_pretrained("mlx-community/Qwen2.5-3B-Instruct-4bit")
+prompt_tokens = service.encode("Write the known continuation:")
+context_tokens = prompt_tokens + service.encode("Write the known continuation: ...")
+
+boosted = machboost(service, corpus_tokens=context_tokens, ngram=4, max_draft_tokens=8)
+tokens, stats = boosted.generate(prompt_tokens, max_tokens=64)
+
+print(service.decode(tokens))
+print(stats.estimated_speedup)
+```
+
+### Ollama HTTP adapter
+
+Ollama can be benchmarked and configured over HTTP:
+
+```python
+from machboost.adapters import OllamaHTTPAdapter
+
+ollama = OllamaHTTPAdapter("qwen2.5:3b")
+result = ollama.benchmark(
+    "Write one concise sentence about local inference acceleration.",
+    tokens=64,
+    ctx=4096,
+)
+
+print(result.tokens_per_second)
+print(ollama.capabilities().native_verification)
+```
+
+The public Ollama HTTP API does not expose logits, token IDs, or KV-cache verifier hooks, so this adapter reports `native_verification=False`. Exact MachBoost acceleration for Ollama needs a native runner hook or patched Ollama runner.
