@@ -98,4 +98,34 @@ Try the local demos:
 ```sh
 python3 examples/python/verifier_service_demo.py
 python3 examples/python/black_box_service_demo.py
+python3 examples/python/hf_adapter_demo.py
+```
+
+### Hugging Face adapter
+
+Install with optional adapter dependencies:
+
+```sh
+pip install "machboost[hf]"
+```
+
+Then wrap a causal LM:
+
+```python
+from machboost import machboost
+from machboost.adapters import HuggingFaceCausalLMService
+
+service = HuggingFaceCausalLMService.from_pretrained(
+    "Qwen/Qwen2.5-3B-Instruct",
+    local_files_only=True,
+)
+
+prompt_tokens = service.encode("Write the known continuation:")
+context_tokens = prompt_tokens + service.encode("Write the known continuation: ...")
+
+boosted = machboost(service, corpus_tokens=context_tokens, ngram=4, max_draft_tokens=8)
+tokens, stats = boosted.generate(prompt_tokens, max_tokens=64)
+
+print(service.decode(tokens))
+print(stats.estimated_speedup)
 ```
