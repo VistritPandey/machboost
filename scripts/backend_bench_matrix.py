@@ -304,6 +304,8 @@ def run_ollama(args: argparse.Namespace, fixtures: list[Fixture]) -> list[BenchR
 
         baseline_output = str(baseline.get("response", ""))
         boosted_output = boosted.response
+        baseline_tps = ollama_tps(baseline)
+        boosted_tps = boosted.tokens_per_second
         rows.append(
             BenchRow(
                 backend="ollama",
@@ -314,16 +316,19 @@ def run_ollama(args: argparse.Namespace, fixtures: list[Fixture]) -> list[BenchR
                 output_match=baseline_output == boosted_output,
                 baseline_ms=ollama_ms(baseline) or baseline_elapsed * 1000,
                 boosted_ms=boosted.total_ms or boosted_elapsed * 1000,
-                baseline_tokens_per_second=ollama_tps(baseline),
-                boosted_tokens_per_second=boosted.tokens_per_second,
-                speedup=(ollama_ms(baseline) / boosted.total_ms) if boosted.total_ms > 0 else 0.0,
+                baseline_tokens_per_second=baseline_tps,
+                boosted_tokens_per_second=boosted_tps,
+                speedup=(boosted_tps / baseline_tps) if baseline_tps > 0 else 0.0,
                 baseline_forwards=int(baseline.get("eval_count", 0) or 0),
                 boosted_forwards=boosted.eval_count,
                 accepted_draft_tokens=0,
                 generated_tokens=boosted.eval_count,
                 baseline_output_preview=preview(baseline_output),
                 boosted_output_preview=preview(boosted_output),
-                note="Ollama HTTP exposes wrapper metrics only; this is not native MachBoost acceleration.",
+                note=(
+                    "Ollama HTTP exposes wrapper metrics only; speedup is eval-token/sec ratio, "
+                    "not total wall time, to avoid model-load/cache effects."
+                ),
             )
         )
     return rows
