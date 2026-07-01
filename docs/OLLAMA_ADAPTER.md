@@ -134,3 +134,49 @@ For public users, do not mutate an installed Ollama app in place. Ship one of:
 - A MachBoost sidecar for wrappers and benchmarking, with native acceleration only when the backend supports verifier hooks.
 
 This keeps the project honest: fast where it owns or patches the decode path, useful but not magical where it only wraps a black-box server.
+
+## Runner Patch Spike
+
+The local checkout at `/Users/Vis/Downloads/ollama-main` is not a git repository, so the first pass should be carried as a documented patch or a proper fork rather than mutating the downloaded folder in place.
+
+The MLX runner has the right validation machinery already:
+
+- `x/mlxrunner/speculate.go` defines the `drafter` interface and owns speculative validation.
+- `x/mlxrunner/speculate.go` `accept` fuses the current token plus drafted tokens into one target forward.
+- `scheduleSpeculation` / `commitSpeculation` snapshot and roll back target KV cache writes.
+- `x/mlxrunner/pipeline.go` opens speculation before prefill, so a drafter can observe prompt chunks through `committed`.
+
+The first MachBoost runner patch should be narrower than full sampling support:
+
+1. Enable only for greedy-compatible requests first: `temperature == 0`, no logprobs, no top-logprobs.
+2. Build the corpus source from prompt-visible tokens already in `request.Tokens`. This proves RAG/code/doc continuation use cases without adding a public API field yet.
+3. Let `newSpeculation` return a speculation subsystem even when the model has no MTP draft head, as long as an explicit development flag enables the corpus drafter.
+4. In `bind`, when `draft == nil`, set `targets = caches` and `draftKV = nil`.
+5. In `open`, choose `newCorpusDrafter(request.Tokens)` instead of `newMTPDrafter` when the flag is enabled.
+6. Add `draftCandidates` mode for deterministic token candidates with no draft distribution.
+7. In `accept`, when candidates have no draft distribution, sample/argmax the target distribution rows directly and accept the longest prefix whose target token equals the corpus candidate token. The next token is the first mismatch token or the bonus row.
+
+Why greedy first: Ollama's current MTP path uses rejection-sampling acceptance with `p/q`, where `q` is the draft model probability. A local corpus drafter has token guesses but no calibrated draft probability distribution. Reusing `p/q` with fake probabilities would not preserve the target sampling distribution. Deterministic greedy verification is the honest first patch; sampling-compatible acceptance needs either a calibrated draft distribution or a separate proof.
+
+Minimal new runner pieces:
+
+```go
+type corpusDrafter struct {
+    source *candidate.CorpusSource
+    history []int32
+}
+
+func (d *corpusDrafter) propose(current *mlx.Array, maxTokens int) *draftCandidates {
+    currentID := int32(current.Int())
+    tokens := d.source.Propose([]int32{currentID}, maxTokens)
+    if len(tokens) == 0 {
+        return nil
+    }
+    return &draftCandidates{
+        tokens: mlx.FromValues(tokens, 1, len(tokens)),
+        dist: nil, // deterministic corpus candidate, greedy accept path only
+    }
+}
+```
+
+The existing Go `internal/candidate.CorpusSource` in this repo already has the token-level lookup behavior needed for that drafter. The Ollama fork can either copy that small package into `x/mlxrunner` for the spike or vendor a shared package later.
