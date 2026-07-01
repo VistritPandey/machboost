@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Optional, Tuple, Union
+from typing import Any, Iterable, Optional, Tuple, Union
 
+from .bench import BenchmarkResult, GatePolicy, benchmark as benchmark_service, measure_baseline, summarize_results
 from .core import (
     DEFAULT_MAX_DRAFT_TOKENS,
     DEFAULT_MAX_SUFFIX_TOKENS,
@@ -47,6 +48,13 @@ class AcceleratorResult:
     stats: RunStats
 
 
+@dataclass(frozen=True)
+class CalibrationResult:
+    enabled: bool
+    summary: dict[str, Any]
+    results: Tuple[BenchmarkResult, ...]
+
+
 class Accelerator:
     def __init__(
         self,
@@ -56,12 +64,14 @@ class Accelerator:
         ngram: int = DEFAULT_NGRAM,
         max_suffix_tokens: int = DEFAULT_MAX_SUFFIX_TOKENS,
         max_draft_tokens: int = DEFAULT_MAX_DRAFT_TOKENS,
+        boost_enabled: bool = True,
     ) -> None:
         self.service = service
         self.context_texts = tuple(context_texts or ())
         self.ngram = ngram
         self.max_suffix_tokens = max_suffix_tokens
         self.max_draft_tokens = max_draft_tokens
+        self.boost_enabled = bool(boost_enabled)
         self.context_tokens = self._encode_many(self.context_texts)
 
     @classmethod
@@ -81,6 +91,7 @@ class Accelerator:
         lazy: bool = False,
         revision: Optional[str] = None,
         min_verify_margin: float = 0.0,
+        boost_enabled: bool = True,
     ) -> "Accelerator":
         from machboost.adapters import MLXCausalLMService
 
@@ -101,6 +112,48 @@ class Accelerator:
             ngram=ngram,
             max_suffix_tokens=max_suffix_tokens,
             max_draft_tokens=max_draft_tokens,
+            boost_enabled=boost_enabled,
+        )
+
+    @classmethod
+    def from_huggingface(
+        cls,
+        model: str,
+        *,
+        context: Optional[Union[Iterable[str], str]] = None,
+        context_paths: Optional[Union[Iterable[str], str]] = None,
+        max_context_chars: int = 200_000,
+        ngram: int = DEFAULT_NGRAM,
+        max_suffix_tokens: int = DEFAULT_MAX_SUFFIX_TOKENS,
+        max_draft_tokens: int = DEFAULT_MAX_DRAFT_TOKENS,
+        device: Optional[str] = None,
+        local_files_only: bool = False,
+        torch_dtype=None,
+        model_kwargs: Optional[dict] = None,
+        tokenizer_kwargs: Optional[dict] = None,
+        min_verify_margin: float = 0.0,
+        boost_enabled: bool = True,
+    ) -> "Accelerator":
+        from machboost.adapters import HuggingFaceCausalLMService
+
+        service = HuggingFaceCausalLMService.from_pretrained(
+            model,
+            device=device,
+            local_files_only=local_files_only,
+            torch_dtype=torch_dtype,
+            model_kwargs=model_kwargs,
+            tokenizer_kwargs=tokenizer_kwargs,
+            min_verify_margin=min_verify_margin,
+        )
+        context_texts = resolve_context(context, max_chars=max_context_chars)
+        context_texts += read_context_paths(context_paths, max_chars=max_context_chars - sum(map(len, context_texts)))
+        return cls(
+            service,
+            context_texts=context_texts,
+            ngram=ngram,
+            max_suffix_tokens=max_suffix_tokens,
+            max_draft_tokens=max_draft_tokens,
+            boost_enabled=boost_enabled,
         )
 
     def generate(self, prompt: str, *, max_tokens: int = 128, context: Optional[Union[Iterable[str], str]] = None):
@@ -115,6 +168,10 @@ class Accelerator:
         context: Optional[Union[Iterable[str], str]] = None,
     ) -> AcceleratorResult:
         prompt_tokens = self.service.encode(prompt)
+        if not self.boost_enabled:
+            measurement = measure_baseline(self.service, prompt_tokens, max_tokens=max_tokens)
+            return AcceleratorResult(text=measurement.text, tokens=measurement.tokens, stats=measurement.stats)
+
         run_context_tokens = self.context_tokens + self._encode_many(resolve_context(context))
         corpus_tokens = tuple(prompt_tokens) + run_context_tokens
         reset_cache = getattr(self.service, "reset_cache", None)
@@ -130,6 +187,49 @@ class Accelerator:
         )
         tokens, stats = boosted.generate(prompt_tokens, max_tokens=max_tokens)
         return AcceleratorResult(text=self.service.decode(tokens), tokens=tokens, stats=stats)
+
+    def benchmark(
+        self,
+        prompt: str,
+        *,
+        max_tokens: int = 128,
+        context: Optional[Union[Iterable[str], str]] = None,
+        gate_policy: Optional[GatePolicy] = None,
+    ) -> BenchmarkResult:
+        run_context_tokens = self.context_tokens + self._encode_many(resolve_context(context))
+        return benchmark_service(
+            self.service,
+            prompt,
+            context_tokens=run_context_tokens,
+            max_tokens=max_tokens,
+            ngram=self.ngram,
+            max_suffix_tokens=self.max_suffix_tokens,
+            max_draft_tokens=self.max_draft_tokens,
+            gate_policy=gate_policy,
+        )
+
+    def calibrate(
+        self,
+        prompts: Union[Iterable[str], str],
+        *,
+        max_tokens: int = 24,
+        context: Optional[Union[Iterable[str], str]] = None,
+        gate_policy: Optional[GatePolicy] = None,
+    ) -> CalibrationResult:
+        policy = gate_policy or GatePolicy()
+        results = tuple(
+            self.benchmark(prompt, max_tokens=max_tokens, context=context, gate_policy=policy)
+            for prompt in _items(prompts)
+        )
+        summary = summarize_results(results)
+        enabled = (
+            summary["rows"] > 0
+            and summary["output_match_rate"] == 1.0
+            and summary["median_speedup"] >= policy.min_speedup
+            and summary["median_acceptance_rate"] >= policy.min_acceptance_rate
+        )
+        self.boost_enabled = enabled
+        return CalibrationResult(enabled=enabled, summary=summary, results=results)
 
     def _encode_many(self, texts: Iterable[str]) -> Tuple[Token, ...]:
         tokens = []
