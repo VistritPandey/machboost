@@ -423,6 +423,51 @@ def command_for_fixture(args: argparse.Namespace, fixture: Fixture) -> list[str]
     return cmd
 
 
+def run_fixture_in_process(
+    args: argparse.Namespace,
+    fixture: Fixture,
+    repeat_index: int,
+    hfs,
+    tokenizer,
+    model,
+    device,
+) -> dict[str, Any]:
+    trial_args = argparse.Namespace(**vars(args))
+    trial_args.prompt = fixture.prompt_path
+    trial_args.context = fixture.context_path
+    trial_args.source_mode = fixture.source_mode
+    trial_args.auto_draft = True
+    prompt_ids, source_ids, context_token_count = hfs.prepare_inputs(trial_args, tokenizer)
+    if trial_args.auto_draft:
+        result = hfs.auto_draft_with_runtime(
+            trial_args,
+            tokenizer,
+            model,
+            device,
+            prompt_ids,
+            source_ids,
+            context_token_count,
+        )
+    else:
+        result = hfs.compare_with_runtime(
+            trial_args,
+            tokenizer,
+            model,
+            device,
+            prompt_ids,
+            source_ids,
+            context_token_count,
+        )
+    result_dict = asdict(result)
+    return {
+        "fixture": fixture.name,
+        "repeat_index": repeat_index,
+        "command": ["in-process", fixture.name],
+        "result": result_dict,
+        "best_run": best_run(result_dict),
+    }
+
+
 def run_suite(args: argparse.Namespace, fixture_root: Path) -> dict[str, Any]:
     selected = [item.strip() for item in args.fixtures.split(",") if item.strip()]
     fixtures = build_fixtures(fixture_root, selected)
@@ -435,6 +480,13 @@ def run_suite(args: argparse.Namespace, fixture_root: Path) -> dict[str, Any]:
     records: list[dict[str, Any]] = []
     summaries: list[dict[str, Any]] = []
     started = time.time()
+    runtime = None
+    if not args.dry_run and args.runner == "in-process":
+        import hf_corpus_speculate as hfs
+
+        runtime_args = argparse.Namespace(**vars(args))
+        tokenizer, model, device = hfs.load_runtime(runtime_args)
+        runtime = (hfs, tokenizer, model, device)
 
     for fixture in fixtures:
         fixture_records: list[dict[str, Any]] = []
@@ -450,22 +502,25 @@ def run_suite(args: argparse.Namespace, fixture_root: Path) -> dict[str, Any]:
         else:
             for repeat_index in range(1, args.repeat + 1):
                 print(f"[{fixture.name}] repeat {repeat_index}/{args.repeat}", file=sys.stderr, flush=True)
-                proc = subprocess.run(cmd, cwd=repo_root(), text=True, capture_output=True)
-                if proc.returncode != 0:
-                    raise SystemExit(
-                        f"benchmark failed for {fixture.name} repeat {repeat_index}\n"
-                        f"command: {' '.join(shlex.quote(part) for part in cmd)}\n"
-                        f"stderr:\n{proc.stderr[-4000:]}"
-                    )
-                result = parse_json_output(proc.stdout)
-                chosen = best_run(result)
-                record = {
-                    "fixture": fixture.name,
-                    "repeat_index": repeat_index,
-                    "command": cmd,
-                    "result": result,
-                    "best_run": chosen,
-                }
+                if runtime is not None:
+                    record = run_fixture_in_process(args, fixture, repeat_index, *runtime)
+                else:
+                    proc = subprocess.run(cmd, cwd=repo_root(), text=True, capture_output=True)
+                    if proc.returncode != 0:
+                        raise SystemExit(
+                            f"benchmark failed for {fixture.name} repeat {repeat_index}\n"
+                            f"command: {' '.join(shlex.quote(part) for part in cmd)}\n"
+                            f"stderr:\n{proc.stderr[-4000:]}"
+                        )
+                    result = parse_json_output(proc.stdout)
+                    chosen = best_run(result)
+                    record = {
+                        "fixture": fixture.name,
+                        "repeat_index": repeat_index,
+                        "command": cmd,
+                        "result": result,
+                        "best_run": chosen,
+                    }
                 fixture_records.append(record)
                 records.append(record)
         if not args.dry_run:
@@ -485,6 +540,7 @@ def run_suite(args: argparse.Namespace, fixture_root: Path) -> dict[str, Any]:
         "min_draft_tokens": args.min_draft_tokens,
         "draft_step": args.draft_step,
         "draft_sweep": args.draft_sweep,
+        "runner": args.runner,
         "fixtures": [asdict(fixture) for fixture in fixtures],
         "summaries": summaries,
         "runs": records,
@@ -627,8 +683,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--anchor-tokens", type=int, default=1)
     parser.add_argument("--min-verify-margin", type=float, default=0.0)
     parser.add_argument("--max-context-chars", type=int, default=200_000)
+    parser.add_argument("--device", choices=["auto", "cpu", "mps"], default="auto")
     parser.add_argument("--script", default=str(repo_root() / "scripts" / "hf_corpus_speculate.py"))
     parser.add_argument("--python", default=sys.executable)
+    parser.add_argument("--runner", choices=["subprocess", "in-process"], default="subprocess")
     parser.add_argument("--suite-dir", help="Directory for generated fixture files. Defaults to a temporary directory.")
     parser.add_argument("--keep-fixtures", action="store_true")
     parser.add_argument("--local-files-only", action="store_true")
