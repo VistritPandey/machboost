@@ -72,3 +72,30 @@ Useful verifier options:
 ## Acceleration layer
 
 See `docs/ACCELERATION_LAYER.md` for the adapter-layer plan: runtime capabilities, policy gate, sidecar shape, and backend roadmap.
+
+## Python package API
+
+The experimental Python package is the product-facing shape for native adapters:
+
+```python
+from machboost import machboost
+
+boosted = machboost(
+    some_service,
+    corpus_tokens=local_context_tokens,
+    ngram=4,
+    max_draft_tokens=8,
+)
+
+tokens, stats = boosted.generate(prompt_tokens, max_tokens=128)
+print(stats.estimated_speedup)
+```
+
+Real speedups require the wrapped service to expose a verifier hook, such as `verify(prefix_tokens, candidate_tokens) -> accepted_count`. A black-box service with only `next_token(prefix_tokens)` stays exact, but cannot skip target work.
+
+Try the local demos:
+
+```sh
+python3 examples/python/verifier_service_demo.py
+python3 examples/python/black_box_service_demo.py
+```
