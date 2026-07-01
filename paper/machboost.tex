@@ -5,7 +5,10 @@
 \usepackage{hyperref}
 \usepackage{amsmath}
 \usepackage{enumitem}
+\usepackage{url}
 \usepackage{xcolor}
+
+\setlength{\emergencystretch}{3em}
 
 \hypersetup{
   colorlinks=true,
@@ -111,7 +114,7 @@ The core package defines a \texttt{StepService} protocol with \texttt{next\_toke
 
 \section{Evaluation}
 \subsection{Setup}
-We evaluate on a Mac with Apple M1 Max, 10 CPU cores, 32 GB unified memory, and macOS 26.5.2. The Python environment includes MLX 0.31.2 and \texttt{mlx-lm} 0.31.3. The evaluated model is \texttt{mlx-community/Qwen3.5-0.8B-MLX-4bit}. All results come from \texttt{results/mlx\_evidence\_suite\_20260701.json}.
+We evaluate on a Mac with Apple M1 Max, 10 CPU cores, 32 GB unified memory, and macOS 26.5.2. The Python environment includes MLX 0.31.2 and \texttt{mlx-lm} 0.31.3. The evaluated model is \path{mlx-community/Qwen3.5-0.8B-MLX-4bit}. All results come from \path{results/mlx_evidence_suite_20260701.json}.
 
 The suite contains seven fixture families with five fresh nonce-bearing repeats each: policy continuation, structured JSON continuation, retrieval-style answering, code completion, repository command quote, creative open-ended generation, and short answer. Each run generates up to 24 tokens. The positive fixtures are designed to have real local-context overlap; the creative and short-answer fixtures are negative controls.
 
