@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, Optional, Sequence, Tuple
+from typing import Callable, Iterable, Optional, Sequence, Tuple
 
 from machboost.core import Token, TokenSeq
 
@@ -20,12 +20,24 @@ class MLXCausalLMService:
         *,
         mx_module=None,
         min_verify_margin: float = 0.0,
+        cache_enabled: bool = True,
+        cache_factory: Optional[Callable[[object], object]] = None,
+        cache_trimmer: Optional[Callable[[object, int], object]] = None,
+        cache_can_trim: Optional[Callable[[object], bool]] = None,
     ) -> None:
         self.model = model
         self.tokenizer = tokenizer
         self.mx = mx_module
         self.min_verify_margin = float(min_verify_margin)
+        self.cache_enabled = cache_enabled
+        self.cache_factory = cache_factory
+        self.cache_trimmer = cache_trimmer
+        self.cache_can_trim = cache_can_trim
         self.forward_calls = 0
+        self._cache = None
+        self._cache_prefix: Tuple[Token, ...] = ()
+        self._cache_logits = None
+        self._cache_supported: Optional[bool] = None
         if hasattr(self.model, "eval"):
             self.model.eval()
 
@@ -76,8 +88,11 @@ class MLXCausalLMService:
     def next_token(self, prefix_tokens: TokenSeq) -> Optional[Token]:
         if len(prefix_tokens) == 0:
             return None
+        row = self._cached_next_logits(prefix_tokens)
+        if row is not None:
+            return self._argmax(row)
         logits = self._logits(prefix_tokens)
-        return self._argmax(self._row(logits, len(prefix_tokens) - 1))
+        return self._argmax(self._last_row(logits))
 
     def verify(self, prefix_tokens: TokenSeq, candidate_tokens: TokenSeq) -> Tuple[int, Optional[Token]]:
         result = self.verification(prefix_tokens, candidate_tokens)
@@ -87,6 +102,20 @@ class MLXCausalLMService:
         if len(prefix_tokens) == 0 or len(candidate_tokens) == 0:
             return Verification(0, None)
 
+        prefix = tuple(int(token) for token in prefix_tokens)
+        candidate = tuple(int(token) for token in candidate_tokens)
+        cached_logits = self._cached_next_logits(prefix)
+        if cached_logits is not None:
+            return self._verification_cached(prefix, candidate, cached_logits)
+
+        return self._verification_stateless(prefix, candidate)
+
+    def reset_cache(self) -> None:
+        self._cache = None
+        self._cache_prefix = ()
+        self._cache_logits = None
+
+    def _verification_stateless(self, prefix_tokens: TokenSeq, candidate_tokens: TokenSeq) -> Verification:
         sequence = tuple(int(token) for token in prefix_tokens) + tuple(int(token) for token in candidate_tokens)
         logits = self._logits(sequence)
         start = len(prefix_tokens) - 1
@@ -103,14 +132,126 @@ class MLXCausalLMService:
 
         return Verification(accepted, residual)
 
-    def _logits(self, tokens: Sequence[Token]):
+    def _verification_cached(
+        self,
+        prefix_tokens: Tuple[Token, ...],
+        candidate_tokens: Tuple[Token, ...],
+        current_logits,
+    ) -> Verification:
+        predicted = self._argmax(current_logits)
+        first_candidate = int(candidate_tokens[0])
+        if predicted != first_candidate or not self._passes_margin(current_logits, first_candidate):
+            return Verification(0, predicted)
+
+        trial_cache = self._cache
+        logits = self._logits(candidate_tokens, cache=trial_cache)
+        accepted = 1
+        residual: Optional[Token] = None
+
+        for offset, candidate in enumerate(candidate_tokens[1:], start=1):
+            row = self._row(logits, offset - 1)
+            predicted = self._argmax(row)
+            if predicted != int(candidate) or not self._passes_margin(row, int(candidate)):
+                residual = predicted
+                break
+            accepted += 1
+
+        committed = candidate_tokens[:accepted]
+        rejected = len(candidate_tokens) - accepted
+        if rejected > 0 and not self._trim_cache(trial_cache, rejected):
+            self.reset_cache()
+            self._cached_next_logits(prefix_tokens + committed)
+        else:
+            self._cache = trial_cache
+            self._cache_prefix = prefix_tokens + committed
+            self._cache_logits = self._row(logits, accepted - 1)
+
+        return Verification(accepted, residual)
+
+    def _logits(self, tokens: Sequence[Token], *, cache=None):
         mx = self._mx()
         input_ids = self._array([[int(token) for token in tokens]], mx)
-        logits = self.model(input_ids)
+        if cache is None:
+            logits = self.model(input_ids)
+        else:
+            logits = self.model(input_ids, cache=cache)
         self.forward_calls += 1
         if hasattr(mx, "eval"):
-            mx.eval(logits)
+            self._eval(mx, logits, cache)
         return logits
+
+    def _eval(self, mx, logits, cache) -> None:
+        if cache is None:
+            mx.eval(logits)
+            return
+        try:
+            mx.eval(logits, [item.state for item in cache])
+        except Exception:
+            mx.eval(logits)
+
+    def _cached_next_logits(self, prefix_tokens: TokenSeq):
+        prefix = tuple(int(token) for token in prefix_tokens)
+        if len(prefix) == 0 or not self._can_use_cache():
+            return None
+        if self._cache is not None:
+            if prefix == self._cache_prefix:
+                return self._cache_logits
+            if len(prefix) > len(self._cache_prefix) and prefix[: len(self._cache_prefix)] == self._cache_prefix:
+                delta = prefix[len(self._cache_prefix) :]
+                logits = self._logits(delta, cache=self._cache)
+                self._cache_prefix = prefix
+                self._cache_logits = self._last_row(logits)
+                return self._cache_logits
+
+        self.reset_cache()
+        try:
+            self._cache = self._new_cache()
+            logits = self._logits(prefix, cache=self._cache)
+        except (AttributeError, ImportError, TypeError):
+            self._cache_supported = False
+            self.reset_cache()
+            return None
+        self._cache_prefix = prefix
+        self._cache_logits = self._last_row(logits)
+        return self._cache_logits
+
+    def _can_use_cache(self) -> bool:
+        if not self.cache_enabled:
+            return False
+        if self._cache_supported is not None:
+            return self._cache_supported
+        self._cache_supported = bool(
+            self.cache_factory is not None
+            or hasattr(self.model, "make_cache")
+            or hasattr(self.model, "layers")
+        )
+        return self._cache_supported
+
+    def _new_cache(self):
+        if self.cache_factory is not None:
+            return self.cache_factory(self.model)
+        try:
+            from mlx_lm.models.cache import make_prompt_cache
+        except ImportError as exc:
+            raise ImportError("Install MLX support with `pip install machboost[mlx]`.") from exc
+        return make_prompt_cache(self.model)
+
+    def _trim_cache(self, cache, num_tokens: int) -> bool:
+        if num_tokens <= 0:
+            return True
+        if self.cache_can_trim is not None and not self.cache_can_trim(cache):
+            return False
+        if self.cache_trimmer is not None:
+            self.cache_trimmer(cache, num_tokens)
+            return True
+        try:
+            from mlx_lm.models.cache import can_trim_prompt_cache, trim_prompt_cache
+        except ImportError:
+            return False
+        if not can_trim_prompt_cache(cache):
+            return False
+        trim_prompt_cache(cache, num_tokens)
+        return True
 
     def _mx(self):
         if self.mx is not None:
@@ -133,6 +274,9 @@ class MLXCausalLMService:
             return logits[0, pos]
         except (TypeError, IndexError):
             return logits[0][pos]
+
+    def _last_row(self, logits):
+        return self._row(logits, -1)
 
     def _argmax(self, row) -> Token:
         mx = self._mx()
