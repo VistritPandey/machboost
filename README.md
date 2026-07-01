@@ -68,3 +68,7 @@ Useful verifier options:
 - `--verify-mode block|hybrid|sequential`: trade off speed and strictness. `hybrid --anchor-tokens 1` verifies a short prefix step-by-step, then block-verifies the rest.
 - `--draft-policy fixed|adaptive`: use fixed draft lengths or shrink/grow draft length during generation.
 - `--min-verify-margin 1.0`: reject low-confidence draft tokens when testing safer block verification.
+
+## Acceleration layer
+
+See `docs/ACCELERATION_LAYER.md` for the adapter-layer plan: runtime capabilities, policy gate, sidecar shape, and backend roadmap.
