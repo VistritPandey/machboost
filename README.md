@@ -77,6 +77,33 @@ See `docs/ACCELERATION_LAYER.md` for the adapter-layer plan: runtime capabilitie
 
 The experimental Python package is the product-facing shape for native adapters:
 
+```sh
+pip install "machboost[mlx]"
+```
+
+Use the high-level accelerator when you want MachBoost to load the model and build the local draft corpus from text, files, or directories:
+
+```python
+from machboost import Accelerator
+
+boost = Accelerator.from_mlx(
+    "mlx-community/Qwen2.5-3B-Instruct-4bit",
+    context_paths=["./docs", "./src"],
+    ngram=4,
+    max_draft_tokens=8,
+)
+
+text, stats = boost.generate(
+    "Continue the rollout checklist from the local docs:",
+    max_tokens=128,
+)
+
+print(text)
+print(stats.estimated_speedup)
+```
+
+For custom runtimes, wrap your own verifier-capable service directly:
+
 ```python
 from machboost import machboost
 
