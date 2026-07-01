@@ -22,6 +22,12 @@ classifiers = [
 ]
 dependencies = []
 
+[project.optional-dependencies]
+hf = [
+  "torch",
+  "transformers",
+]
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["machboost*"]
