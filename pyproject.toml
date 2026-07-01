@@ -5,19 +5,25 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "machboost"
 version = "0.1.0"
-description = "Local inference acceleration experiments and verifier-backed draft helpers."
+description = "Exact local-context speculative acceleration for local LLM inference."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
 authors = [
-  { name = "MachBoost" }
+  { name = "MachBoost Authors" }
 ]
-keywords = ["llm", "inference", "speculative-decoding", "local-ai", "ollama", "mlx"]
+keywords = ["llm", "inference", "speculative-decoding", "local-ai", "mlx", "huggingface", "ollama"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: MacOS",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = []
@@ -28,6 +34,12 @@ hf = [
   "transformers",
 ]
 mlx = [
+  "mlx",
+  "mlx-lm",
+]
+all = [
+  "torch",
+  "transformers",
   "mlx",
   "mlx-lm",
 ]
