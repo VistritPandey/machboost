@@ -2,8 +2,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from machboost import Accelerator, AcceleratorResult
-from machboost.accelerator import read_context_paths, resolve_context
+from machboost import Accelerator, AcceleratorResult, GatePolicy
+from machboost.accelerator import CalibrationResult, read_context_paths, resolve_context
 
 
 class ScriptedService:
@@ -67,6 +67,56 @@ class AcceleratorTests(unittest.TestCase):
 
         self.assertEqual(text, completion)
         self.assertGreater(stats.accepted_draft_tokens, 0)
+
+    def test_benchmark_uses_accelerator_context(self):
+        prompt = "Complete: "
+        completion = "alpha beta"
+        service = ScriptedService(prompt, completion)
+        accelerator = Accelerator(service, context_texts=[completion], ngram=2, max_draft_tokens=8)
+
+        result = accelerator.benchmark(
+            prompt,
+            max_tokens=len(completion),
+            gate_policy=GatePolicy(min_speedup=0.0, min_acceptance_rate=0.5),
+        )
+
+        self.assertTrue(result.output_match)
+        self.assertTrue(result.decision.enabled)
+        self.assertGreater(result.acceptance_rate, 0.5)
+
+    def test_calibrate_can_disable_future_boosting(self):
+        prompt = "Complete: "
+        completion = "alpha beta"
+        service = ScriptedService(prompt, completion)
+        accelerator = Accelerator(service, context_texts=["unrelated"], ngram=2, max_draft_tokens=8)
+
+        calibration = accelerator.calibrate(
+            [prompt],
+            max_tokens=len(completion),
+            gate_policy=GatePolicy(min_speedup=0.0, min_acceptance_rate=0.5),
+        )
+        result = accelerator.generate_result(prompt, max_tokens=len(completion))
+
+        self.assertIsInstance(calibration, CalibrationResult)
+        self.assertFalse(calibration.enabled)
+        self.assertFalse(accelerator.boost_enabled)
+        self.assertEqual(result.text, completion)
+        self.assertEqual(result.stats.accepted_draft_tokens, 0)
+
+    def test_calibrate_can_enable_future_boosting(self):
+        prompt = "Complete: "
+        completion = "alpha beta"
+        service = ScriptedService(prompt, completion)
+        accelerator = Accelerator(service, context_texts=[completion], ngram=2, max_draft_tokens=8)
+
+        calibration = accelerator.calibrate(
+            prompt,
+            max_tokens=len(completion),
+            gate_policy=GatePolicy(min_speedup=0.0, min_acceptance_rate=0.5),
+        )
+
+        self.assertTrue(calibration.enabled)
+        self.assertTrue(accelerator.boost_enabled)
 
     def test_resolve_context_reads_existing_files(self):
         with tempfile.TemporaryDirectory() as tmpdir:
