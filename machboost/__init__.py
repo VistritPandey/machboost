@@ -1,4 +1,4 @@
-from .accelerator import Accelerator, AcceleratorResult
+from .accelerator import Accelerator, AcceleratorResult, CalibrationResult
 from .bench import (
     BenchmarkCase,
     BenchmarkResult,
@@ -23,6 +23,7 @@ __all__ = [
     "BenchmarkCase",
     "BenchmarkResult",
     "BoostedService",
+    "CalibrationResult",
     "Candidate",
     "CorpusDrafter",
     "GateDecision",
