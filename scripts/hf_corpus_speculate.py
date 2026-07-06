@@ -56,6 +56,7 @@ class Candidate:
 class RunStats:
     mode: str
     generated_tokens: int
+    token_ids: list[int]
     model_forwards: int
     accepted_draft_tokens: int
     accepted_draft_spans: int
@@ -505,6 +506,7 @@ def baseline_generate(model, tokenizer, prompt_ids: list[int], max_new_tokens: i
     return RunStats(
         mode="baseline_cached",
         generated_tokens=len(output_tokens),
+        token_ids=output_tokens,
         model_forwards=forwards,
         accepted_draft_tokens=0,
         accepted_draft_spans=0,
@@ -601,6 +603,7 @@ def speculative_generate(
     return RunStats(
         mode="corpus_speculative_cached",
         generated_tokens=len(output_tokens),
+        token_ids=output_tokens,
         model_forwards=forwards,
         accepted_draft_tokens=accepted_draft_tokens,
         accepted_draft_spans=accepted_draft_spans,
@@ -701,7 +704,7 @@ def compare_with_runtime(
         if baseline.model_forwards
         else 0
     )
-    output_match = baseline.output == speculative.output
+    output_match = baseline.token_ids == speculative.token_ids
     if not output_match:
         verdict = "output_mismatch"
     elif speculative.accepted_draft_tokens == 0:
@@ -803,7 +806,7 @@ def auto_draft_with_runtime(
             if baseline.model_forwards
             else 0
         )
-        output_match = baseline.output == speculative.output
+        output_match = baseline.token_ids == speculative.token_ids
         if not output_match:
             verdict = "output_mismatch"
         elif speculative.accepted_draft_tokens == 0:
