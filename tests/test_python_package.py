@@ -79,6 +79,26 @@ class PythonPackageTest(unittest.TestCase):
         self.assertGreaterEqual(stats.target_calls, stats.baseline_target_calls)
         self.assertLessEqual(stats.estimated_speedup, 1.0)
 
+    def test_candidate_limit_can_try_alternate_context_match(self):
+        prompt = (100, 101, 102)
+        target = (1, 2, 3, 4)
+        wrong_then_right_context = prompt + (9, 9, 9, 9) + prompt + target
+        service = ScriptedVerifierService(target)
+
+        boosted = machboost(
+            service,
+            corpus_tokens=wrong_then_right_context,
+            ngram=2,
+            max_draft_tokens=4,
+            candidate_limit=2,
+        )
+        generated, stats = boosted.generate(prompt, max_tokens=len(target))
+
+        self.assertEqual(generated, target)
+        self.assertEqual(stats.verify_calls, 2)
+        self.assertEqual(stats.rejected_candidates, 1)
+        self.assertEqual(stats.accepted_draft_tokens, len(target))
+
 
 if __name__ == "__main__":
     unittest.main()
