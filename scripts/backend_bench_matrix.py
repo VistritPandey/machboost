@@ -70,6 +70,60 @@ def make_nonce(seed: str, repeat: int, fixture: str) -> str:
 
 
 def build_fixture(name: str, nonce: str) -> Fixture:
+    if name == "real_readme_api":
+        context = read_repo_snippet("README.md", "Benchmark and calibrate before turning the layer on", max_chars=900)
+        prefix = "Benchmark and calibrate before turning the layer on"
+        prompt = (
+            "Continue this README excerpt exactly from the repository source. Do not add commentary.\n\n"
+            "<readme>\n"
+            f"{context}"
+            "\n</readme>\n\n"
+            f"Continuation:\n{prefix}"
+        )
+        return Fixture(
+            name=name,
+            workflow="real_readme_continuation",
+            expectation="positive",
+            prompt=prompt,
+            context=context,
+            nonce=nonce,
+        )
+    if name == "real_core_code":
+        context = read_repo_snippet("machboost/core.py", "class BoostedService:", max_chars=1200)
+        prefix = "class BoostedService:"
+        prompt = (
+            "Continue this Python source excerpt exactly from the repository file.\n\n"
+            "<source>\n"
+            f"{context}"
+            "\n</source>\n\n"
+            f"{prefix}"
+        )
+        return Fixture(
+            name=name,
+            workflow="real_code_continuation",
+            expectation="positive",
+            prompt=prompt,
+            context=context,
+            nonce=nonce,
+        )
+    if name == "real_paper_method":
+        context = read_repo_snippet("paper/machboost.tex", "\\section{Method}", max_chars=1200)
+        prefix = "\\section{Method}"
+        prompt = (
+            "Continue this LaTeX paper excerpt exactly from the source file.\n\n"
+            "<paper>\n"
+            f"{context}"
+            "\n</paper>\n\n"
+            f"{prefix}"
+        )
+        return Fixture(
+            name=name,
+            workflow="real_paper_continuation",
+            expectation="positive",
+            prompt=prompt,
+            context=context,
+            nonce=nonce,
+        )
     if name == "policy":
         context = (
             f"Benchmark memo {nonce}\n"
@@ -213,6 +267,14 @@ def build_fixture(name: str, nonce: str) -> Fixture:
             nonce=nonce,
         )
     raise ValueError(f"unknown fixture: {name}")
+
+
+def read_repo_snippet(path: str, marker: str, *, max_chars: int) -> str:
+    text = (ROOT / path).read_text(encoding="utf-8")
+    start = text.find(marker)
+    if start < 0:
+        raise ValueError(f"marker not found in {path}: {marker}")
+    return text[start : start + max_chars].strip()
 
 
 def preview(text: str, chars: int = 180) -> str:
