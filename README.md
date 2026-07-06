@@ -91,6 +91,7 @@ boost = Accelerator.from_mlx(
     context_paths=["./docs", "./src"],
     ngram=4,
     max_draft_tokens=8,
+    candidate_limit=1,
 )
 
 text, stats = boost.generate(
@@ -142,6 +143,27 @@ boost = Accelerator.from_huggingface(
     local_files_only=True,
 )
 ```
+
+For MLX evidence runs where exact token matching matters more than raw serving speed, disable the prompt cache and draft only from the supplied context:
+
+```python
+boost = Accelerator.from_mlx(
+    "mlx-community/Qwen2.5-3B-Instruct-4bit",
+    context_paths=["./docs", "./src"],
+    cache_enabled=False,
+)
+```
+
+```sh
+python3 scripts/backend_bench_matrix.py \
+  --backends mlx \
+  --source-mode context \
+  --mlx-disable-cache \
+  --fixtures real_readme_api,real_core_code,real_paper_method,policy,json,rag,code,repo_quote,creative_open,short_answer \
+  --max-new-tokens 64
+```
+
+Cache-enabled MLX remains the faster serving direction, but longer cache-enabled diagnostic runs can hit boundary cases where block verification and token-by-token cache extension choose different continuations. The strict mode is meant for clean evidence and conservative deployments.
 
 For custom runtimes, wrap your own verifier-capable service directly:
 
