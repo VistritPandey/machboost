@@ -321,7 +321,7 @@ def run_hf(args: argparse.Namespace, fixtures: list[Fixture]) -> list[BenchRow]:
                 warmup_tokens=0,
                 auto_draft=False,
                 draft_sweep=str(args.max_draft_tokens),
-                source_mode="prompt-context",
+                source_mode=args.source_mode,
                 verify_mode=args.verify_mode,
                 anchor_tokens=args.anchor_tokens,
                 min_verify_margin=0.0,
@@ -382,11 +382,15 @@ def serial_mlx_generate(service: MLXCausalLMService, prompt_tokens: tuple[int, .
 
 
 def run_mlx(args: argparse.Namespace, fixtures: list[Fixture]) -> list[BenchRow]:
-    service = MLXCausalLMService.from_pretrained(args.mlx_model, lazy=args.mlx_lazy)
+    service = MLXCausalLMService.from_pretrained(
+        args.mlx_model,
+        lazy=args.mlx_lazy,
+        cache_enabled=not args.mlx_disable_cache,
+    )
     rows: list[BenchRow] = []
     for fixture in fixtures:
         prompt_tokens = service.encode(fixture.prompt)
-        source_tokens = service.encode(fixture.prompt + "\n" + fixture.context)
+        source_tokens = service.encode(source_text(fixture, args.source_mode))
 
         service.reset_cache()
         service.forward_calls = 0
@@ -416,7 +420,7 @@ def run_mlx(args: argparse.Namespace, fixtures: list[Fixture]) -> list[BenchRow]
                 workflow=fixture.workflow,
                 expectation=fixture.expectation,
                 nonce=fixture.nonce,
-                mode="cache_aware_verifier_adapter",
+                mode="stateless_verifier_adapter" if args.mlx_disable_cache else "cache_aware_verifier_adapter",
                 output_match=baseline_tokens == boosted_tokens,
                 baseline_ms=baseline_elapsed * 1000,
                 boosted_ms=boosted_elapsed * 1000,
@@ -515,6 +519,14 @@ def run_ollama(args: argparse.Namespace, fixtures: list[Fixture]) -> list[BenchR
             )
         )
     return rows
+
+
+def source_text(fixture: Fixture, mode: str) -> str:
+    if mode == "context":
+        return fixture.context
+    if mode == "prompt":
+        return fixture.prompt
+    return fixture.prompt + "\n" + fixture.context
 
 
 def selected_backends(value: str) -> set[str]:
@@ -633,13 +645,15 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--max-new-tokens", type=int, default=24)
     parser.add_argument("--ngram", type=int, default=2)
     parser.add_argument("--max-draft-tokens", type=int, default=8)
-    parser.add_argument("--candidate-limit", type=int, default=8)
+    parser.add_argument("--candidate-limit", type=int, default=1)
+    parser.add_argument("--source-mode", choices=["prompt-context", "context", "prompt"], default="prompt-context")
     parser.add_argument("--verify-mode", choices=["block", "hybrid", "sequential"], default="hybrid")
     parser.add_argument("--anchor-tokens", type=int, default=1)
     parser.add_argument("--device", choices=["auto", "cpu", "mps"], default="auto")
     parser.add_argument("--hf-model", default="Qwen/Qwen2.5-3B-Instruct")
     parser.add_argument("--mlx-model", default="mlx-community/Qwen3.5-0.8B-MLX-4bit")
     parser.add_argument("--mlx-lazy", action="store_true")
+    parser.add_argument("--mlx-disable-cache", action="store_true")
     parser.add_argument("--ollama-model", default="qwen3:8b")
     parser.add_argument("--ollama-endpoint", default=None)
     parser.add_argument("--ollama-ctx", type=int, default=4096)
@@ -674,7 +688,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "ngram": args.ngram,
             "max_draft_tokens": args.max_draft_tokens,
             "candidate_limit": args.candidate_limit,
+            "source_mode": args.source_mode,
             "verify_mode": args.verify_mode,
+            "mlx_disable_cache": args.mlx_disable_cache,
         },
         "summaries": summarize(rows),
         "fixture_summaries": summarize_by_fixture(rows),
