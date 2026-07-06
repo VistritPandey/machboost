@@ -94,6 +94,7 @@ class Accelerator:
         lazy: bool = False,
         revision: Optional[str] = None,
         min_verify_margin: float = 0.0,
+        cache_enabled: bool = True,
         boost_enabled: bool = True,
     ) -> "Accelerator":
         from machboost.adapters import MLXCausalLMService
@@ -106,6 +107,7 @@ class Accelerator:
             lazy=lazy,
             revision=revision,
             min_verify_margin=min_verify_margin,
+            cache_enabled=cache_enabled,
         )
         context_texts = resolve_context(context, max_chars=max_context_chars)
         context_texts += read_context_paths(context_paths, max_chars=max_context_chars - sum(map(len, context_texts)))
