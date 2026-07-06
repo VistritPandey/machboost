@@ -20,6 +20,7 @@ python3 scripts/hf_corpus_speculate.py --prompt prompt.txt --context . --model l
 python3 scripts/hf_corpus_speculate.py --prompt prompt.txt --context . --model local-or-hf-model --auto-draft --verify-mode hybrid --anchor-tokens 1
 python3 scripts/hf_bench_suite.py --model local-or-hf-model --repeat 5 --local-files-only
 python3 scripts/hf_bench_suite.py --runner in-process --fixtures use_cases,negative_controls --repeat 3 --local-files-only --output results.json
+python3 scripts/hf_prompt_lookup_compare.py --model Qwen/Qwen2.5-3B-Instruct --local-files-only --fixtures real_readme_api,real_core_code,policy,json,rag,code --max-new-tokens 32 --output results/hf_prompt_lookup_compare_qwen25_3b.json
 machboost profile init
 ```
 
@@ -164,6 +165,35 @@ python3 scripts/backend_bench_matrix.py \
 ```
 
 Cache-enabled MLX remains the faster serving direction, but longer cache-enabled diagnostic runs can hit boundary cases where block verification and token-by-token cache extension choose different continuations. The strict mode is meant for clean evidence and conservative deployments.
+
+To compare against existing prompt-lookup decoding instead of only serial greedy decoding, use:
+
+```sh
+python3 scripts/hf_prompt_lookup_compare.py \
+  --model Qwen/Qwen2.5-3B-Instruct \
+  --local-files-only \
+  --fixtures real_readme_api,real_core_code,policy,json,rag,code \
+  --max-new-tokens 32 \
+  --prompt-lookup-sweep 4,8,16 \
+  --machboost-source-modes prompt,context,prompt-context \
+  --output results/hf_prompt_lookup_compare_qwen25_3b.json
+```
+
+This comparison records serial Hugging Face `generate`, Hugging Face built-in `prompt_lookup_num_tokens`, and MachBoost runs against the same prompts. The important distinction is source scope: HF prompt lookup drafts from tokens already in the prompt; MachBoost drafts from caller-provided local corpus tokens, but every accepted token still has to match the target model's greedy continuation.
+
+For a larger local MLX smoke run, use the same strict evidence mode with the cached 9B MLX model:
+
+```sh
+python3 scripts/backend_bench_matrix.py \
+  --backends mlx \
+  --mlx-model mlx-community/Qwen3.5-9B-MLX-4bit \
+  --source-mode context \
+  --mlx-disable-cache \
+  --fixtures real_readme_api,real_core_code,policy,json \
+  --repeat 1 \
+  --max-new-tokens 32 \
+  --output results/mlx_qwen35_9b_strict_smoke.json
+```
 
 For custom runtimes, wrap your own verifier-capable service directly:
 
