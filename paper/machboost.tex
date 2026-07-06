@@ -116,9 +116,11 @@ The core package defines a \texttt{StepService} protocol with \texttt{next\_toke
 
 \section{Evaluation}
 \subsection{Setup}
-We evaluate on a Mac with Apple M1 Max, 10 CPU cores, 32 GB unified memory, and macOS 26.5.2. The Python environment includes MLX 0.31.2 and \texttt{mlx-lm} 0.31.3. The evaluated model is \path{mlx-community/Qwen3.5-0.8B-MLX-4bit}. All results come from \path{results/mlx_evidence_suite_20260701.json}.
+We evaluate on a Mac with Apple M1 Max, 10 CPU cores, 32 GB unified memory, and macOS 26.5.2. The Python environment includes MLX 0.31.2 and \texttt{mlx-lm} 0.31.3. The evaluated model is \path{mlx-community/Qwen3.5-0.8B-MLX-4bit}. The initial suite comes from \path{results/mlx_evidence_suite_20260701.json}; the longer strict-mode suite comes from \path{results/mlx_evidence_v2_strict_c1_20260706.json}.
 
 The suite contains seven fixture families with five fresh nonce-bearing repeats each: policy continuation, structured JSON continuation, retrieval-style answering, code completion, repository command quote, creative open-ended generation, and short answer. Each run generates up to 24 tokens. The positive fixtures are designed to have real local-context overlap; the creative and short-answer fixtures are negative controls.
+
+We also run a stricter 64-token suite with three additional real-artifact fixtures drawn from the repository README, the core Python implementation, and this paper source. That run disables the MLX prompt cache for both baseline and boosted paths, and drafts only from provided context rather than from the full prompt wrapper. It is slower in absolute tokens per second than cache-enabled decoding, but it avoids cache-trajectory drift and gives a cleaner exactness check for longer generations.
 
 \subsection{Overall Results}
 \begin{table}[t]
@@ -166,11 +168,36 @@ Short answer & Negative & 100\% & 0.90$\times$ & 156.42 & 140.89 \\
 
 The per-fixture view is more informative than the aggregate number. Policy, JSON, and code continuation all exceed 1.60$\times$ median speedup. Repository quote is weaker but still useful at 1.38$\times$. Retrieval-style answering improves only 1.12$\times$; the local text helps, but fewer tokens are accepted per verification call. The negative controls are a useful sanity check: they still match the baseline, but they are slower. Their continuations are not mostly recoverable from the provided context, so the extra verifier calls are wasted.
 
+\subsection{Strict 64-Token Run}
+\begin{table}[t]
+\centering
+\begin{tabular}{lrrr}
+\toprule
+Fixture & Match & Speedup & Accepted \\
+\midrule
+Real README continuation & 100\% & 5.68$\times$ & 64 \\
+Real core-code continuation & 100\% & 5.93$\times$ & 64 \\
+Real paper continuation & 100\% & 8.54$\times$ & 64 \\
+JSON continuation & 100\% & 3.79$\times$ & 57 \\
+Code completion & 100\% & 3.72$\times$ & 55 \\
+Policy quote & 100\% & 2.31$\times$ & 41 \\
+RAG answer & 100\% & 1.91$\times$ & 27 \\
+Repo quote & 100\% & 1.78$\times$ & 24 \\
+Creative open-ended & 100\% & 1.09$\times$ & 0 \\
+Short answer & 100\% & 1.01$\times$ & 0 \\
+\bottomrule
+\end{tabular}
+\caption{Median results for the 64-token strict MLX run over three repeats. Prompt cache is disabled for both baseline and boosted paths, and draft source is limited to context text. Overall median speedup is 3.03$\times$ over 30 runs.}
+\label{tab:strict64}
+\end{table}
+
+The 64-token run is useful for a different reason than the first suite. It is not the fastest way to serve MLX models, but it shows that longer grounded spans can be accepted cleanly when the verifier and baseline use the same stateless execution mode. The three real-artifact fixtures are particularly strong: all accept the full 64-token budget and exceed 5.6$\times$ median speedup. In contrast, the two negative controls accept no draft tokens and stay near 1.0$\times$.
+
 \subsection{Interpretation}
 These results are not evidence for a universal speedup layer. They instead suggest that grounded local workloads are separable from open-ended ones with a small amount of measurement. That distinction matters for developer tools. A repo assistant, config editor, policy search tool, or command helper can benchmark representative prompts once and avoid using the drafter where acceptance is low.
 
 \section{Limitations}
-The evidence here is still early. The main benchmark uses one small MLX model on one Apple Silicon machine with 24-token generations. It does not yet answer how the method behaves on 3B/8B models, long outputs, sampled decoding, or large real repositories. The drafter is also deliberately simple; unlike PLD+, it does not rank spans with model artifacts. The Hugging Face adapter exists at the package level, but the reported suite focuses on MLX because that is where the cache work has been exercised most. Ollama over HTTP remains outside the accelerated path unless the runtime exposes a native verifier hook or a patched runner.
+The evidence here is still early. The main benchmark uses one small MLX model on one Apple Silicon machine; the longer suite reaches 64 tokens but still uses controlled fixtures rather than broad real applications. It does not yet answer how the method behaves on 3B/8B models, sampled decoding, or large real repositories. The drafter is also deliberately simple; unlike PLD+, it does not rank spans with model artifacts. The Hugging Face adapter exists at the package level, but the reported suite focuses on MLX. Finally, the cache-enabled MLX path is faster in raw throughput but can diverge on long boundary cases, so the strict suite disables the prompt cache for evidence runs. Ollama over HTTP remains outside the accelerated path unless the runtime exposes a native verifier hook or a patched runner.
 
 There is also a methodological limit. Token equality is a strong check for greedy decoding, but it says little about semantic quality under sampling. For that reason, this paper makes no quality claim. The goal is lower latency when the desired output is the same.
 
@@ -178,7 +205,7 @@ There is also a methodological limit. Token equality is a strong check for greed
 Several next steps are straightforward. The evaluation needs larger models, longer generations, and real workspaces. The drafter could use suffix automata, prompt/document segmentation, model-artifact ranking, or retrieval over multiple corpora. The decision rule could also become online: try the drafter for a short prefix, back off when acceptance is low, and re-enable it inside structured regions. Finally, a native Ollama or llama.cpp verifier hook would make the approach available to many more local users.
 
 \section{Conclusion}
-MachBoost is a practical experiment in using nearby text as the draft source for speculative decoding. It is not a shortcut for every prompt. On the measured MLX suite, however, it matches serial greedy decoding across all 35 runs and reaches a 1.38$\times$ median speedup overall, with 1.60--1.62$\times$ speedups on the strongest grounded tasks. The package design reflects the main lesson from the results: use the drafter when local context predicts the next tokens, and fall back when it does not.
+MachBoost is a practical experiment in using nearby text as the draft source for speculative decoding. It is not a shortcut for every prompt. On the measured MLX suite, however, it matches serial greedy decoding across all 35 initial runs and reaches a 1.38$\times$ median speedup overall, with 1.60--1.62$\times$ speedups on the strongest grounded tasks. A stricter 64-token run adds 30 exact-match rows and a 3.03$\times$ median speedup against stateless greedy decoding, including real README, code, and paper-source fixtures. The package design reflects the main lesson from the results: use the drafter when local context predicts the next tokens, and fall back when it does not.
 
 \bibliographystyle{plain}
 \bibliography{references}
