@@ -52,6 +52,7 @@ class MLXCausalLMService:
         lazy: bool = False,
         revision: Optional[str] = None,
         min_verify_margin: float = 0.0,
+        cache_enabled: bool = True,
     ) -> "MLXCausalLMService":
         try:
             from mlx_lm.utils import load
@@ -66,7 +67,7 @@ class MLXCausalLMService:
             lazy=lazy,
             revision=revision,
         )
-        return cls(model, tokenizer, min_verify_margin=min_verify_margin)
+        return cls(model, tokenizer, min_verify_margin=min_verify_margin, cache_enabled=cache_enabled)
 
     def encode(self, text: str, *, add_special_tokens: bool = False) -> Tuple[Token, ...]:
         if self.tokenizer is None:
