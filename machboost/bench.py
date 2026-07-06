@@ -93,6 +93,7 @@ def benchmark(
     ngram: int = DEFAULT_NGRAM,
     max_suffix_tokens: int = DEFAULT_MAX_SUFFIX_TOKENS,
     max_draft_tokens: int = DEFAULT_MAX_DRAFT_TOKENS,
+    candidate_limit: int = 1,
     gate_policy: Optional[GatePolicy] = None,
 ) -> BenchmarkResult:
     prompt_tokens = service.encode(prompt)
@@ -110,6 +111,7 @@ def benchmark(
         ngram=ngram,
         max_suffix_tokens=max_suffix_tokens,
         max_draft_tokens=max_draft_tokens,
+        candidate_limit=candidate_limit,
     )
 
     output_match = baseline.tokens == boosted.tokens
@@ -142,6 +144,7 @@ def benchmark_cases(
     ngram: int = DEFAULT_NGRAM,
     max_suffix_tokens: int = DEFAULT_MAX_SUFFIX_TOKENS,
     max_draft_tokens: int = DEFAULT_MAX_DRAFT_TOKENS,
+    candidate_limit: int = 1,
 ) -> Tuple[BenchmarkResult, ...]:
     return tuple(
         benchmark(
@@ -153,6 +156,7 @@ def benchmark_cases(
             ngram=ngram,
             max_suffix_tokens=max_suffix_tokens,
             max_draft_tokens=max_draft_tokens,
+            candidate_limit=candidate_limit,
         )
         for case in cases
     )
@@ -201,6 +205,7 @@ def measure_boosted(
     ngram: int = DEFAULT_NGRAM,
     max_suffix_tokens: int = DEFAULT_MAX_SUFFIX_TOKENS,
     max_draft_tokens: int = DEFAULT_MAX_DRAFT_TOKENS,
+    candidate_limit: int = 1,
 ) -> GenerationMeasurement:
     _reset_service(service)
     boosted = machboost(
@@ -209,6 +214,7 @@ def measure_boosted(
         ngram=ngram,
         max_suffix_tokens=max_suffix_tokens,
         max_draft_tokens=max_draft_tokens,
+        candidate_limit=candidate_limit,
     )
     started = time.perf_counter()
     tokens, stats = boosted.generate(prompt_tokens, max_tokens=max_tokens)
