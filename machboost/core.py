@@ -155,9 +155,10 @@ class CorpusDrafter:
 
 
 class BoostedService:
-    def __init__(self, service: StepService, drafter: CorpusDrafter) -> None:
+    def __init__(self, service: StepService, drafter: CorpusDrafter, *, candidate_limit: int = 1) -> None:
         self.service = service
         self.drafter = drafter
+        self.candidate_limit = max(1, int(candidate_limit))
 
     def generate(self, prompt_tokens: Iterable[Token], *, max_tokens: int) -> Tuple[Tuple[Token, ...], RunStats]:
         prompt = tuple(int(token) for token in prompt_tokens)
@@ -174,27 +175,40 @@ class BoostedService:
         while len(generated) < max_tokens:
             remaining = max_tokens - len(generated)
             prefix = prompt + tuple(generated)
-            candidate = self.drafter.propose(max_tokens=remaining)
+            candidates = self.drafter.candidates(max_tokens=remaining, limit=self.candidate_limit)
 
-            if candidate:
-                candidate_rounds += 1
-                accepted, residual = self._verify(prefix, candidate)
-                verify_calls += 1 if hasattr(self.service, "verify") else 0
-                if not hasattr(self.service, "verify"):
-                    next_token_calls += min(len(candidate), accepted + (1 if residual is not None else 0))
+            if candidates:
+                fallback_residual: Optional[Token] = None
+                committed = False
+                for candidate in candidates:
+                    candidate_rounds += 1
+                    accepted, residual = self._verify(prefix, candidate.tokens)
+                    verify_calls += 1 if hasattr(self.service, "verify") else 0
+                    if not hasattr(self.service, "verify"):
+                        next_token_calls += min(
+                            len(candidate.tokens),
+                            accepted + (1 if residual is not None else 0),
+                        )
 
-                if accepted > 0:
-                    committed = candidate[:accepted]
-                    generated.extend(committed)
-                    self.drafter.observe(committed)
-                    accepted_draft_tokens += accepted
-                    accepted_draft_spans += 1
+                    if accepted > 0:
+                        committed_tokens = candidate.tokens[:accepted]
+                        generated.extend(committed_tokens)
+                        self.drafter.observe(committed_tokens)
+                        accepted_draft_tokens += accepted
+                        accepted_draft_spans += 1
+                        committed = True
+                        break
+
+                    rejected_candidates += 1
+                    if fallback_residual is None and residual is not None:
+                        fallback_residual = residual
+
+                if committed:
                     continue
 
-                rejected_candidates += 1
-                if residual is not None:
-                    generated.append(residual)
-                    self.drafter.observe((residual,))
+                if fallback_residual is not None:
+                    generated.append(fallback_residual)
+                    self.drafter.observe((fallback_residual,))
                     continue
 
             token = self.service.next_token(prefix)
@@ -248,6 +262,7 @@ class MachBoost:
         ngram: int = DEFAULT_NGRAM,
         max_suffix_tokens: int = DEFAULT_MAX_SUFFIX_TOKENS,
         max_draft_tokens: int = DEFAULT_MAX_DRAFT_TOKENS,
+        candidate_limit: int = 1,
     ) -> None:
         corpus = corpus_tokens if corpus_tokens is not None else context_tokens
         if corpus is None:
@@ -258,9 +273,10 @@ class MachBoost:
             max_suffix_tokens=max_suffix_tokens,
             max_draft_tokens=max_draft_tokens,
         )
+        self.candidate_limit = max(1, int(candidate_limit))
 
     def wrap(self, service: StepService) -> BoostedService:
-        return BoostedService(service, self.drafter)
+        return BoostedService(service, self.drafter, candidate_limit=self.candidate_limit)
 
     def generate(self, service: StepService, prompt_tokens: Iterable[Token], *, max_tokens: int) -> Tuple[Tuple[Token, ...], RunStats]:
         return self.wrap(service).generate(prompt_tokens, max_tokens=max_tokens)
@@ -274,6 +290,7 @@ def machboost(
     ngram: int = DEFAULT_NGRAM,
     max_suffix_tokens: int = DEFAULT_MAX_SUFFIX_TOKENS,
     max_draft_tokens: int = DEFAULT_MAX_DRAFT_TOKENS,
+    candidate_limit: int = 1,
 ) -> Union[MachBoost, BoostedService]:
     boost = MachBoost(
         corpus_tokens=corpus_tokens,
@@ -281,6 +298,7 @@ def machboost(
         ngram=ngram,
         max_suffix_tokens=max_suffix_tokens,
         max_draft_tokens=max_draft_tokens,
+        candidate_limit=candidate_limit,
     )
     if service is None:
         return boost
