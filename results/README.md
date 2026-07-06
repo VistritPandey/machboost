@@ -47,6 +47,62 @@ Takeaways:
 - Negative controls stayed neutral, which supports the policy goal: enable speculation only for context-grounded workflows.
 - Repo-chat quote is weak in this fixture because the model does not reliably copy the intended command.
 
+## Hugging Face Prompt Lookup Comparison, Qwen2.5-3B
+
+Command:
+
+```sh
+python3 scripts/hf_prompt_lookup_compare.py \
+  --model Qwen/Qwen2.5-3B-Instruct \
+  --local-files-only \
+  --fixtures real_readme_api,real_core_code,policy,json,rag,code \
+  --repeat 1 \
+  --max-new-tokens 32 \
+  --prompt-lookup-sweep 4,8,16 \
+  --machboost-source-modes prompt,context,prompt-context \
+  --output results/hf_prompt_lookup_compare_qwen25_3b.json
+```
+
+Model: `Qwen/Qwen2.5-3B-Instruct`
+
+Runner: in-process Hugging Face/MPS, one model load reused across fixtures.
+
+Generation: greedy, 32 requested new tokens. Output match compares token IDs over the requested 32-token budget. The artifact also records `raw_generated_tokens`; Hugging Face prompt lookup emitted extra tail tokens in some rows after the matching 32-token prefix.
+
+Artifact:
+
+- `hf_prompt_lookup_compare_qwen25_3b.json`: full machine-readable comparison against Hugging Face `prompt_lookup_num_tokens`.
+
+Overall:
+
+| Method | Rows | Exact Match | Median Speedup | P90 Speedup | Median tok/s | Median Forwards | Forward Reduction | Accepted Draft Tokens |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `hf_serial_generate` | 6 | 100% | 1.00x | 1.00x | 21.74 | 32.0 | 0.0% | 0.0 |
+| `hf_prompt_lookup_4` | 6 | 100% | 1.83x | 1.96x | 38.68 | 8.5 | 73.4% | 0.0 |
+| `hf_prompt_lookup_8` | 6 | 100% | 1.86x | 2.42x | 41.13 | 5.5 | 82.8% | 0.0 |
+| `hf_prompt_lookup_16` | 6 | 100% | 2.11x | 3.61x | 46.59 | 3.0 | 90.6% | 0.0 |
+| `machboost_prompt` | 6 | 100% | 2.14x | 2.41x | 45.77 | 10.5 | 67.2% | 30.5 |
+| `machboost_context` | 6 | 100% | 2.47x | 2.70x | 51.06 | 10.5 | 67.2% | 30.5 |
+| `machboost_prompt-context` | 6 | 100% | 2.26x | 2.44x | 47.63 | 11.0 | 65.6% | 30.0 |
+
+Selected per-fixture comparison:
+
+| Fixture | HF Prompt Lookup 16 | MachBoost Context | Note |
+|---|---:|---:|---|
+| `real_readme_api` | 2.03x | 2.64x | local README continuation favors context corpus |
+| `real_core_code` | 2.12x | 2.19x | roughly tied |
+| `policy` | 2.10x | 2.43x | context corpus wins |
+| `json` | 3.91x | 2.50x | HF prompt lookup wins |
+| `rag` | 1.95x | 1.68x | HF prompt lookup wins |
+| `code` | 3.32x | 2.77x | HF prompt lookup wins |
+
+Takeaways:
+
+- Hugging Face prompt lookup is a strong baseline, not a straw man. On this 3B run, `prompt_lookup_num_tokens=16` reaches a 2.11x median speedup with exact 32-token prefix agreement.
+- MachBoost context mode is still competitive and wins the median in this fixture mix at 2.47x, especially on local README and policy continuation.
+- The defensible MachBoost product difference is not "n-gram lookup exists." It is local-corpus source control, adapter packaging, calibration/gating, and machine-readable evidence around when to enable the layer.
+- The comparison should be repeated before making paper-grade claims; this artifact is a first direct baseline check with one repeat.
+
 ## MLX Strict Evidence V2, 64 Tokens, Repeat 3
 
 Command:
@@ -146,3 +202,44 @@ Takeaways:
 - Exactness held across all 90 rows.
 - Real artifact continuations remain the strongest evidence: the README, core-code, and paper-source fixtures accepted the full 64-token draft budget in aggregate.
 - Negative controls stayed close to neutral and accepted zero draft tokens, which supports the benchmark gate design.
+
+## MLX Qwen3.5-9B Strict Smoke
+
+Command:
+
+```sh
+python3 scripts/backend_bench_matrix.py \
+  --backends mlx \
+  --mlx-model mlx-community/Qwen3.5-9B-MLX-4bit \
+  --source-mode context \
+  --mlx-disable-cache \
+  --fixtures policy,json \
+  --repeat 1 \
+  --max-new-tokens 16 \
+  --output results/mlx_qwen35_9b_strict_smoke.json
+```
+
+Model: `mlx-community/Qwen3.5-9B-MLX-4bit`
+
+Runner: MLX package adapter with prompt cache disabled, matching the strict evidence mode.
+
+Generation: greedy, 16 new tokens, exact token-match checked against baseline output.
+
+Artifact:
+
+- `mlx_qwen35_9b_strict_smoke.json`: two-row larger-model smoke artifact.
+
+| Rows | Exact Match | Median Speedup | Baseline tok/s | Boosted tok/s | Accepted Draft Tokens | Forward Reduction |
+|---:|---:|---:|---:|---:|---:|---:|
+| 2 | 100% | 7.50x | 1.77 | 13.26 | 16.0 | 87.5% |
+
+Per-fixture:
+
+| Fixture | Exact Match | Speedup | Baseline tok/s | Boosted tok/s | Accepted Draft Tokens |
+|---|---:|---:|---:|---:|---:|
+| `policy` | 100% | 6.99x | 1.86 | 13.00 | 16 |
+| `json` | 100% | 8.01x | 1.69 | 13.51 | 16 |
+
+Takeaway:
+
+- This is only a smoke test, but it supports the expected scaling behavior: when accepted draft spans are long, larger/slower target models benefit more because each avoided serial target step is more expensive.
