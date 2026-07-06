@@ -64,6 +64,7 @@ class Accelerator:
         ngram: int = DEFAULT_NGRAM,
         max_suffix_tokens: int = DEFAULT_MAX_SUFFIX_TOKENS,
         max_draft_tokens: int = DEFAULT_MAX_DRAFT_TOKENS,
+        candidate_limit: int = 1,
         boost_enabled: bool = True,
     ) -> None:
         self.service = service
@@ -71,6 +72,7 @@ class Accelerator:
         self.ngram = ngram
         self.max_suffix_tokens = max_suffix_tokens
         self.max_draft_tokens = max_draft_tokens
+        self.candidate_limit = max(1, int(candidate_limit))
         self.boost_enabled = bool(boost_enabled)
         self.context_tokens = self._encode_many(self.context_texts)
 
@@ -85,6 +87,7 @@ class Accelerator:
         ngram: int = DEFAULT_NGRAM,
         max_suffix_tokens: int = DEFAULT_MAX_SUFFIX_TOKENS,
         max_draft_tokens: int = DEFAULT_MAX_DRAFT_TOKENS,
+        candidate_limit: int = 1,
         tokenizer_config: Optional[dict] = None,
         model_config: Optional[dict] = None,
         adapter_path: Optional[str] = None,
@@ -112,6 +115,7 @@ class Accelerator:
             ngram=ngram,
             max_suffix_tokens=max_suffix_tokens,
             max_draft_tokens=max_draft_tokens,
+            candidate_limit=candidate_limit,
             boost_enabled=boost_enabled,
         )
 
@@ -126,6 +130,7 @@ class Accelerator:
         ngram: int = DEFAULT_NGRAM,
         max_suffix_tokens: int = DEFAULT_MAX_SUFFIX_TOKENS,
         max_draft_tokens: int = DEFAULT_MAX_DRAFT_TOKENS,
+        candidate_limit: int = 1,
         device: Optional[str] = None,
         local_files_only: bool = False,
         torch_dtype=None,
@@ -153,6 +158,7 @@ class Accelerator:
             ngram=ngram,
             max_suffix_tokens=max_suffix_tokens,
             max_draft_tokens=max_draft_tokens,
+            candidate_limit=candidate_limit,
             boost_enabled=boost_enabled,
         )
 
@@ -184,6 +190,7 @@ class Accelerator:
             ngram=self.ngram,
             max_suffix_tokens=self.max_suffix_tokens,
             max_draft_tokens=self.max_draft_tokens,
+            candidate_limit=self.candidate_limit,
         )
         tokens, stats = boosted.generate(prompt_tokens, max_tokens=max_tokens)
         return AcceleratorResult(text=self.service.decode(tokens), tokens=tokens, stats=stats)
@@ -205,6 +212,7 @@ class Accelerator:
             ngram=self.ngram,
             max_suffix_tokens=self.max_suffix_tokens,
             max_draft_tokens=self.max_draft_tokens,
+            candidate_limit=self.candidate_limit,
             gate_policy=gate_policy,
         )
 
