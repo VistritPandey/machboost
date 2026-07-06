@@ -339,6 +339,7 @@ def run_mlx(args: argparse.Namespace, fixtures: list[Fixture]) -> list[BenchRow]
             corpus_tokens=source_tokens,
             ngram=args.ngram,
             max_draft_tokens=args.max_draft_tokens,
+            candidate_limit=args.candidate_limit,
         )
         started = time.perf_counter()
         boosted_tokens, stats = boosted.generate(prompt_tokens, max_tokens=args.max_new_tokens)
@@ -610,6 +611,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "max_new_tokens": args.max_new_tokens,
             "ngram": args.ngram,
             "max_draft_tokens": args.max_draft_tokens,
+            "candidate_limit": args.candidate_limit,
             "verify_mode": args.verify_mode,
         },
         "summaries": summarize(rows),
