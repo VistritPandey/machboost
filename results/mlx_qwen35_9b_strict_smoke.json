@@ -1,0 +1,125 @@
+{
+  "schema_version": "machboost.backend_bench_matrix.v1",
+  "fixtures": [
+    {
+      "name": "policy",
+      "workflow": "policy_quote",
+      "expectation": "positive",
+      "prompt": "Continue the memo exactly from the document. Do not add commentary.\n\n<document>\nBenchmark memo mb-e67ce07c0c\nPolicy: MachBoost benchmark records must include backend, model, fixture, nonce, exact output match, baseline tokens per second, boosted tokens per second, and accepted draft tokens.\nReason: the record must prove speed without changing model output.\n</document>\n\nContinuation:\nPolicy: MachBoost benchmark records must include",
+      "context": "Benchmark memo mb-e67ce07c0c\nPolicy: MachBoost benchmark records must include backend, model, fixture, nonce, exact output match, baseline tokens per second, boosted tokens per second, and accepted draft tokens.\nReason: the record must prove speed without changing model output.\n",
+      "nonce": "mb-e67ce07c0c"
+    },
+    {
+      "name": "json",
+      "workflow": "structured_config",
+      "expectation": "positive",
+      "prompt": "Continue this JSON exactly from the source document.\n\n<source>\n{\n  \"nonce\": \"mb-4cc0ae26cb\",\n  \"backend\": \"machboost\",\n  \"accuracy_rule\": \"boosted output must match baseline output exactly\",\n  \"metrics\": [\"tokens_per_second\", \"wall_clock_ms\", \"accepted_draft_tokens\"]\n}\n</source>\n\n{\n  \"nonce\": \"mb-4cc0ae26cb\",\n  \"backend\":",
+      "context": "{\n  \"nonce\": \"mb-4cc0ae26cb\",\n  \"backend\": \"machboost\",\n  \"accuracy_rule\": \"boosted output must match baseline output exactly\",\n  \"metrics\": [\"tokens_per_second\", \"wall_clock_ms\", \"accepted_draft_tokens\"]\n}\n",
+      "nonce": "mb-4cc0ae26cb"
+    }
+  ],
+  "settings": {
+    "backends": [
+      "mlx"
+    ],
+    "repeat": 1,
+    "max_new_tokens": 16,
+    "ngram": 2,
+    "max_draft_tokens": 8,
+    "candidate_limit": 1,
+    "source_mode": "context",
+    "verify_mode": "hybrid",
+    "mlx_disable_cache": true
+  },
+  "summaries": [
+    {
+      "backend": "mlx",
+      "rows": 2,
+      "output_match_rate": 1.0,
+      "median_speedup": 7.501881930402494,
+      "p90_speedup": 7.908931931331443,
+      "mean_speedup": 7.501881930402494,
+      "median_baseline_tokens_per_second": 1.772882379180594,
+      "median_boosted_tokens_per_second": 13.256217162518748,
+      "p90_boosted_tokens_per_second": 13.461984238243206,
+      "median_accepted_draft_tokens": 16.0,
+      "median_forward_reduction_percent": 87.5
+    }
+  ],
+  "fixture_summaries": [
+    {
+      "backend": "mlx",
+      "fixture": "json",
+      "workflow": "structured_config",
+      "expectation": "positive",
+      "rows": 1,
+      "output_match_rate": 1.0,
+      "median_speedup": 8.01069443156368,
+      "p90_speedup": 8.01069443156368,
+      "median_baseline_tokens_per_second": 1.6869231653536576,
+      "median_boosted_tokens_per_second": 13.51342600717432,
+      "median_accepted_draft_tokens": 16.0,
+      "median_forward_reduction_percent": 87.5
+    },
+    {
+      "backend": "mlx",
+      "fixture": "policy",
+      "workflow": "policy_quote",
+      "expectation": "positive",
+      "rows": 1,
+      "output_match_rate": 1.0,
+      "median_speedup": 6.993069429241307,
+      "p90_speedup": 6.993069429241307,
+      "median_baseline_tokens_per_second": 1.8588415930075306,
+      "median_boosted_tokens_per_second": 12.999008317863174,
+      "median_accepted_draft_tokens": 16.0,
+      "median_forward_reduction_percent": 87.5
+    }
+  ],
+  "rows": [
+    {
+      "backend": "mlx",
+      "model": "mlx-community/Qwen3.5-9B-MLX-4bit",
+      "fixture": "policy",
+      "workflow": "policy_quote",
+      "expectation": "positive",
+      "nonce": "mb-e67ce07c0c",
+      "mode": "stateless_verifier_adapter",
+      "output_match": true,
+      "baseline_ms": 8607.511291003902,
+      "boosted_ms": 1230.8631249979953,
+      "baseline_tokens_per_second": 1.8588415930075306,
+      "boosted_tokens_per_second": 12.999008317863174,
+      "speedup": 6.993069429241307,
+      "baseline_forwards": 16,
+      "boosted_forwards": 2,
+      "accepted_draft_tokens": 16,
+      "generated_tokens": 16,
+      "baseline_output_preview": "backend, model, fixture, nonce, exact output match, baseline tokens per second",
+      "boosted_output_preview": "backend, model, fixture, nonce, exact output match, baseline tokens per second",
+      "note": "MLX path uses the package cache-aware verifier adapter with MLX prompt cache."
+    },
+    {
+      "backend": "mlx",
+      "model": "mlx-community/Qwen3.5-9B-MLX-4bit",
+      "fixture": "json",
+      "workflow": "structured_config",
+      "expectation": "positive",
+      "nonce": "mb-4cc0ae26cb",
+      "mode": "stateless_verifier_adapter",
+      "output_match": true,
+      "baseline_ms": 9484.723625006154,
+      "boosted_ms": 1184.007667005062,
+      "baseline_tokens_per_second": 1.6869231653536576,
+      "boosted_tokens_per_second": 13.51342600717432,
+      "speedup": 8.01069443156368,
+      "baseline_forwards": 16,
+      "boosted_forwards": 2,
+      "accepted_draft_tokens": 16,
+      "generated_tokens": 16,
+      "baseline_output_preview": "\"machboost\", \"accuracy_rule\": \"boosted output must match",
+      "boosted_output_preview": "\"machboost\", \"accuracy_rule\": \"boosted output must match",
+      "note": "MLX path uses the package cache-aware verifier adapter with MLX prompt cache."
+    }
+  ]
+}
