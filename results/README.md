@@ -102,3 +102,47 @@ Takeaways:
 - Real local artifacts are the strongest v2 use case: README, core code, and paper-source continuation all accept the full 64-token draft window and exceed 5.6x speedup in strict mode.
 - Strict stateless MLX mode is not the fastest raw runtime path, but it provides clean exactness evidence for longer generations.
 - Cache-enabled diagnostic runs were faster in raw tok/s but showed boundary mismatches on longer synthetic quote fixtures, so cache-mode evidence should remain diagnostic until cache trajectory handling is improved further.
+
+## MLX Strict Evidence V2, Three Independent Runs
+
+Additional strict runs:
+
+- `mlx_evidence_v2_strict_run2_20260706.json`
+- `mlx_evidence_v2_strict_run3_20260706.json`
+- `mlx_evidence_v2_strict_aggregate_20260706.json`
+
+The aggregate combines the original strict v2 run with two fresh runs using different seeds.
+
+| Runs | Rows | Exact Match | Median Speedup | Mean Speedup | P10 Speedup | P90 Speedup | Baseline tok/s | Boosted tok/s |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 3 | 90 | 100% | 3.00x | 3.56x | 1.05x | 6.93x | 10.61 | 25.66 |
+
+Per-run medians:
+
+| Run | Exact Match | Median Speedup | Mean Speedup | Baseline tok/s | Boosted tok/s |
+|---:|---:|---:|---:|---:|---:|
+| 1 | 100% | 3.03x | 3.55x | 10.53 | 26.17 |
+| 2 | 100% | 3.15x | 3.43x | 11.03 | 25.57 |
+| 3 | 100% | 3.00x | 3.70x | 10.15 | 25.53 |
+
+Aggregate per-fixture medians:
+
+| Fixture | Exact Match | Median Speedup | P10-P90 Speedup | Accepted Draft Tokens |
+|---|---:|---:|---:|---:|
+| `real_paper_method` | 100% | 8.54x | 6.50x-9.57x | 64 |
+| `real_core_code` | 100% | 6.61x | 5.22x-6.99x | 64 |
+| `real_readme_api` | 100% | 5.65x | 4.23x-5.97x | 64 |
+| `json` | 100% | 3.89x | 3.44x-4.11x | 57 |
+| `code` | 100% | 3.71x | 3.57x-3.82x | 55 |
+| `policy` | 100% | 2.48x | 2.29x-2.96x | 41 |
+| `rag` | 100% | 1.66x | 1.55x-2.49x | 27 |
+| `repo_quote` | 100% | 1.60x | 1.31x-1.86x | 24 |
+| `creative_open` | 100% | 1.07x | 1.04x-1.19x | 0 |
+| `short_answer` | 100% | 1.01x | 0.98x-1.03x | 0 |
+
+Takeaways:
+
+- The strict v2 median speedup is stable across independent runs: 3.03x, 3.15x, and 3.00x.
+- Exactness held across all 90 rows.
+- Real artifact continuations remain the strongest evidence: the README, core-code, and paper-source fixtures accepted the full 64-token draft budget in aggregate.
+- Negative controls stayed close to neutral and accepted zero draft tokens, which supports the benchmark gate design.
