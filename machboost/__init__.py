@@ -17,6 +17,8 @@ from .core import (
     machboost,
 )
 
+__version__ = "0.1.0"
+
 __all__ = [
     "Accelerator",
     "AcceleratorResult",
@@ -34,4 +36,5 @@ __all__ = [
     "benchmark_cases",
     "machboost",
     "summarize_results",
+    "__version__",
 ]
