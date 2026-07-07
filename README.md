@@ -35,11 +35,18 @@ After publishing this repository on GitHub, users can install directly from GitH
 pip install "machboost[mlx] @ git+https://github.com/VistritPandey/machboost.git"
 ```
 
+Update an existing install:
+
+```sh
+pip install --upgrade "machboost[mlx] @ git+https://github.com/VistritPandey/machboost.git"
+```
+
 Check the install:
 
 ```sh
 machboost doctor
 machboost self-test
+machboost list
 python -m machboost self-test --json
 ```
 
@@ -48,6 +55,7 @@ python -m machboost self-test --json
 Start a native local chat from the command line:
 
 ```sh
+machboost list
 machboost run mlx-community/Qwen3.5-0.8B-MLX-4bit --backend mlx --context ./docs --context ./src
 machboost run Qwen/Qwen2.5-3B-Instruct --backend hf --context ./docs --show-stats
 ```
@@ -140,16 +148,20 @@ It is usually neutral or slower for open-ended creative writing, one-word answer
 The Python package installs a native model runner:
 
 ```sh
+machboost list
+machboost list --json
 machboost run mlx-community/Qwen3.5-0.8B-MLX-4bit --backend mlx
 machboost run Qwen/Qwen2.5-3B-Instruct --backend hf
 machboost run Qwen/Qwen2.5-3B-Instruct --backend hf --context ./docs --context ./src --show-stats
 ```
 
-`machboost run MODEL` loads a Hugging Face or MLX model, builds a MachBoost draft corpus from any `--context` files or directories, and opens an interactive chat. Inside the chat, use `/bye`, `/exit`, `/quit`, EOF, or Ctrl-C to leave, and `/clear` to reset chat history.
+`machboost list` shows cached Hugging Face and MLX models that the native runner can likely load, plus backend readiness. `machboost run MODEL` loads a Hugging Face or MLX model, builds a MachBoost draft corpus from any `--context` files or directories, and opens an interactive chat. Inside the chat, use `/bye`, `/exit`, `/quit`, EOF, or Ctrl-C to leave, and `/clear` to reset chat history.
 
 Useful native options:
 
 ```sh
+machboost list --backend mlx
+machboost list --all
 machboost run Qwen/Qwen2.5-3B-Instruct --backend hf --device mps --max-tokens 128
 machboost run Qwen/Qwen2.5-3B-Instruct --backend hf --local-files-only
 machboost run mlx-community/Qwen3.5-0.8B-MLX-4bit --backend mlx --strict
