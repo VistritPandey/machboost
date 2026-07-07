@@ -57,7 +57,7 @@ Start a native local chat from the command line:
 ```sh
 machboost list
 machboost run mlx-community/Qwen3.5-0.8B-MLX-4bit --backend mlx --context ./docs --context ./src
-machboost run Qwen/Qwen2.5-3B-Instruct --backend hf --context ./docs --show-stats
+machboost run Qwen/Qwen2.5-3B-Instruct --backend hf --show-stats
 ```
 
 If the model is not already cached, the selected backend may download it through its normal Hugging Face or MLX loader. Use `--local-files-only` with the Hugging Face backend to require an existing local cache.
@@ -161,7 +161,9 @@ machboost run Qwen/Qwen2.5-3B-Instruct --backend hf
 machboost run Qwen/Qwen2.5-3B-Instruct --backend hf --context ./docs --context ./src --show-stats
 ```
 
-`machboost list` shows cached Hugging Face and MLX models that the native runner can likely load, plus backend readiness. `machboost run MODEL` loads a Hugging Face or MLX model, builds a MachBoost draft corpus from any `--context` files or directories, and opens an interactive chat. Inside the chat, use `/bye`, `/exit`, `/quit`, EOF, or Ctrl-C to leave, and `/clear` to reset chat history.
+`machboost list` shows cached Hugging Face and MLX models that the native runner can likely load, plus backend readiness. `machboost run MODEL` loads a Hugging Face or MLX model, builds a MachBoost draft corpus from any `--context` files or directories, and opens a streaming interactive chat. Inside the chat, use `/bye`, `/exit`, `/quit`, EOF, or Ctrl-C to leave, and `/clear` to reset chat history.
+
+Plain open-ended chat without local context uses a fast serial greedy path and should report `estimated_speedup=1.00x`. MachBoost speedups require useful `--context` that predicts upcoming tokens.
 
 Useful native options:
 
@@ -169,9 +171,12 @@ Useful native options:
 machboost list --backend mlx
 machboost list --all
 machboost run Qwen/Qwen2.5-3B-Instruct --backend hf --device mps --max-tokens 128
+machboost run Qwen/Qwen2.5-3B-Instruct --backend hf --dtype float16 --show-stats
 machboost run Qwen/Qwen2.5-3B-Instruct --backend hf --local-files-only
 machboost run mlx-community/Qwen3.5-0.8B-MLX-4bit --backend mlx --strict
 ```
+
+On Apple Silicon, the Hugging Face backend defaults to `--device auto --dtype auto`, which selects MPS with float16 when available. Ollama can still be faster for general chat because it uses optimized quantized runners; MachBoost's native path is mainly for exact local-context acceleration and research/debuggable verifier hooks.
 
 The package also includes install checks:
 
