@@ -45,6 +45,15 @@ python -m machboost self-test --json
 
 ## Quick Start
 
+Start a native local chat from the command line:
+
+```sh
+machboost run mlx-community/Qwen3.5-0.8B-MLX-4bit --backend mlx --context ./docs --context ./src
+machboost run Qwen/Qwen2.5-3B-Instruct --backend hf --context ./docs --show-stats
+```
+
+If the model is not already cached, the selected backend may download it through its normal Hugging Face or MLX loader. Use `--local-files-only` with the Hugging Face backend to require an existing local cache.
+
 Use the high-level `Accelerator` when you want MachBoost to load a model and build the draft corpus from strings, files, or directories:
 
 ```python
@@ -128,7 +137,25 @@ It is usually neutral or slower for open-ended creative writing, one-word answer
 
 ## Command Line
 
-The Python package installs a lightweight command:
+The Python package installs a native model runner:
+
+```sh
+machboost run mlx-community/Qwen3.5-0.8B-MLX-4bit --backend mlx
+machboost run Qwen/Qwen2.5-3B-Instruct --backend hf
+machboost run Qwen/Qwen2.5-3B-Instruct --backend hf --context ./docs --context ./src --show-stats
+```
+
+`machboost run MODEL` loads a Hugging Face or MLX model, builds a MachBoost draft corpus from any `--context` files or directories, and opens an interactive chat. Inside the chat, use `/bye`, `/exit`, `/quit`, EOF, or Ctrl-C to leave, and `/clear` to reset chat history.
+
+Useful native options:
+
+```sh
+machboost run Qwen/Qwen2.5-3B-Instruct --backend hf --device mps --max-tokens 128
+machboost run Qwen/Qwen2.5-3B-Instruct --backend hf --local-files-only
+machboost run mlx-community/Qwen3.5-0.8B-MLX-4bit --backend mlx --strict
+```
+
+The package also includes install checks:
 
 ```sh
 machboost doctor --json
@@ -136,7 +163,7 @@ machboost self-test --json
 machboost version
 ```
 
-It also includes an Ollama-compatible local chat wrapper:
+An Ollama-compatible chat wrapper is available for compatibility:
 
 ```sh
 machboost ollama run qwen2.5:3b
@@ -244,6 +271,8 @@ Run tests:
 python3 -m unittest discover -s tests
 go test ./...
 ```
+
+On macOS 26 or newer, use Go 1.24 or newer for `go test ./...`; earlier Go linkers do not emit the Mach-O `LC_UUID` command that modern `dyld` requires.
 
 Check packaging:
 
