@@ -187,6 +187,17 @@ class MLXAdapterTest(unittest.TestCase):
         self.assertEqual(service.forward_calls, 3)
         self.assertEqual(service.model.inputs, [prompt, (1,), (2,)])
 
+    def test_generate_tokens_streams_with_cache(self):
+        prompt = (100, 101, 102)
+        service = cache_service((1, 2, 3, 4), prompt_len=len(prompt))
+        chunks = []
+
+        generated = service.generate_tokens(prompt, max_tokens=4, on_tokens=chunks.append)
+
+        self.assertEqual(generated, (1, 2, 3, 4))
+        self.assertEqual(tuple(token for chunk in chunks for token in chunk), generated)
+        self.assertEqual(service.model.inputs, [prompt, (1,), (2,), (3,)])
+
     def test_cached_verify_commits_accepted_candidate(self):
         prompt = (100, 101, 102)
         service = cache_service((1, 2, 3, 4, 5), prompt_len=len(prompt))
