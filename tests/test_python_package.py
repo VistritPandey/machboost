@@ -99,6 +99,17 @@ class PythonPackageTest(unittest.TestCase):
         self.assertEqual(stats.rejected_candidates, 1)
         self.assertEqual(stats.accepted_draft_tokens, len(target))
 
+    def test_generation_stops_before_stop_token(self):
+        prompt = (100, 101, 102)
+        target = (1, 2, 99, 3, 4)
+        service = ScriptedVerifierService(target)
+
+        boosted = machboost(service, corpus_tokens=prompt + target, ngram=3, max_draft_tokens=5)
+        generated, stats = boosted.generate(prompt, max_tokens=len(target), stop_tokens=[99])
+
+        self.assertEqual(generated, (1, 2))
+        self.assertEqual(stats.accepted_draft_tokens, 2)
+
 
 if __name__ == "__main__":
     unittest.main()
