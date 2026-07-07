@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
 authors = [
-  { name = "MachBoost Authors" }
+  { name = "Vistrit Pandey", email = "vistrit@blinkfire.com" }
 ]
 keywords = ["llm", "inference", "speculative-decoding", "local-ai", "mlx", "huggingface", "ollama"]
 classifiers = [
@@ -24,6 +24,7 @@ classifiers = [
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = []
@@ -43,6 +44,9 @@ all = [
   "mlx",
   "mlx-lm",
 ]
+
+[project.scripts]
+machboost = "machboost.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
