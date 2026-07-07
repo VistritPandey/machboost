@@ -88,10 +88,16 @@ class AcceleratorTests(unittest.TestCase):
         service = ScriptedService("<user>hi</user><assistant>", completion)
         service.tokenizer = FakeChatTokenizer()
         accelerator = Accelerator(service, context_texts=[completion], ngram=2, max_draft_tokens=8)
+        chunks = []
 
-        text, stats = accelerator.generate_chat([{"role": "user", "content": "hi"}], max_tokens=len(completion))
+        text, stats = accelerator.generate_chat(
+            [{"role": "user", "content": "hi"}],
+            max_tokens=len(completion),
+            on_text=chunks.append,
+        )
 
         self.assertEqual(text, "hello there")
+        self.assertEqual("".join(chunks), "hello there")
         self.assertGreater(stats.accepted_draft_tokens, 0)
 
     def test_benchmark_uses_accelerator_context(self):
