@@ -136,6 +136,24 @@ machboost self-test --json
 machboost version
 ```
 
+It also includes an Ollama-compatible local chat wrapper:
+
+```sh
+machboost ollama run qwen2.5:3b
+machboost chat qwen2.5:3b
+```
+
+If the model is missing, MachBoost asks the local Ollama server to pull it first, then opens an interactive chat. Inside the chat, use `/bye`, `/exit`, `/quit`, EOF, or Ctrl-C to leave, and `/clear` to reset chat history.
+
+Useful options:
+
+```sh
+machboost ollama run qwen2.5:3b --ctx 4096 --temperature 0
+machboost ollama run llama3.2 --system "Answer concisely." --no-pull
+```
+
+This wrapper uses Ollama's public HTTP API. It is useful for a familiar local UX, model pulling, and chat, but it is not native MachBoost verifier acceleration.
+
 The repository also includes the original Go CLI for diagnostics, command wrapping, and local benchmark experiments:
 
 ```sh
