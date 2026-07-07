@@ -46,18 +46,21 @@ class HuggingFaceCausalLMService:
         except ImportError as exc:
             raise ImportError("Install Hugging Face support with `pip install machboost[hf]`.") from exc
 
+        resolved_device = _resolve_device(device)
         model_args = dict(model_kwargs or {})
         tokenizer_args = dict(tokenizer_kwargs or {})
         model_args.setdefault("local_files_only", local_files_only)
         tokenizer_args.setdefault("local_files_only", local_files_only)
+        if torch_dtype is None:
+            torch_dtype = _default_dtype(resolved_device)
         if torch_dtype is not None:
-            model_args["torch_dtype"] = torch_dtype
+            model_args["dtype"] = torch_dtype
 
         tokenizer = AutoTokenizer.from_pretrained(model_name_or_path, **tokenizer_args)
         model = AutoModelForCausalLM.from_pretrained(model_name_or_path, **model_args)
-        if device is not None and hasattr(model, "to"):
-            model = model.to(device)
-        return cls(model, tokenizer, device=device, min_verify_margin=min_verify_margin)
+        if resolved_device is not None and hasattr(model, "to"):
+            model = model.to(resolved_device)
+        return cls(model, tokenizer, device=resolved_device, min_verify_margin=min_verify_margin)
 
     def encode(self, text: str, *, add_special_tokens: bool = False) -> Tuple[Token, ...]:
         if self.tokenizer is None:
@@ -74,6 +77,41 @@ class HuggingFaceCausalLMService:
             return None
         logits = self._logits(prefix_tokens)
         return int(logits[0, -1].argmax().item())
+
+    def generate_tokens(
+        self,
+        prompt_tokens: TokenSeq,
+        *,
+        max_tokens: int,
+        stop_tokens: Optional[Iterable[Token]] = None,
+        on_tokens=None,
+    ) -> Tuple[Token, ...]:
+        if len(prompt_tokens) == 0 or max_tokens <= 0:
+            return ()
+
+        torch = _torch()
+        stop_set = {int(token) for token in stop_tokens or ()}
+        generated: list[Token] = []
+        input_ids = torch.tensor([list(prompt_tokens)], dtype=torch.long, device=self.device)
+        past_key_values = None
+
+        with torch.inference_mode():
+            for step in range(max_tokens):
+                if step == 0:
+                    out = self.model(input_ids=input_ids, use_cache=True)
+                else:
+                    out = self.model(input_ids=input_ids, past_key_values=past_key_values, use_cache=True)
+                self.forward_calls += 1
+                past_key_values = getattr(out, "past_key_values", None)
+                token = int(out.logits[:, -1, :].argmax(dim=-1).item())
+                if token in stop_set:
+                    break
+                generated.append(token)
+                if on_tokens is not None:
+                    on_tokens((token,))
+                input_ids = torch.tensor([[token]], dtype=torch.long, device=self.device)
+
+        return tuple(generated)
 
     def verify(self, prefix_tokens: TokenSeq, candidate_tokens: TokenSeq) -> Tuple[int, Optional[Token]]:
         result = self.verification(prefix_tokens, candidate_tokens)
@@ -127,6 +165,23 @@ def _torch():
     except ImportError as exc:
         raise ImportError("Install Hugging Face support with `pip install machboost[hf]`.") from exc
     return torch
+
+
+def _resolve_device(device: Optional[str]) -> Optional[str]:
+    if device and device != "auto":
+        return device
+    torch = _torch()
+    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        return "mps"
+    if torch.cuda.is_available():
+        return "cuda"
+    return None
+
+
+def _default_dtype(device: Optional[str]):
+    if device == "mps":
+        return _torch().float16
+    return None
 
 
 def _infer_device(model) -> str:
