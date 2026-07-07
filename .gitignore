@@ -1,0 +1,60 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Python packaging/build outputs
+build/
+dist/
+*.egg-info/
+pip-wheel-metadata/
+
+# Virtual environments and local env files
+.venv/
+venv/
+env/
+.env
+.env.*
+
+# Go build outputs and test artifacts
+bin/
+*.test
+*.out
+coverage.out
+
+# LaTeX intermediates. Keep paper/*.tex, paper/*.bib, and paper/*.pdf tracked.
+paper/*.aux
+paper/*.bbl
+paper/*.bcf
+paper/*.blg
+paper/*.fdb_latexmk
+paper/*.fls
+paper/*.log
+paper/*.out
+paper/*.run.xml
+paper/*.synctex.gz
+paper/*.toc
+paper/*.xdv
+
+# Local benchmark scratch space. Curated public artifacts live directly in results/.
+results/local/
+results/tmp/
+results/*.tmp.json
+results/*.scratch.json
+
+# Local model/checkpoint directories
+models/
+checkpoints/
+.cache/
+hf_cache/
+mlx_cache/
