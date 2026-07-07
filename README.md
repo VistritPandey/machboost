@@ -1,5 +1,8 @@
 # machboost
 
+[![CI](https://github.com/VistritPandey/machboost/actions/workflows/ci.yml/badge.svg)](https://github.com/VistritPandey/machboost/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 MachBoost is an experimental Python package for exact local-context speculative acceleration of local LLM inference.
 
 It drafts candidate tokens from nearby text such as prompts, retrieved chunks, repo files, policies, configs, and docs. A backend verifier then accepts only the tokens that match the target model's greedy continuation. When the local context predicts the next tokens well, MachBoost can reduce target-model calls without changing the generated token sequence.
@@ -11,7 +14,7 @@ MachBoost is local-first and alpha-stage. It does not upload telemetry, mutate g
 From a local checkout:
 
 ```sh
-git clone <repo-url> machboost
+git clone https://github.com/VistritPandey/machboost.git
 cd machboost
 python3 -m venv .venv
 source .venv/bin/activate
@@ -29,7 +32,7 @@ pip install -e ".[all]"
 After publishing this repository on GitHub, users can install directly from GitHub:
 
 ```sh
-pip install "machboost[mlx] @ git+https://github.com/<owner>/machboost.git"
+pip install "machboost[mlx] @ git+https://github.com/VistritPandey/machboost.git"
 ```
 
 Check the install:
