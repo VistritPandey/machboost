@@ -3,9 +3,11 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import os
 import platform
 import sys
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Optional, Sequence
 
 from . import __version__, machboost
@@ -17,6 +19,16 @@ from .adapters.ollama import OllamaHTTPAdapter, OllamaHTTPError
 class PackageStatus:
     available: bool
     version: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class CachedModel:
+    name: str
+    backend: str
+    source: str
+    path: str
+    runnable: bool
+    reason: str
 
 
 class ScriptedVerifierService:
@@ -109,6 +121,205 @@ def self_test_data() -> dict:
     }
 
 
+def model_list_data(
+    *,
+    backend: str = "all",
+    cache_dirs: Optional[Sequence[str]] = None,
+    include_unsupported: bool = False,
+) -> dict:
+    cache_paths = [Path(item).expanduser() for item in cache_dirs] if cache_dirs else default_hf_cache_dirs()
+    models = discover_cached_models(cache_paths, backend=backend, include_unsupported=include_unsupported)
+    return {
+        "schema_version": "machboost.model_list.v1",
+        "machboost_version": __version__,
+        "backends": native_backend_status(),
+        "cache_dirs": [str(path) for path in cache_paths],
+        "models": [asdict(model) for model in models],
+        "hidden_unsupported_count": count_hidden_unsupported(cache_paths, backend=backend)
+        if not include_unsupported
+        else 0,
+        "examples": [
+            {
+                "backend": "mlx",
+                "model": "mlx-community/Qwen3.5-0.8B-MLX-4bit",
+                "command": "machboost run mlx-community/Qwen3.5-0.8B-MLX-4bit --backend mlx",
+            },
+            {
+                "backend": "hf",
+                "model": "Qwen/Qwen2.5-3B-Instruct",
+                "command": "machboost run Qwen/Qwen2.5-3B-Instruct --backend hf",
+            },
+        ],
+    }
+
+
+def default_hf_cache_dirs() -> list[Path]:
+    candidates: list[Path] = []
+    for env_name in ("HF_HUB_CACHE", "HUGGINGFACE_HUB_CACHE"):
+        value = os.environ.get(env_name)
+        if value:
+            candidates.append(Path(value).expanduser())
+    hf_home = os.environ.get("HF_HOME")
+    if hf_home:
+        candidates.append(Path(hf_home).expanduser() / "hub")
+    candidates.append(Path.home() / ".cache" / "huggingface" / "hub")
+    return unique_paths(candidates)
+
+
+def unique_paths(paths: Sequence[Path]) -> list[Path]:
+    seen: set[str] = set()
+    unique: list[Path] = []
+    for path in paths:
+        key = str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(path)
+    return unique
+
+
+def native_backend_status() -> dict:
+    torch = package_status("torch")
+    transformers = package_status("transformers")
+    mlx = package_status("mlx")
+    mlx_lm = package_status("mlx_lm")
+    return {
+        "hf": {
+            "available": torch.available and transformers.available,
+            "packages": {
+                "torch": asdict(torch),
+                "transformers": asdict(transformers),
+            },
+        },
+        "mlx": {
+            "available": mlx.available and mlx_lm.available,
+            "packages": {
+                "mlx": asdict(mlx),
+                "mlx_lm": asdict(mlx_lm),
+            },
+        },
+    }
+
+
+def discover_cached_models(
+    cache_dirs: Sequence[Path],
+    *,
+    backend: str = "all",
+    include_unsupported: bool = False,
+) -> list[CachedModel]:
+    models: dict[tuple[str, str], CachedModel] = {}
+    for cache_dir in cache_dirs:
+        if not cache_dir.exists() or not cache_dir.is_dir():
+            continue
+        for item in sorted(cache_dir.iterdir()):
+            if not item.is_dir() or not item.name.startswith("models--"):
+                continue
+            model_id = hf_cache_dir_to_model_id(item.name)
+            if not model_id:
+                continue
+            model_backend, runnable, reason = classify_cached_model(model_id, item)
+            if backend != "all" and model_backend != backend:
+                continue
+            if not runnable and not include_unsupported:
+                continue
+            key = (model_backend, model_id)
+            models.setdefault(
+                key,
+                CachedModel(
+                    name=model_id,
+                    backend=model_backend,
+                    source="huggingface_cache",
+                    path=str(item),
+                    runnable=runnable,
+                    reason=reason,
+                ),
+            )
+    return sorted(models.values(), key=lambda model: (not model.runnable, model.backend, model.name.lower()))
+
+
+def count_hidden_unsupported(cache_dirs: Sequence[Path], *, backend: str = "all") -> int:
+    return len(discover_cached_models(cache_dirs, backend=backend, include_unsupported=True)) - len(
+        discover_cached_models(cache_dirs, backend=backend, include_unsupported=False)
+    )
+
+
+def hf_cache_dir_to_model_id(name: str) -> str:
+    encoded = name.removeprefix("models--")
+    if not encoded or encoded == name:
+        return ""
+    return encoded.replace("--", "/")
+
+
+def classify_cached_model(model_id: str, model_dir: Path) -> tuple[str, bool, str]:
+    model_backend = select_native_backend(model_id, "auto")
+    normalized = model_id.lower()
+    if "gguf" in normalized:
+        return model_backend, False, "GGUF repo; native llama.cpp/GGUF runner is not supported yet"
+    if model_backend == "mlx":
+        return model_backend, has_snapshot(model_dir), "MLX model cache" if has_snapshot(model_dir) else "no snapshot"
+
+    config = read_cached_config(model_dir)
+    if config is None:
+        return model_backend, False, "missing config.json"
+    architectures = [str(item) for item in config.get("architectures") or ()]
+    model_type = str(config.get("model_type") or "")
+    if is_hf_causal_lm_config(architectures, model_type):
+        return model_backend, True, "Hugging Face causal LM cache"
+    return model_backend, False, "not a causal LM supported by AutoModelForCausalLM"
+
+
+def has_snapshot(model_dir: Path) -> bool:
+    snapshots = model_dir / "snapshots"
+    if not snapshots.exists() or not snapshots.is_dir():
+        return False
+    return any(snapshots.iterdir())
+
+
+def read_cached_config(model_dir: Path) -> Optional[dict]:
+    snapshots = model_dir / "snapshots"
+    if not snapshots.exists() or not snapshots.is_dir():
+        return None
+    snapshot_dirs = sorted(
+        [item for item in snapshots.iterdir() if item.is_dir()],
+        key=lambda item: item.stat().st_mtime,
+        reverse=True,
+    )
+    for snapshot in snapshot_dirs:
+        config_path = snapshot / "config.json"
+        if not config_path.exists():
+            continue
+        try:
+            return json.loads(config_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+    return None
+
+
+def is_hf_causal_lm_config(architectures: Sequence[str], model_type: str) -> bool:
+    if any(architecture.endswith("ForCausalLM") or "LMHeadModel" in architecture for architecture in architectures):
+        return True
+    return model_type in {
+        "bloom",
+        "falcon",
+        "gemma",
+        "gemma2",
+        "gpt2",
+        "gpt_bigcode",
+        "gpt_neox",
+        "gptj",
+        "llama",
+        "mistral",
+        "mixtral",
+        "olmo",
+        "phi",
+        "phi3",
+        "qwen2",
+        "qwen3",
+        "stablelm",
+        "starcoder2",
+    }
+
+
 def print_human_doctor(data: dict) -> None:
     print(f"machboost {data['machboost_version']}")
     print(f"python {data['python']['version']} ({data['python']['executable']})")
@@ -128,6 +339,36 @@ def print_human_self_test(data: dict) -> None:
     print(f"accepted draft tokens: {data['accepted_draft_tokens']}")
     print(f"target calls: {data['target_calls']} / baseline {data['baseline_target_calls']}")
     print(f"estimated speedup: {data['estimated_speedup']:.2f}x")
+
+
+def print_human_model_list(data: dict) -> None:
+    print(f"machboost {data['machboost_version']}")
+    print("native backends:")
+    for backend, status in data["backends"].items():
+        state = "ready" if status["available"] else "missing optional packages"
+        print(f"  {backend}: {state}")
+
+    models = data["models"]
+    runnable = [model for model in models if model["runnable"]]
+    unsupported = [model for model in models if not model["runnable"]]
+    print("cached runnable models:")
+    if runnable:
+        for model in runnable:
+            print(f"  {model['backend']:<3} {model['name']}")
+            print(f"      run: machboost run {model['name']} --backend {model['backend']}")
+    else:
+        print("  none found in the inspected Hugging Face caches")
+
+    if unsupported:
+        print("unsupported cached repos:")
+        for model in unsupported:
+            print(f"  {model['backend']:<3} {model['name']} ({model['reason']})")
+    elif data.get("hidden_unsupported_count", 0):
+        print(f"unsupported cached repos: {data['hidden_unsupported_count']} hidden; use --all to show them")
+
+    print("remote examples:")
+    for example in data["examples"]:
+        print(f"  {example['command']}")
 
 
 def select_native_backend(model: str, backend: str) -> str:
@@ -362,6 +603,17 @@ def build_parser() -> argparse.ArgumentParser:
     self_test = subcommands.add_parser("self-test", help="Run an in-memory exactness smoke test.")
     self_test.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
 
+    model_list = subcommands.add_parser("list", help="List cached native HF/MLX models.")
+    model_list.add_argument("--backend", choices=["all", "mlx", "hf"], default="all", help="Filter by backend.")
+    model_list.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
+    model_list.add_argument("--all", dest="show_all", action="store_true", help="Show unsupported cached repos too.")
+    model_list.add_argument(
+        "--cache-dir",
+        action="append",
+        default=[],
+        help="Hugging Face hub cache directory to inspect instead of the defaults. Can be repeated.",
+    )
+
     native_run = subcommands.add_parser("run", help="Run a native MachBoost HF/MLX model interactively.")
     add_native_run_arguments(native_run)
 
@@ -436,6 +688,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         else:
             print_human_self_test(data)
         return 0 if data["ok"] else 1
+    if args.command == "list":
+        data = model_list_data(
+            backend=args.backend,
+            cache_dirs=args.cache_dir or None,
+            include_unsupported=args.show_all,
+        )
+        if args.json:
+            print(json.dumps(data, indent=2))
+        else:
+            print_human_model_list(data)
+        return 0
     if args.command == "version":
         print(__version__)
         return 0
