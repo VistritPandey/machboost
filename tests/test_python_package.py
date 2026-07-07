@@ -110,6 +110,18 @@ class PythonPackageTest(unittest.TestCase):
         self.assertEqual(generated, (1, 2))
         self.assertEqual(stats.accepted_draft_tokens, 2)
 
+    def test_generation_streams_committed_tokens(self):
+        prompt = (100, 101, 102)
+        target = (1, 2, 3, 4)
+        service = ScriptedVerifierService(target)
+        chunks = []
+
+        boosted = machboost(service, corpus_tokens=prompt + target, ngram=3, max_draft_tokens=2)
+        generated, _ = boosted.generate(prompt, max_tokens=len(target), on_tokens=chunks.append)
+
+        self.assertEqual(generated, target)
+        self.assertEqual(tuple(token for chunk in chunks for token in chunk), target)
+
 
 if __name__ == "__main__":
     unittest.main()
