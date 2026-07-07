@@ -176,11 +176,12 @@ tokens, stats = boosted.generate(prompt_tokens, max_tokens=128)
 The Python package exposes a native model runner:
 
 ```sh
+machboost list
 machboost run mlx-community/Qwen3.5-0.8B-MLX-4bit --backend mlx --context ./docs --show-stats
 machboost run Qwen/Qwen2.5-3B-Instruct --backend hf --context ./src --local-files-only
 ```
 
-`machboost run MODEL` loads a Hugging Face or MLX model, builds a draft corpus from local context files or directories, and opens an interactive chat. If a model is not cached, the selected backend may download it through its normal loader. This is the product-facing local runner path.
+`machboost list` reports cached Hugging Face and MLX models that the native runner can likely load. `machboost run MODEL` loads a Hugging Face or MLX model, builds a draft corpus from local context files or directories, and opens an interactive chat. If a model is not cached, the selected backend may download it through its normal loader. This is the product-facing local runner path.
 
 The package also exposes lightweight install checks:
 
