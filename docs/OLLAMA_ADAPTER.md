@@ -4,6 +4,8 @@
 
 Ollama can be a real native target for MachBoost, but not through the public HTTP generate API alone. The useful integration point is inside the model runner, where tokenization, logits, sampling state, KV cache state, accepted-prefix commits, and rollback are available.
 
+The product-facing native command is `machboost run MODEL`, which currently targets Hugging Face and MLX backends directly. The Ollama commands described here are compatibility and research-adapter paths, not the main runner interface.
+
 The local Ollama checkout already contains several relevant hooks:
 
 - GGUF models are routed to the `llama-server` subprocess.
