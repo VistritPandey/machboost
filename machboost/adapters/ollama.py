@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 import json
 import os
-from typing import Any, Callable, Mapping, Optional
+from typing import Any, Callable, Iterable, Mapping, Optional
 from urllib import error, request
 
 DEFAULT_OLLAMA_ENDPOINT = "http://127.0.0.1:11434"
@@ -91,6 +91,52 @@ class OllamaGenerateResult:
         return data
 
 
+@dataclass(frozen=True)
+class OllamaChatChunk:
+    model: str
+    content: str
+    done: bool
+    raw: Mapping[str, Any]
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "OllamaChatChunk":
+        message = data.get("message") or {}
+        content = ""
+        if isinstance(message, Mapping):
+            content = str(message.get("content", ""))
+        return cls(
+            model=str(data.get("model", "")),
+            content=content,
+            done=bool(data.get("done", False)),
+            raw=data,
+        )
+
+
+@dataclass(frozen=True)
+class OllamaPullStatus:
+    status: str
+    digest: str = ""
+    total: int = 0
+    completed: int = 0
+    raw: Mapping[str, Any] = None
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "OllamaPullStatus":
+        return cls(
+            status=str(data.get("status", "")),
+            digest=str(data.get("digest", "")),
+            total=int(data.get("total", 0) or 0),
+            completed=int(data.get("completed", 0) or 0),
+            raw=data,
+        )
+
+    @property
+    def progress(self) -> float:
+        if self.total <= 0:
+            return 0.0
+        return min(1.0, self.completed / self.total)
+
+
 class OllamaHTTPAdapter:
     def __init__(
         self,
@@ -153,6 +199,55 @@ class OllamaHTTPAdapter:
     def tags(self) -> dict[str, Any]:
         return self._json_request("GET", "/api/tags", None)
 
+    def installed_models(self) -> tuple[str, ...]:
+        models = self.tags().get("models", [])
+        names: list[str] = []
+        if not isinstance(models, list):
+            return ()
+        for item in models:
+            if not isinstance(item, Mapping):
+                continue
+            name = item.get("name") or item.get("model")
+            if name:
+                names.append(str(name))
+        return tuple(names)
+
+    def has_model(self, model: Optional[str] = None) -> bool:
+        return model_is_installed(model or self.model, self.installed_models())
+
+    def pull(self, model: Optional[str] = None, *, stream: bool = True) -> Iterable[OllamaPullStatus]:
+        payload = {
+            "model": model or self.model,
+            "stream": bool(stream),
+        }
+        for item in self._stream_json_request("POST", "/api/pull", payload):
+            yield OllamaPullStatus.from_dict(item)
+
+    def chat(
+        self,
+        messages: list[Mapping[str, str]],
+        *,
+        options: Optional[Mapping[str, Any]] = None,
+        keep_alive: Any = None,
+        stream: bool = True,
+    ) -> Iterable[OllamaChatChunk]:
+        merged_options = dict(self.default_options)
+        merged_options.update(dict(options or {}))
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "messages": [dict(message) for message in messages],
+            "stream": bool(stream),
+        }
+        if keep_alive is None:
+            keep_alive = self.keep_alive
+        if keep_alive is not None:
+            payload["keep_alive"] = keep_alive
+        if merged_options:
+            payload["options"] = merged_options
+
+        for item in self._stream_json_request("POST", "/api/chat", payload):
+            yield OllamaChatChunk.from_dict(item)
+
     def require_native_verifier(self) -> None:
         raise NotImplementedError(self.capabilities().warning)
 
@@ -197,6 +292,42 @@ class OllamaHTTPAdapter:
             return {}
         return json.loads(raw.decode("utf-8"))
 
+    def _stream_json_request(
+        self,
+        method: str,
+        path: str,
+        payload: Optional[Mapping[str, Any]],
+    ) -> Iterable[dict[str, Any]]:
+        body = None
+        headers = {"Accept": "application/x-ndjson, application/json"}
+        if payload is not None:
+            body = json.dumps(payload).encode("utf-8")
+            headers["Content-Type"] = "application/json"
+
+        req = request.Request(
+            self.endpoint + path,
+            data=body,
+            headers=headers,
+            method=method,
+        )
+        try:
+            with self._opener(req, timeout=self.timeout) as response:
+                status = int(getattr(response, "status", getattr(response, "code", 200)))
+                if status < 200 or status >= 300:
+                    raw = response.read()
+                    message = raw.decode("utf-8", errors="replace").strip()
+                    raise OllamaHTTPError(f"Ollama returned HTTP {status}: {message}")
+                for line in iter_response_lines(response):
+                    if not line:
+                        continue
+                    yield json.loads(line.decode("utf-8"))
+        except error.HTTPError as exc:
+            raw = exc.read()
+            message = raw.decode("utf-8", errors="replace").strip()
+            raise OllamaHTTPError(f"Ollama returned HTTP {exc.code}: {message}") from exc
+        except error.URLError as exc:
+            raise OllamaHTTPError(f"Could not reach Ollama at {self.endpoint}: {exc.reason}") from exc
+
 
 def endpoint_from_env() -> str:
     return os.environ.get("OLLAMA_HOST", DEFAULT_OLLAMA_ENDPOINT)
@@ -207,3 +338,32 @@ def normalize_endpoint(endpoint: str) -> str:
     if endpoint.startswith("http://") or endpoint.startswith("https://"):
         return endpoint
     return "http://" + endpoint
+
+
+def model_is_installed(model: str, installed_models: Iterable[str]) -> bool:
+    requested = normalize_model_name(model)
+    for installed in installed_models:
+        if normalize_model_name(installed) == requested:
+            return True
+    return False
+
+
+def normalize_model_name(model: str) -> str:
+    model = str(model).strip()
+    if ":" not in model:
+        return model + ":latest"
+    return model
+
+
+def iter_response_lines(response) -> Iterable[bytes]:
+    readline = getattr(response, "readline", None)
+    if callable(readline):
+        while True:
+            line = readline()
+            if not line:
+                break
+            yield line.strip()
+        return
+    raw = response.read()
+    for line in raw.splitlines():
+        yield line.strip()
