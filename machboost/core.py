@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, Optional, Protocol, Sequence, Tuple, Union, runtime_checkable
+from typing import Callable, Iterable, Optional, Protocol, Sequence, Tuple, Union, runtime_checkable
 
 Token = int
 TokenSeq = Sequence[Token]
@@ -166,6 +166,7 @@ class BoostedService:
         *,
         max_tokens: int,
         stop_tokens: Optional[Iterable[Token]] = None,
+        on_tokens: Optional[Callable[[Tuple[Token, ...]], None]] = None,
     ) -> Tuple[Tuple[Token, ...], RunStats]:
         prompt = tuple(int(token) for token in prompt_tokens)
         stop_set = {int(token) for token in stop_tokens or ()}
@@ -204,6 +205,8 @@ class BoostedService:
                         if visible_tokens:
                             generated.extend(visible_tokens)
                             self.drafter.observe(visible_tokens)
+                            if on_tokens is not None:
+                                on_tokens(visible_tokens)
                             accepted_draft_tokens += len(visible_tokens)
                             accepted_draft_spans += 1
                         committed = True
@@ -221,6 +224,8 @@ class BoostedService:
                         break
                     generated.append(fallback_residual)
                     self.drafter.observe((fallback_residual,))
+                    if on_tokens is not None:
+                        on_tokens((fallback_residual,))
                     continue
 
             token = self.service.next_token(prefix)
@@ -231,6 +236,8 @@ class BoostedService:
                 break
             generated.append(int(token))
             self.drafter.observe((int(token),))
+            if on_tokens is not None:
+                on_tokens((int(token),))
 
         target_calls = verify_calls + next_token_calls
         stats = RunStats(
@@ -299,8 +306,14 @@ class MachBoost:
         *,
         max_tokens: int,
         stop_tokens: Optional[Iterable[Token]] = None,
+        on_tokens: Optional[Callable[[Tuple[Token, ...]], None]] = None,
     ) -> Tuple[Tuple[Token, ...], RunStats]:
-        return self.wrap(service).generate(prompt_tokens, max_tokens=max_tokens, stop_tokens=stop_tokens)
+        return self.wrap(service).generate(
+            prompt_tokens,
+            max_tokens=max_tokens,
+            stop_tokens=stop_tokens,
+            on_tokens=on_tokens,
+        )
 
 
 def machboost(
