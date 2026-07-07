@@ -140,7 +140,7 @@ class CLITests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("machboost run: Qwen/Qwen2.5-3B-Instruct", output.getvalue())
         self.assertIn("native response", output.getvalue())
-        self.assertIn("estimated_speedup=2.50x", errors.getvalue())
+        self.assertIn("estimated_speedup=2.50x", output.getvalue())
         self.assertEqual(FakeAccelerator.calls[-1][0], "hf")
         self.assertEqual(FakeAccelerator.calls[-1][2]["context_paths"], ["README.md"])
         self.assertEqual(FakeAccelerator.instances[-1].messages[-1][0][0]["role"], "system")
@@ -230,6 +230,7 @@ def write_cached_model(cache_dir, model_id, config):
 
 
 class FakeStats:
+    generated_tokens = 5
     accepted_draft_tokens = 3
     target_calls = 2
     baseline_target_calls = 5
@@ -263,8 +264,11 @@ class FakeAccelerator:
         cls.calls.append(("mlx", model, kwargs))
         return cls("mlx", model, kwargs)
 
-    def generate_chat(self, messages, max_tokens=128):
+    def generate_chat(self, messages, max_tokens=128, on_text=None):
         self.messages.append((messages, max_tokens))
+        if on_text is not None:
+            on_text("native ")
+            on_text("response")
         return "native response", FakeStats()
 
     def generate(self, prompt, max_tokens=128):
