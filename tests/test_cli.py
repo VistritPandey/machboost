@@ -1,7 +1,9 @@
 import io
 import json
+import tempfile
 import unittest
 from contextlib import redirect_stdout
+from pathlib import Path
 from unittest.mock import patch
 
 from machboost import __version__
@@ -44,6 +46,52 @@ class CLITests(unittest.TestCase):
         data = json.loads(output.getvalue())
         self.assertEqual(code, 0)
         self.assertTrue(data["ok"])
+
+    def test_model_list_data_detects_cached_native_models(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_dir = Path(tmp)
+            write_cached_model(
+                cache_dir,
+                "Qwen/Qwen2.5-3B-Instruct",
+                {"architectures": ["Qwen2ForCausalLM"], "model_type": "qwen2"},
+            )
+            write_cached_model(
+                cache_dir,
+                "mlx-community/Qwen3.5-0.8B-MLX-4bit",
+                {"architectures": ["Qwen3ForCausalLM"], "model_type": "qwen3"},
+            )
+            write_cached_model(
+                cache_dir,
+                "thenlper/gte-base",
+                {"architectures": ["BertModel"], "model_type": "bert"},
+            )
+
+            data = cli.model_list_data(cache_dirs=[str(cache_dir)])
+            names = {model["name"] for model in data["models"]}
+
+        self.assertEqual(data["schema_version"], "machboost.model_list.v1")
+        self.assertIn("Qwen/Qwen2.5-3B-Instruct", names)
+        self.assertIn("mlx-community/Qwen3.5-0.8B-MLX-4bit", names)
+        self.assertNotIn("thenlper/gte-base", names)
+        self.assertEqual(data["hidden_unsupported_count"], 1)
+
+    def test_main_list_json_can_show_unsupported_cached_models(self):
+        output = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_dir = Path(tmp)
+            write_cached_model(
+                cache_dir,
+                "thenlper/gte-base",
+                {"architectures": ["BertModel"], "model_type": "bert"},
+            )
+
+            with redirect_stdout(output):
+                code = main(["list", "--cache-dir", str(cache_dir), "--all", "--json"])
+
+        data = json.loads(output.getvalue())
+        self.assertEqual(code, 0)
+        self.assertEqual(data["models"][0]["name"], "thenlper/gte-base")
+        self.assertFalse(data["models"][0]["runnable"])
 
     def test_select_native_backend_prefers_mlx_for_mlx_models(self):
         self.assertEqual(cli.select_native_backend("mlx-community/Qwen3.5-0.8B-MLX-4bit", "auto"), "mlx")
@@ -172,6 +220,12 @@ class FakeOllamaAdapter:
 class InstalledFakeOllamaAdapter(FakeOllamaAdapter):
     def has_model(self):
         return True
+
+
+def write_cached_model(cache_dir, model_id, config):
+    snapshot = cache_dir / ("models--" + model_id.replace("/", "--")) / "snapshots" / "abc123"
+    snapshot.mkdir(parents=True)
+    (snapshot / "config.json").write_text(json.dumps(config), encoding="utf-8")
 
 
 class FakeStats:
