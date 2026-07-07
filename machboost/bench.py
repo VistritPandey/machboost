@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import time
-from typing import Any, Iterable, Mapping, Optional, Tuple
+from typing import Any, Callable, Iterable, Mapping, Optional, Tuple
 
 from .core import (
     DEFAULT_MAX_DRAFT_TOKENS,
@@ -168,6 +168,7 @@ def measure_baseline(
     *,
     max_tokens: int,
     stop_tokens: Optional[Iterable[Token]] = None,
+    on_tokens: Optional[Callable[[Tuple[Token, ...]], None]] = None,
 ) -> GenerationMeasurement:
     _reset_service(service)
     stop_set = {int(token) for token in stop_tokens or ()}
@@ -180,6 +181,8 @@ def measure_baseline(
         if stop_set and int(token) in stop_set:
             break
         generated.append(int(token))
+        if on_tokens is not None:
+            on_tokens((int(token),))
     elapsed_ms = (time.perf_counter() - started) * 1000
     tokens = tuple(generated)
     forward_calls = _forward_calls(service, fallback=len(tokens))
