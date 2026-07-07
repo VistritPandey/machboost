@@ -173,13 +173,31 @@ tokens, stats = boosted.generate(prompt_tokens, max_tokens=128)
 
 ### CLI
 
-The Python package currently exposes lightweight install checks:
+The Python package exposes a native model runner:
+
+```sh
+machboost run mlx-community/Qwen3.5-0.8B-MLX-4bit --backend mlx --context ./docs --show-stats
+machboost run Qwen/Qwen2.5-3B-Instruct --backend hf --context ./src --local-files-only
+```
+
+`machboost run MODEL` loads a Hugging Face or MLX model, builds a draft corpus from local context files or directories, and opens an interactive chat. If a model is not cached, the selected backend may download it through its normal loader. This is the product-facing local runner path.
+
+The package also exposes lightweight install checks:
 
 ```sh
 machboost doctor
 machboost self-test
 machboost version
 ```
+
+The Ollama-compatible HTTP wrapper is available separately:
+
+```sh
+machboost ollama run qwen2.5:3b
+machboost chat qwen2.5:3b
+```
+
+That wrapper can pull and chat with Ollama models, but it is not the native verifier-accelerated path.
 
 The Go CLI remains available from source for local systems experiments:
 
