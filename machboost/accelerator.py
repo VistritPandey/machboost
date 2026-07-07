@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Optional, Sequence, Tuple, Union
+from typing import Any, Callable, Iterable, Optional, Sequence, Tuple, Union
 
 from .bench import BenchmarkResult, GatePolicy, benchmark as benchmark_service, measure_baseline, summarize_results
 from .core import (
@@ -172,6 +172,7 @@ class Accelerator:
         context: Optional[Union[Iterable[str], str]] = None,
         stop_tokens: Optional[Iterable[Token]] = None,
         stop_strings: Optional[Iterable[str]] = None,
+        on_text: Optional[Callable[[str], None]] = None,
     ):
         result = self.generate_result(
             prompt,
@@ -179,6 +180,7 @@ class Accelerator:
             context=context,
             stop_tokens=stop_tokens,
             stop_strings=stop_strings,
+            on_text=on_text,
         )
         return result.text, result.stats
 
@@ -188,16 +190,21 @@ class Accelerator:
         *,
         max_tokens: int = 128,
         context: Optional[Union[Iterable[str], str]] = None,
+        on_text: Optional[Callable[[str], None]] = None,
     ):
         prompt = render_chat_prompt(self.service, messages)
         stop_tokens = service_stop_token_ids(self.service)
+        streamer = ChatTextStreamer(on_text, CHAT_STOP_STRINGS) if on_text is not None else None
         result = self.generate_result(
             prompt,
             max_tokens=max_tokens,
             context=context,
             stop_tokens=stop_tokens,
             stop_strings=CHAT_STOP_STRINGS,
+            on_text=streamer.push if streamer is not None else None,
         )
+        if streamer is not None:
+            streamer.finish()
         return clean_chat_response(result.text), result.stats
 
     def generate_result(
@@ -208,19 +215,20 @@ class Accelerator:
         context: Optional[Union[Iterable[str], str]] = None,
         stop_tokens: Optional[Iterable[Token]] = None,
         stop_strings: Optional[Iterable[str]] = None,
+        on_text: Optional[Callable[[str], None]] = None,
     ) -> AcceleratorResult:
         prompt_tokens = self.service.encode(prompt)
-        if not self.boost_enabled:
-            measurement = measure_baseline(
-                self.service,
+        on_tokens = self._on_tokens(on_text)
+        run_context_tokens = self.context_tokens + self._encode_many(resolve_context(context))
+        if not self.boost_enabled or (not run_context_tokens and callable(getattr(self.service, "generate_tokens", None))):
+            return self._generate_serial_result(
                 prompt_tokens,
                 max_tokens=max_tokens,
                 stop_tokens=stop_tokens,
+                stop_strings=stop_strings,
+                on_tokens=on_tokens,
             )
-            text = truncate_at_stop_strings(measurement.text, stop_strings)
-            return AcceleratorResult(text=text, tokens=measurement.tokens, stats=measurement.stats)
 
-        run_context_tokens = self.context_tokens + self._encode_many(resolve_context(context))
         corpus_tokens = tuple(prompt_tokens) + run_context_tokens
         reset_cache = getattr(self.service, "reset_cache", None)
         if callable(reset_cache):
@@ -234,7 +242,12 @@ class Accelerator:
             max_draft_tokens=self.max_draft_tokens,
             candidate_limit=self.candidate_limit,
         )
-        tokens, stats = boosted.generate(prompt_tokens, max_tokens=max_tokens, stop_tokens=stop_tokens)
+        tokens, stats = boosted.generate(
+            prompt_tokens,
+            max_tokens=max_tokens,
+            stop_tokens=stop_tokens,
+            on_tokens=on_tokens,
+        )
         text = truncate_at_stop_strings(self.service.decode(tokens), stop_strings)
         return AcceleratorResult(text=text, tokens=tokens, stats=stats)
 
@@ -287,6 +300,68 @@ class Accelerator:
         for text in texts:
             tokens.extend(self.service.encode(text))
         return tuple(tokens)
+
+    def _on_tokens(self, on_text: Optional[Callable[[str], None]]):
+        if on_text is None:
+            return None
+
+        def emit(tokens: Tuple[Token, ...]) -> None:
+            text = self.service.decode(tokens)
+            if text:
+                on_text(text)
+
+        return emit
+
+    def _generate_serial_result(
+        self,
+        prompt_tokens: Tuple[Token, ...],
+        *,
+        max_tokens: int,
+        stop_tokens: Optional[Iterable[Token]],
+        stop_strings: Optional[Iterable[str]],
+        on_tokens,
+    ) -> AcceleratorResult:
+        reset_cache = getattr(self.service, "reset_cache", None)
+        if callable(reset_cache):
+            reset_cache()
+        if hasattr(self.service, "forward_calls"):
+            self.service.forward_calls = 0
+
+        generate_tokens = getattr(self.service, "generate_tokens", None)
+        if callable(generate_tokens):
+            tokens = tuple(
+                generate_tokens(
+                    prompt_tokens,
+                    max_tokens=max_tokens,
+                    stop_tokens=stop_tokens,
+                    on_tokens=on_tokens,
+                )
+            )
+            target_calls = int(getattr(self.service, "forward_calls", len(tokens)))
+        else:
+            measurement = measure_baseline(
+                self.service,
+                prompt_tokens,
+                max_tokens=max_tokens,
+                stop_tokens=stop_tokens,
+                on_tokens=on_tokens,
+            )
+            tokens = measurement.tokens
+            target_calls = measurement.target_calls
+
+        stats = RunStats(
+            generated_tokens=len(tokens),
+            baseline_target_calls=target_calls,
+            target_calls=target_calls,
+            verify_calls=0,
+            next_token_calls=target_calls,
+            candidate_rounds=0,
+            accepted_draft_tokens=0,
+            accepted_draft_spans=0,
+            rejected_candidates=0,
+        )
+        text = truncate_at_stop_strings(self.service.decode(tokens), stop_strings)
+        return AcceleratorResult(text=text, tokens=tokens, stats=stats)
 
 
 def resolve_context(context: Optional[Union[Iterable[str], str]], *, max_chars: int = 200_000) -> list[str]:
@@ -445,3 +520,67 @@ def clean_chat_response(text: str) -> str:
         while text.startswith(prefix):
             text = text[len(prefix) :].lstrip()
     return text
+
+
+class ChatTextStreamer:
+    def __init__(self, emit: Callable[[str], None], stop_strings: Iterable[str]) -> None:
+        self.emit = emit
+        self.stop_strings = tuple(stop for stop in stop_strings if stop)
+        self.prefixes = ("Assistant:", "assistant:")
+        self.max_stop_len = max([len(stop) for stop in self.stop_strings] + [1])
+        self.buffer = ""
+        self.started = False
+        self.stopped = False
+
+    def push(self, text: str) -> None:
+        if self.stopped or not text:
+            return
+        self.buffer += text
+        self._strip_leading_role_prefix()
+        self._emit_safe_text()
+
+    def finish(self) -> None:
+        if self.stopped:
+            return
+        self._strip_leading_role_prefix(force=True)
+        final = truncate_at_stop_strings(self.buffer, self.stop_strings)
+        if final:
+            self.emit(final)
+        self.buffer = ""
+
+    def _strip_leading_role_prefix(self, *, force: bool = False) -> None:
+        if self.started:
+            return
+        stripped = self.buffer.lstrip()
+        for prefix in self.prefixes:
+            if stripped.startswith(prefix):
+                self.buffer = stripped[len(prefix) :].lstrip()
+                self.started = True
+                return
+        if not force and any(prefix.startswith(stripped) for prefix in self.prefixes):
+            return
+        self.buffer = stripped
+        self.started = True
+
+    def _emit_safe_text(self) -> None:
+        stop_index = first_stop_index(self.buffer, self.stop_strings)
+        if stop_index is not None:
+            if stop_index > 0:
+                self.emit(self.buffer[:stop_index])
+            self.buffer = ""
+            self.stopped = True
+            return
+
+        keep = max(0, self.max_stop_len - 1)
+        safe_len = len(self.buffer) - keep
+        if safe_len <= 0:
+            return
+        self.emit(self.buffer[:safe_len])
+        self.buffer = self.buffer[safe_len:]
+
+
+def first_stop_index(text: str, stop_strings: Iterable[str]) -> Optional[int]:
+    indexes = [text.find(stop) for stop in stop_strings if stop and text.find(stop) >= 0]
+    if not indexes:
+        return None
+    return min(indexes)
