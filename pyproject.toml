@@ -48,6 +48,11 @@ all = [
 [project.scripts]
 machboost = "machboost.cli:main"
 
+[project.urls]
+Homepage = "https://github.com/VistritPandey/machboost"
+Repository = "https://github.com/VistritPandey/machboost"
+Issues = "https://github.com/VistritPandey/machboost/issues"
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["machboost*"]
