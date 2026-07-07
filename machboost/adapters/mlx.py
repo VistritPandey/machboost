@@ -95,6 +95,31 @@ class MLXCausalLMService:
         logits = self._logits(prefix_tokens)
         return self._argmax(self._last_row(logits))
 
+    def generate_tokens(
+        self,
+        prompt_tokens: TokenSeq,
+        *,
+        max_tokens: int,
+        stop_tokens: Optional[Iterable[Token]] = None,
+        on_tokens=None,
+    ) -> Tuple[Token, ...]:
+        if len(prompt_tokens) == 0 or max_tokens <= 0:
+            return ()
+        self.reset_cache()
+        stop_set = {int(token) for token in stop_tokens or ()}
+        generated: list[Token] = []
+        for _ in range(max_tokens):
+            token = self.next_token(tuple(prompt_tokens) + tuple(generated))
+            if token is None:
+                break
+            token = int(token)
+            if token in stop_set:
+                break
+            generated.append(token)
+            if on_tokens is not None:
+                on_tokens((token,))
+        return tuple(generated)
+
     def verify(self, prefix_tokens: TokenSeq, candidate_tokens: TokenSeq) -> Tuple[int, Optional[Token]]:
         result = self.verification(prefix_tokens, candidate_tokens)
         return result.accepted, result.residual_token
