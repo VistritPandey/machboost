@@ -162,13 +162,22 @@ def benchmark_cases(
     )
 
 
-def measure_baseline(service, prompt_tokens: TokenSeq, *, max_tokens: int) -> GenerationMeasurement:
+def measure_baseline(
+    service,
+    prompt_tokens: TokenSeq,
+    *,
+    max_tokens: int,
+    stop_tokens: Optional[Iterable[Token]] = None,
+) -> GenerationMeasurement:
     _reset_service(service)
+    stop_set = {int(token) for token in stop_tokens or ()}
     generated: list[Token] = []
     started = time.perf_counter()
     while len(generated) < max_tokens:
         token = service.next_token(tuple(prompt_tokens) + tuple(generated))
         if token is None:
+            break
+        if stop_set and int(token) in stop_set:
             break
         generated.append(int(token))
     elapsed_ms = (time.perf_counter() - started) * 1000
