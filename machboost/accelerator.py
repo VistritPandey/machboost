@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Optional, Tuple, Union
+from typing import Any, Iterable, Optional, Sequence, Tuple, Union
 
 from .bench import BenchmarkResult, GatePolicy, benchmark as benchmark_service, measure_baseline, summarize_results
 from .core import (
@@ -164,9 +164,41 @@ class Accelerator:
             boost_enabled=boost_enabled,
         )
 
-    def generate(self, prompt: str, *, max_tokens: int = 128, context: Optional[Union[Iterable[str], str]] = None):
-        result = self.generate_result(prompt, max_tokens=max_tokens, context=context)
+    def generate(
+        self,
+        prompt: str,
+        *,
+        max_tokens: int = 128,
+        context: Optional[Union[Iterable[str], str]] = None,
+        stop_tokens: Optional[Iterable[Token]] = None,
+        stop_strings: Optional[Iterable[str]] = None,
+    ):
+        result = self.generate_result(
+            prompt,
+            max_tokens=max_tokens,
+            context=context,
+            stop_tokens=stop_tokens,
+            stop_strings=stop_strings,
+        )
         return result.text, result.stats
+
+    def generate_chat(
+        self,
+        messages: Sequence[dict[str, str]],
+        *,
+        max_tokens: int = 128,
+        context: Optional[Union[Iterable[str], str]] = None,
+    ):
+        prompt = render_chat_prompt(self.service, messages)
+        stop_tokens = service_stop_token_ids(self.service)
+        result = self.generate_result(
+            prompt,
+            max_tokens=max_tokens,
+            context=context,
+            stop_tokens=stop_tokens,
+            stop_strings=CHAT_STOP_STRINGS,
+        )
+        return clean_chat_response(result.text), result.stats
 
     def generate_result(
         self,
@@ -174,11 +206,19 @@ class Accelerator:
         *,
         max_tokens: int = 128,
         context: Optional[Union[Iterable[str], str]] = None,
+        stop_tokens: Optional[Iterable[Token]] = None,
+        stop_strings: Optional[Iterable[str]] = None,
     ) -> AcceleratorResult:
         prompt_tokens = self.service.encode(prompt)
         if not self.boost_enabled:
-            measurement = measure_baseline(self.service, prompt_tokens, max_tokens=max_tokens)
-            return AcceleratorResult(text=measurement.text, tokens=measurement.tokens, stats=measurement.stats)
+            measurement = measure_baseline(
+                self.service,
+                prompt_tokens,
+                max_tokens=max_tokens,
+                stop_tokens=stop_tokens,
+            )
+            text = truncate_at_stop_strings(measurement.text, stop_strings)
+            return AcceleratorResult(text=text, tokens=measurement.tokens, stats=measurement.stats)
 
         run_context_tokens = self.context_tokens + self._encode_many(resolve_context(context))
         corpus_tokens = tuple(prompt_tokens) + run_context_tokens
@@ -194,8 +234,9 @@ class Accelerator:
             max_draft_tokens=self.max_draft_tokens,
             candidate_limit=self.candidate_limit,
         )
-        tokens, stats = boosted.generate(prompt_tokens, max_tokens=max_tokens)
-        return AcceleratorResult(text=self.service.decode(tokens), tokens=tokens, stats=stats)
+        tokens, stats = boosted.generate(prompt_tokens, max_tokens=max_tokens, stop_tokens=stop_tokens)
+        text = truncate_at_stop_strings(self.service.decode(tokens), stop_strings)
+        return AcceleratorResult(text=text, tokens=tokens, stats=stats)
 
     def benchmark(
         self,
@@ -304,3 +345,103 @@ def _iter_text_files(path: Path) -> Iterable[Path]:
             continue
         if item.is_file() and item.suffix.lower() in TEXT_SUFFIXES:
             yield item
+
+
+CHAT_STOP_STRINGS = (
+    "<|im_end|>",
+    "<|endoftext|>",
+    "</s>",
+    "\nUser:",
+    "\nuser:",
+    "\nAssistant:",
+    "\nassistant:",
+)
+
+
+def render_chat_prompt(service, messages: Sequence[dict[str, str]]) -> str:
+    tokenizer = getattr(service, "tokenizer", None)
+    apply_chat_template = getattr(tokenizer, "apply_chat_template", None)
+    if callable(apply_chat_template):
+        try:
+            rendered = apply_chat_template(
+                list(messages),
+                tokenize=False,
+                add_generation_prompt=True,
+                enable_thinking=False,
+            )
+            if rendered:
+                return str(rendered)
+        except Exception:
+            pass
+    return fallback_chat_prompt(messages)
+
+
+def fallback_chat_prompt(messages: Sequence[dict[str, str]]) -> str:
+    lines: list[str] = []
+    for message in messages:
+        role = message.get("role", "user").strip().capitalize()
+        content = message.get("content", "")
+        lines.append(f"{role}: {content}")
+    lines.append("Assistant:")
+    return "\n".join(lines)
+
+
+def service_stop_token_ids(service) -> Tuple[Token, ...]:
+    tokenizer = getattr(service, "tokenizer", None)
+    if tokenizer is None:
+        return ()
+
+    ids: set[int] = set()
+    for value in (
+        getattr(tokenizer, "eos_token_id", None),
+        getattr(tokenizer, "pad_token_id", None),
+    ):
+        add_token_id(ids, value)
+    add_token_id(ids, getattr(tokenizer, "eos_token_ids", None))
+    add_token_id(ids, getattr(tokenizer, "all_special_ids", None))
+
+    convert = getattr(tokenizer, "convert_tokens_to_ids", None)
+    unk_id = getattr(tokenizer, "unk_token_id", None)
+    if callable(convert):
+        for token in ("<|im_end|>", "<|endoftext|>", "</s>"):
+            try:
+                token_id = convert(token)
+            except Exception:
+                continue
+            if token_id is not None and token_id != unk_id:
+                add_token_id(ids, token_id)
+    return tuple(sorted(ids))
+
+
+def add_token_id(ids: set[int], value) -> None:
+    if value is None:
+        return
+    if isinstance(value, (list, tuple, set)):
+        for item in value:
+            add_token_id(ids, item)
+        return
+    try:
+        ids.add(int(value))
+    except (TypeError, ValueError):
+        return
+
+
+def truncate_at_stop_strings(text: str, stop_strings: Optional[Iterable[str]]) -> str:
+    if not stop_strings:
+        return text
+    end = len(text)
+    for stop in stop_strings:
+        if not stop:
+            continue
+        index = text.find(stop)
+        if index >= 0:
+            end = min(end, index)
+    return text[:end]
+
+
+def clean_chat_response(text: str) -> str:
+    text = text.strip()
+    for prefix in ("Assistant:", "assistant:"):
+        while text.startswith(prefix):
+            text = text[len(prefix) :].lstrip()
+    return text
