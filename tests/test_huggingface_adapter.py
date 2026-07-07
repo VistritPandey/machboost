@@ -1,36 +1,42 @@
+import importlib.util
 import unittest
 
-import torch
+if importlib.util.find_spec("torch") is None:
+    torch = None
+else:
+    import torch
 
 from machboost import machboost
 from machboost.adapters import HuggingFaceCausalLMService
 
 
-class Output:
-    def __init__(self, logits):
-        self.logits = logits
+if torch is not None:
+    class Output:
+        def __init__(self, logits):
+            self.logits = logits
 
 
-class TinyCausalModel(torch.nn.Module):
-    def __init__(self, target_tokens, prompt_len):
-        super().__init__()
-        self.target_tokens = tuple(target_tokens)
-        self.prompt_len = prompt_len
-        self.vocab_size = max(self.target_tokens + (0,)) + 8
-        self.dummy = torch.nn.Parameter(torch.zeros(()))
+    class TinyCausalModel(torch.nn.Module):
+        def __init__(self, target_tokens, prompt_len):
+            super().__init__()
+            self.target_tokens = tuple(target_tokens)
+            self.prompt_len = prompt_len
+            self.vocab_size = max(self.target_tokens + (0,)) + 8
+            self.dummy = torch.nn.Parameter(torch.zeros(()))
 
-    def forward(self, input_ids):
-        batch, seqlen = input_ids.shape
-        logits = torch.zeros(batch, seqlen, self.vocab_size, device=input_ids.device)
-        for pos in range(seqlen):
-            target_offset = pos - self.prompt_len + 1
-            token = 0
-            if 0 <= target_offset < len(self.target_tokens):
-                token = self.target_tokens[target_offset]
-            logits[:, pos, token] = 10.0
-        return Output(logits)
+        def forward(self, input_ids):
+            batch, seqlen = input_ids.shape
+            logits = torch.zeros(batch, seqlen, self.vocab_size, device=input_ids.device)
+            for pos in range(seqlen):
+                target_offset = pos - self.prompt_len + 1
+                token = 0
+                if 0 <= target_offset < len(self.target_tokens):
+                    token = self.target_tokens[target_offset]
+                logits[:, pos, token] = 10.0
+            return Output(logits)
 
 
+@unittest.skipIf(torch is None, "torch is not installed")
 class HuggingFaceAdapterTest(unittest.TestCase):
     def test_next_token_uses_last_logits(self):
         service = HuggingFaceCausalLMService(TinyCausalModel((1, 2, 3), prompt_len=3))
