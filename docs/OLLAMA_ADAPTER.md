@@ -44,6 +44,8 @@ Useful for:
 - Diagnostics.
 - Setting options like `draft_num_predict`.
 - Choosing prompts and context.
+- Pulling missing models through `/api/pull`.
+- Interactive chat through streaming `/api/chat`.
 - Recording acceptance-like proxy metrics when available.
 
 Not enough for:
@@ -53,6 +55,15 @@ Not enough for:
 - Exact output preservation under candidate acceptance.
 
 The public API does not expose the target logits and cache controls needed to accept or reject drafted tokens safely.
+
+MachBoost exposes this wrapper through:
+
+```sh
+machboost ollama run qwen2.5:3b
+machboost chat qwen2.5:3b
+```
+
+The flow mirrors the common `ollama run MODEL` experience: check installed models with `/api/tags`, pull a missing model with `/api/pull`, then stream chat responses with `/api/chat`. It intentionally remains wrapper mode.
 
 ### GGUF / llama-server Track
 
