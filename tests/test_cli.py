@@ -45,6 +45,58 @@ class CLITests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertTrue(data["ok"])
 
+    def test_select_native_backend_prefers_mlx_for_mlx_models(self):
+        self.assertEqual(cli.select_native_backend("mlx-community/Qwen3.5-0.8B-MLX-4bit", "auto"), "mlx")
+        self.assertEqual(cli.select_native_backend("Qwen/Qwen2.5-3B-Instruct", "auto"), "hf")
+        self.assertEqual(cli.select_native_backend("mlx-community/Qwen3.5-0.8B-MLX-4bit", "hf"), "hf")
+
+    def test_render_chat_prompt_includes_system_and_history(self):
+        prompt = cli.render_chat_prompt(
+            "Answer with local context.",
+            [
+                {"role": "user", "content": "hello"},
+                {"role": "assistant", "content": "hi"},
+                {"role": "user", "content": "continue"},
+            ],
+        )
+
+        self.assertIn("System: Answer with local context.", prompt)
+        self.assertIn("User: hello", prompt)
+        self.assertIn("Assistant: hi", prompt)
+        self.assertTrue(prompt.endswith("Assistant:"))
+
+    def test_native_run_loads_hf_model_and_chats(self):
+        output = io.StringIO()
+        errors = io.StringIO()
+        prompts = iter(["hello", "/bye"])
+        FakeAccelerator.reset()
+
+        with patch.object(cli, "Accelerator", FakeAccelerator):
+            code = cli.run_native_chat(
+                cli.build_parser().parse_args(
+                    [
+                        "run",
+                        "Qwen/Qwen2.5-3B-Instruct",
+                        "--backend",
+                        "hf",
+                        "--context",
+                        "README.md",
+                        "--show-stats",
+                    ]
+                ),
+                input_func=lambda prompt: next(prompts),
+                output_stream=output,
+                error_stream=errors,
+            )
+
+        self.assertEqual(code, 0)
+        self.assertIn("machboost run: Qwen/Qwen2.5-3B-Instruct", output.getvalue())
+        self.assertIn("native response", output.getvalue())
+        self.assertIn("estimated_speedup=2.50x", errors.getvalue())
+        self.assertEqual(FakeAccelerator.calls[-1][0], "hf")
+        self.assertEqual(FakeAccelerator.calls[-1][2]["context_paths"], ["README.md"])
+        self.assertIn("User: hello", FakeAccelerator.instances[-1].prompts[-1][0])
+
     def test_ollama_chat_shortcut_pulls_missing_model_and_streams_response(self):
         output = io.StringIO()
         errors = io.StringIO()
@@ -120,6 +172,44 @@ class FakeOllamaAdapter:
 class InstalledFakeOllamaAdapter(FakeOllamaAdapter):
     def has_model(self):
         return True
+
+
+class FakeStats:
+    accepted_draft_tokens = 3
+    target_calls = 2
+    baseline_target_calls = 5
+    estimated_speedup = 2.5
+
+
+class FakeAccelerator:
+    calls = []
+    instances = []
+
+    def __init__(self, backend, model, kwargs):
+        self.backend = backend
+        self.model = model
+        self.kwargs = kwargs
+        self.prompts = []
+        self.instances.append(self)
+
+    @classmethod
+    def reset(cls):
+        cls.calls = []
+        cls.instances = []
+
+    @classmethod
+    def from_huggingface(cls, model, **kwargs):
+        cls.calls.append(("hf", model, kwargs))
+        return cls("hf", model, kwargs)
+
+    @classmethod
+    def from_mlx(cls, model, **kwargs):
+        cls.calls.append(("mlx", model, kwargs))
+        return cls("mlx", model, kwargs)
+
+    def generate(self, prompt, max_tokens=128):
+        self.prompts.append((prompt, max_tokens))
+        return "native response", FakeStats()
 
 
 if __name__ == "__main__":
