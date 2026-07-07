@@ -9,6 +9,7 @@ from dataclasses import asdict, dataclass
 from typing import Optional, Sequence
 
 from . import __version__, machboost
+from .adapters.ollama import OllamaHTTPAdapter, OllamaHTTPError
 
 
 @dataclass(frozen=True)
@@ -128,6 +129,110 @@ def print_human_self_test(data: dict) -> None:
     print(f"estimated speedup: {data['estimated_speedup']:.2f}x")
 
 
+def ollama_options(args: argparse.Namespace) -> dict:
+    options = {}
+    if args.temperature is not None:
+        options["temperature"] = float(args.temperature)
+    if args.ctx is not None:
+        options["num_ctx"] = int(args.ctx)
+    if args.num_predict is not None:
+        options["num_predict"] = int(args.num_predict)
+    return options
+
+
+def print_pull_status(status, *, stream=None) -> None:
+    stream = stream or sys.stderr
+    if status.total > 0:
+        percent = int(status.progress * 100)
+        print(f"pull: {status.status} {percent}%", file=stream)
+        return
+    if status.status:
+        print(f"pull: {status.status}", file=stream)
+
+
+def ensure_ollama_model(adapter: OllamaHTTPAdapter, *, no_pull: bool = False, stream=None) -> None:
+    stream = stream or sys.stderr
+    if adapter.has_model():
+        return
+    if no_pull:
+        raise OllamaHTTPError(
+            f"Model {adapter.model!r} is not installed. Run without --no-pull or use `ollama pull {adapter.model}`."
+        )
+    print(f"model {adapter.model!r} is not installed; pulling with Ollama...", file=stream)
+    last_status = None
+    for status in adapter.pull():
+        last_status = status
+        print_pull_status(status, stream=stream)
+    if last_status is None:
+        print("pull: completed", file=stream)
+
+
+def run_ollama_chat(
+    args: argparse.Namespace,
+    *,
+    input_func=input,
+    output_stream=None,
+    error_stream=None,
+) -> int:
+    output_stream = output_stream or sys.stdout
+    error_stream = error_stream or sys.stderr
+    adapter = OllamaHTTPAdapter(args.model, endpoint=args.endpoint, timeout=args.timeout)
+    options = ollama_options(args)
+    messages: list[dict[str, str]] = []
+    if args.system:
+        messages.append({"role": "system", "content": args.system})
+
+    try:
+        ensure_ollama_model(adapter, no_pull=args.no_pull, stream=error_stream)
+    except OllamaHTTPError as exc:
+        print(f"ollama error: {exc}", file=error_stream)
+        print("Make sure Ollama is installed and running. Try `ollama serve` in another terminal.", file=error_stream)
+        return 2
+
+    print(f"machboost ollama wrapper: {adapter.model}", file=output_stream)
+    print("Type /bye, /exit, or /quit to leave. Type /clear to reset chat history.", file=output_stream)
+
+    while True:
+        try:
+            prompt = input_func(">>> ")
+        except EOFError:
+            print("", file=output_stream)
+            return 0
+        except KeyboardInterrupt:
+            print("", file=output_stream)
+            return 130
+
+        command = prompt.strip()
+        if not command:
+            continue
+        if command in {"/bye", "/exit", "/quit"}:
+            return 0
+        if command == "/clear":
+            messages = [message for message in messages if message.get("role") == "system"]
+            print("chat history cleared", file=output_stream)
+            continue
+
+        messages.append({"role": "user", "content": prompt})
+        chunks: list[str] = []
+        try:
+            for chunk in adapter.chat(messages, options=options):
+                if chunk.content:
+                    print(chunk.content, end="", flush=True, file=output_stream)
+                    chunks.append(chunk.content)
+                if chunk.done:
+                    break
+        except KeyboardInterrupt:
+            print("", file=output_stream)
+            return 130
+        except OllamaHTTPError as exc:
+            messages.pop()
+            print(f"\nollama error: {exc}", file=error_stream)
+            return 2
+
+        print("", file=output_stream)
+        messages.append({"role": "assistant", "content": "".join(chunks)})
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="MachBoost local inference acceleration utilities.")
     subcommands = parser.add_subparsers(dest="command")
@@ -138,8 +243,27 @@ def build_parser() -> argparse.ArgumentParser:
     self_test = subcommands.add_parser("self-test", help="Run an in-memory exactness smoke test.")
     self_test.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
 
+    chat = subcommands.add_parser("chat", help="Ollama-compatible interactive chat shortcut.")
+    add_ollama_run_arguments(chat)
+
+    ollama = subcommands.add_parser("ollama", help="Ollama-compatible wrapper commands.")
+    ollama_subcommands = ollama.add_subparsers(dest="ollama_command")
+    ollama_run = ollama_subcommands.add_parser("run", help="Pull if needed, then chat with a model.")
+    add_ollama_run_arguments(ollama_run)
+
     subcommands.add_parser("version", help="Print the installed MachBoost version.")
     return parser
+
+
+def add_ollama_run_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("model", help="Ollama model name, for example qwen2.5:3b or llama3.2.")
+    parser.add_argument("--endpoint", default=None, help="Ollama endpoint. Defaults to OLLAMA_HOST or localhost.")
+    parser.add_argument("--timeout", type=float, default=300.0, help="HTTP timeout in seconds.")
+    parser.add_argument("--no-pull", action="store_true", help="Fail if the model is missing instead of pulling it.")
+    parser.add_argument("--system", default="", help="Optional system message for the chat.")
+    parser.add_argument("--ctx", type=int, default=None, help="Ollama num_ctx option.")
+    parser.add_argument("--num-predict", type=int, default=None, help="Ollama num_predict option.")
+    parser.add_argument("--temperature", type=float, default=None, help="Ollama temperature option.")
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -162,6 +286,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if args.command == "version":
         print(__version__)
         return 0
+    if args.command == "chat":
+        return run_ollama_chat(args)
+    if args.command == "ollama" and args.ollama_command == "run":
+        return run_ollama_chat(args)
     parser.print_help()
     return 0
 
