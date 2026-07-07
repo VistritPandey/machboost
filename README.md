@@ -1,98 +1,67 @@
 # machboost
 
-`machboost` is a Mac-first CLI for running heavy local workloads under safe performance profiles. It is generic by design: LLM inference is the first smart preset, but the same runner works for builds, renders, exports, data jobs, and arbitrary commands.
+MachBoost is an experimental Python package for exact local-context speculative acceleration of local LLM inference.
 
-It does not claim to allocate fake hardware percentages like `gpu: 90%`. Instead it applies real local controls: keep-awake wrapping, per-process environment hints, diagnostics, benchmarking, and reusable YAML profiles.
+It drafts candidate tokens from nearby text such as prompts, retrieved chunks, repo files, policies, configs, and docs. A backend verifier then accepts only the tokens that match the target model's greedy continuation. When the local context predicts the next tokens well, MachBoost can reduce target-model calls without changing the generated token sequence.
 
-## Commands
+MachBoost is local-first and alpha-stage. It does not upload telemetry, mutate global runtime settings, change model weights, or claim universal speedups.
+
+## Install
+
+From a local checkout:
+
+```sh
+git clone <repo-url> machboost
+cd machboost
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e .
+```
+
+Install optional backends as needed:
+
+```sh
+pip install -e ".[mlx]"
+pip install -e ".[hf]"
+pip install -e ".[all]"
+```
+
+After publishing this repository on GitHub, users can install directly from GitHub:
+
+```sh
+pip install "machboost[mlx] @ git+https://github.com/<owner>/machboost.git"
+```
+
+Check the install:
 
 ```sh
 machboost doctor
-machboost doctor --json
-machboost run --profile sustained --workload generic -- echo ok
-machboost bench command -- sleep 1
-machboost bench compare --profile sustained --workload build --repeat 3 -- make test
-machboost bench ollama --model qwen3:8b --tokens 32
-machboost overlap --prompt prompt.txt --output output.txt --context .
-machboost draft --prefix prefix.txt --context .
-machboost simulate-draft --prompt prompt.txt --output output.txt --context .
-python3 scripts/hf_corpus_speculate.py --prompt prompt.txt --context . --model local-or-hf-model
-python3 scripts/hf_corpus_speculate.py --prompt prompt.txt --context . --model local-or-hf-model --auto-draft --verify-mode hybrid --anchor-tokens 1
-python3 scripts/hf_bench_suite.py --model local-or-hf-model --repeat 5 --local-files-only
-python3 scripts/hf_bench_suite.py --runner in-process --fixtures use_cases,negative_controls --repeat 3 --local-files-only --output results.json
-python3 scripts/hf_prompt_lookup_compare.py --model Qwen/Qwen2.5-3B-Instruct --local-files-only --fixtures real_readme_api,real_core_code,policy,json,rag,code --max-new-tokens 32 --output results/hf_prompt_lookup_compare_qwen25_3b.json
-machboost profile init
+machboost self-test
+python -m machboost self-test --json
 ```
 
-## Profiles
+## Quick Start
 
-- `sustained`: keeps the Mac awake and uses full-thread hints for supported workloads.
-- `balanced`: conservative defaults for normal local work.
-- `quiet`: avoids keep-awake behavior and uses reduced thread hints.
-
-## Workloads
-
-- `generic`: process wrapper only.
-- `llm`: Ollama/llama.cpp-oriented hints.
-- `build`: common build parallelism environment hints.
-- `render`: common numerical/render thread environment hints.
-
-`machboost` v1 is local-only. It does not change global shell config, `launchctl`, Ollama service state, Docker Desktop settings, system power settings, or upload telemetry.
-
-## With vs without benchmark
-
-Use `bench compare` to run the same command once without `machboost` and once with a selected profile, repeated as many times as you choose:
-
-```sh
-machboost bench compare --profile sustained --workload generic --repeat 3 -- ./your-heavy-job
-```
-
-For existing services like an already-running Ollama daemon, profile env vars will not affect that service unless `machboost` launches it. Use `bench compare` for commands that run inside the measured process, and use `bench ollama` to measure current Ollama API performance.
-
-## Research tools
-
-`machboost overlap` measures how much of a generated output can be recovered from the prompt and optional local context. High overlap means a future corpus-lookup speculative decoder may be able to reduce serial token generation steps.
-
-`machboost draft` proposes candidate continuations from local context by matching the current prefix against repo or document text. This is the local corpus drafter that can later feed a decoder-level verifier.
-
-`machboost simulate-draft` estimates how many serial decode steps a local corpus drafter could save on a known prompt/output transcript. The simulation is idealized; real acceleration requires runtime verification integration.
-
-`scripts/hf_corpus_speculate.py` is an experimental Hugging Face verifier loop. It compares KV-cache baseline greedy generation against local-corpus speculative generation for causal language models where MachBoost can inspect logits directly.
-
-`scripts/hf_bench_suite.py` runs repeatable benchmark fixtures and reports median total/decode tokens per second, exact-match rate, accepted draft tokens, forward reduction, and selected draft length.
-Fixture aliases include `default`, `use_cases`, `negative_controls`, and `all`.
-
-Useful verifier options:
-
-- `--auto-draft --draft-sweep 2,4,6,8,10`: benchmark multiple draft lengths in one model load.
-- `--source-mode prompt-context|context|prompt`: choose where local draft candidates come from.
-- `--verify-mode block|hybrid|sequential`: trade off speed and strictness. `hybrid --anchor-tokens 1` verifies a short prefix step-by-step, then block-verifies the rest.
-- `--draft-policy fixed|adaptive`: use fixed draft lengths or shrink/grow draft length during generation.
-- `--min-verify-margin 1.0`: reject low-confidence draft tokens when testing safer block verification.
-
-## Acceleration layer
-
-See `docs/ACCELERATION_LAYER.md` for the adapter-layer plan: runtime capabilities, policy gate, sidecar shape, and backend roadmap.
-
-## Python package API
-
-The experimental Python package is the product-facing shape for native adapters:
-
-```sh
-pip install "machboost[mlx]"
-```
-
-Use the high-level accelerator when you want MachBoost to load the model and build the local draft corpus from text, files, or directories:
+Use the high-level `Accelerator` when you want MachBoost to load a model and build the draft corpus from strings, files, or directories:
 
 ```python
-from machboost import Accelerator
+from machboost import Accelerator, GatePolicy
 
 boost = Accelerator.from_mlx(
-    "mlx-community/Qwen2.5-3B-Instruct-4bit",
+    "mlx-community/Qwen3.5-0.8B-MLX-4bit",
     context_paths=["./docs", "./src"],
-    ngram=4,
+    ngram=2,
     max_draft_tokens=8,
     candidate_limit=1,
+)
+
+calibration = boost.calibrate(
+    [
+        "Continue the rollout checklist from the local docs:",
+        "Copy the JSON deployment policy from the local config:",
+    ],
+    max_tokens=32,
+    gate_policy=GatePolicy(min_speedup=1.05, min_acceptance_rate=0.10),
 )
 
 text, stats = boost.generate(
@@ -102,38 +71,10 @@ text, stats = boost.generate(
 
 print(text)
 print(stats.estimated_speedup)
-```
-
-Benchmark and calibrate before turning the layer on for repeated traffic:
-
-```python
-from machboost import GatePolicy
-
-result = boost.benchmark(
-    "Continue the rollout checklist from the local docs:",
-    max_tokens=64,
-    gate_policy=GatePolicy(min_speedup=1.05, min_acceptance_rate=0.10),
-)
-
-print(result.output_match)
-print(result.speedup)
-print(result.decision.enabled)
-
-calibration = boost.calibrate(
-    [
-        "Continue the rollout checklist from the local docs:",
-        "Copy the JSON deployment policy from the local config:",
-    ],
-    max_tokens=32,
-)
-
 print(calibration.summary)
-print(boost.boost_enabled)
 ```
 
-`Accelerator.generate(...)` uses the verifier-backed boosted path while `boost.boost_enabled` is true. If calibration disables the layer, generation falls back to the exact serial baseline path.
-
-The same high-level API is available for Hugging Face causal language models:
+Hugging Face causal language models use the same shape:
 
 ```python
 from machboost import Accelerator
@@ -143,59 +84,11 @@ boost = Accelerator.from_huggingface(
     context_paths=["./docs", "./src"],
     local_files_only=True,
 )
+
+text, stats = boost.generate("Continue from the local context:", max_tokens=64)
 ```
 
-For MLX evidence runs where exact token matching matters more than raw serving speed, disable the prompt cache and draft only from the supplied context:
-
-```python
-boost = Accelerator.from_mlx(
-    "mlx-community/Qwen2.5-3B-Instruct-4bit",
-    context_paths=["./docs", "./src"],
-    cache_enabled=False,
-)
-```
-
-```sh
-python3 scripts/backend_bench_matrix.py \
-  --backends mlx \
-  --source-mode context \
-  --mlx-disable-cache \
-  --fixtures real_readme_api,real_core_code,real_paper_method,policy,json,rag,code,repo_quote,creative_open,short_answer \
-  --max-new-tokens 64
-```
-
-Cache-enabled MLX remains the faster serving direction, but longer cache-enabled diagnostic runs can hit boundary cases where block verification and token-by-token cache extension choose different continuations. The strict mode is meant for clean evidence and conservative deployments.
-
-To compare against existing prompt-lookup decoding instead of only serial greedy decoding, use:
-
-```sh
-python3 scripts/hf_prompt_lookup_compare.py \
-  --model Qwen/Qwen2.5-3B-Instruct \
-  --local-files-only \
-  --fixtures real_readme_api,real_core_code,policy,json,rag,code \
-  --max-new-tokens 32 \
-  --prompt-lookup-sweep 4,8,16 \
-  --machboost-source-modes prompt,context,prompt-context \
-  --output results/hf_prompt_lookup_compare_qwen25_3b.json
-```
-
-This comparison records serial Hugging Face `generate`, Hugging Face built-in `prompt_lookup_num_tokens`, and MachBoost runs against the same prompts. The important distinction is source scope: HF prompt lookup drafts from tokens already in the prompt; MachBoost drafts from caller-provided local corpus tokens, but every accepted token still has to match the target model's greedy continuation.
-
-For a larger local MLX smoke run, use the same strict evidence mode with the cached 9B MLX model:
-
-```sh
-python3 scripts/backend_bench_matrix.py \
-  --backends mlx \
-  --mlx-model mlx-community/Qwen3.5-9B-MLX-4bit \
-  --source-mode context \
-  --mlx-disable-cache \
-  --fixtures real_readme_api,real_core_code,policy,json \
-  --repeat 1 \
-  --max-new-tokens 32 \
-  --output results/mlx_qwen35_9b_strict_smoke.json
-```
-
-For custom runtimes, wrap your own verifier-capable service directly:
+For custom runtimes, wrap a verifier-capable service:
 
 ```python
 from machboost import machboost
@@ -208,93 +101,156 @@ boosted = machboost(
 )
 
 tokens, stats = boosted.generate(prompt_tokens, max_tokens=128)
-print(stats.estimated_speedup)
 ```
 
-Real speedups require the wrapped service to expose a verifier hook, such as `verify(prefix_tokens, candidate_tokens) -> accepted_count`. A black-box service with only `next_token(prefix_tokens)` stays exact, but cannot skip target work.
+Real speedups require the wrapped service to expose a verifier hook such as:
 
-Try the local demos:
+```python
+verify(prefix_tokens, candidate_tokens) -> accepted_count
+```
+
+A black-box service with only `next_token(prefix_tokens)` remains exact, but it cannot skip target-model work.
+
+## When It Helps
+
+MachBoost is most useful when the model is likely to continue with text already present nearby:
+
+- repo or source-code continuation
+- config and JSON generation
+- policy or documentation copying
+- RAG answers that quote retrieved context
+- repeated logs, templates, checklists, and structured artifacts
+
+It is usually neutral or slower for open-ended creative writing, one-word answers, and prompts where the next tokens are not recoverable from local context. The package exposes benchmark and calibration APIs so applications can turn the boosted path on only when it helps.
+
+## Command Line
+
+The Python package installs a lightweight command:
+
+```sh
+machboost doctor --json
+machboost self-test --json
+machboost version
+```
+
+The repository also includes the original Go CLI for diagnostics, command wrapping, and local benchmark experiments:
+
+```sh
+go run ./cmd/machboost doctor
+go run ./cmd/machboost doctor --json
+go run ./cmd/machboost run --profile sustained --workload generic -- echo ok
+go run ./cmd/machboost bench command -- sleep 1
+go run ./cmd/machboost overlap --prompt prompt.txt --output output.txt --context .
+```
+
+The Go CLI is useful for local systems experiments. The Python package is the product-facing inference layer.
+
+## Backends
+
+| Backend | Status | Notes |
+|---|---|---|
+| MLX / `mlx-lm` | native adapter | Best Mac-first path. Strict evidence mode can disable prompt cache for clean exactness checks. |
+| Hugging Face Transformers | native adapter | Useful for research and broad model coverage. |
+| Custom Python service | native if verifier exists | Implement `next_token`, `verify`, `encode`, and `decode` as needed. |
+| Ollama HTTP | wrapper only | Useful for benchmarking/capability detection; public HTTP does not expose logits/token IDs/KV hooks needed for exact acceleration. |
+
+## Evidence
+
+Public benchmark artifacts live in [results](results/), with a summary in [results/README.md](results/README.md). The current headline artifacts are:
+
+| Artifact | Model | Rows | Exact Match | Median Speedup | Notes |
+|---|---|---:|---:|---:|---|
+| `mlx_evidence_v2_strict_aggregate_20260706.json` | `mlx-community/Qwen3.5-0.8B-MLX-4bit` | 90 | 100% | 3.00x | repeated strict MLX run |
+| `hf_prompt_lookup_compare_qwen25_3b.json` | `Qwen/Qwen2.5-3B-Instruct` | 42 method rows | 100% over requested budget | 2.47x for MachBoost context | direct comparison with HF prompt lookup |
+| `mlx_qwen35_9b_strict_smoke.json` | `mlx-community/Qwen3.5-9B-MLX-4bit` | 2 | 100% | 7.50x | larger-model smoke test |
+
+The research paper source and PDF are included in [paper](paper/). Keeping `paper/` and `results/` in the public repository is intentional: they make the claims auditable. They are not imported by the package at runtime.
+
+## Reproduce Benchmarks
+
+Run the strict MLX suite:
+
+```sh
+python3 scripts/backend_bench_matrix.py \
+  --backends mlx \
+  --fixtures real_readme_api,real_core_code,real_paper_method,policy,json,rag,code,repo_quote,creative_open,short_answer \
+  --repeat 3 \
+  --max-new-tokens 64 \
+  --max-draft-tokens 8 \
+  --ngram 2 \
+  --candidate-limit 1 \
+  --source-mode context \
+  --mlx-disable-cache \
+  --mlx-model mlx-community/Qwen3.5-0.8B-MLX-4bit \
+  --output results/local/mlx_strict.json
+```
+
+Compare against Hugging Face prompt lookup:
+
+```sh
+python3 scripts/hf_prompt_lookup_compare.py \
+  --model Qwen/Qwen2.5-3B-Instruct \
+  --local-files-only \
+  --fixtures real_readme_api,real_core_code,policy,json,rag,code \
+  --max-new-tokens 32 \
+  --prompt-lookup-sweep 4,8,16 \
+  --machboost-source-modes prompt,context,prompt-context \
+  --output results/local/hf_prompt_lookup_compare.json
+```
+
+Use `results/local/` for new local runs; it is ignored by git.
+
+## Examples
+
+Runnable examples live in [examples/python](examples/python/):
 
 ```sh
 python3 examples/python/verifier_service_demo.py
 python3 examples/python/black_box_service_demo.py
+python3 examples/python/accelerator_calibration_demo.py
 python3 examples/python/hf_adapter_demo.py
 python3 examples/python/mlx_adapter_demo.py
 python3 examples/python/ollama_adapter_demo.py
 ```
 
-### Hugging Face adapter
+The HF and MLX examples require the matching optional dependencies and locally available models.
 
-Install with optional adapter dependencies:
+## Development
 
-```sh
-pip install "machboost[hf]"
-```
-
-Then wrap a causal LM:
-
-```python
-from machboost import machboost
-from machboost.adapters import HuggingFaceCausalLMService
-
-service = HuggingFaceCausalLMService.from_pretrained(
-    "Qwen/Qwen2.5-3B-Instruct",
-    local_files_only=True,
-)
-
-prompt_tokens = service.encode("Write the known continuation:")
-context_tokens = prompt_tokens + service.encode("Write the known continuation: ...")
-
-boosted = machboost(service, corpus_tokens=context_tokens, ngram=4, max_draft_tokens=8)
-tokens, stats = boosted.generate(prompt_tokens, max_tokens=64)
-
-print(service.decode(tokens))
-print(stats.estimated_speedup)
-```
-
-### MLX adapter
-
-Install with optional Mac-native adapter dependencies:
+Run tests:
 
 ```sh
-pip install "machboost[mlx]"
+python3 -m unittest discover -s tests
+go test ./...
 ```
 
-Then wrap an `mlx-lm` causal model:
+Check packaging:
 
-```python
-from machboost import machboost
-from machboost.adapters import MLXCausalLMService
-
-service = MLXCausalLMService.from_pretrained("mlx-community/Qwen2.5-3B-Instruct-4bit")
-prompt_tokens = service.encode("Write the known continuation:")
-context_tokens = prompt_tokens + service.encode("Write the known continuation: ...")
-
-boosted = machboost(service, corpus_tokens=context_tokens, ngram=4, max_draft_tokens=8)
-tokens, stats = boosted.generate(prompt_tokens, max_tokens=64)
-
-print(service.decode(tokens))
-print(stats.estimated_speedup)
+```sh
+python3 -m pip install --dry-run .
+python3 -m pip wheel . -w /tmp/machboost-wheel --no-deps
 ```
 
-### Ollama HTTP adapter
+Render the paper:
 
-Ollama can be benchmarked and configured over HTTP:
-
-```python
-from machboost.adapters import OllamaHTTPAdapter
-
-ollama = OllamaHTTPAdapter("qwen2.5:3b")
-result = ollama.benchmark(
-    "Write one concise sentence about local inference acceleration.",
-    tokens=64,
-    ctx=4096,
-)
-
-print(result.tokens_per_second)
-print(ollama.capabilities().native_verification)
+```sh
+tectonic paper/machboost.tex --outdir paper
 ```
 
-The public Ollama HTTP API does not expose logits, token IDs, or KV-cache verifier hooks, so this adapter reports `native_verification=False`. Exact MachBoost acceleration for Ollama needs a native runner hook or patched Ollama runner.
+## Safety And Scope
 
-That means Ollama HTTP support is useful for benchmarking, repeatable options, and capability detection, but it is intentionally treated as limited mode for exact draft-token acceleration.
+MachBoost v1 does not:
+
+- change global shell config
+- mutate `launchctl`
+- change Ollama service state
+- change Docker Desktop settings
+- change system power settings
+- upload telemetry
+- modify model weights
+
+It only accelerates paths where the backend can verify candidate tokens against the target model.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
