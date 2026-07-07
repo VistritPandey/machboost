@@ -6,6 +6,7 @@ import json
 import os
 import platform
 import sys
+import time
 from dataclasses import asdict, dataclass
 from importlib import metadata
 from pathlib import Path
@@ -424,6 +425,7 @@ def load_native_accelerator(args: argparse.Namespace, *, stream=None) -> Acceler
             args.model,
             device=args.device,
             local_files_only=args.local_files_only,
+            torch_dtype=torch_dtype_from_name(args.dtype),
             **common,
         )
     raise ValueError(f"unsupported backend: {backend}")
@@ -473,8 +475,18 @@ def run_native_chat(
         turns.append({"role": "user", "content": user_text})
         messages = [{"role": "system", "content": args.system or DEFAULT_CHAT_SYSTEM}]
         messages.extend(turns)
+        streamed = False
+
+        def emit(chunk: str) -> None:
+            nonlocal streamed
+            if not chunk:
+                return
+            streamed = True
+            print(chunk, end="", flush=True, file=output_stream)
+
+        started = time.perf_counter()
         try:
-            response, stats = accelerator.generate_chat(messages, max_tokens=args.max_tokens)
+            response, stats = accelerator.generate_chat(messages, max_tokens=args.max_tokens, on_text=emit)
         except KeyboardInterrupt:
             print("", file=output_stream)
             return 130
@@ -483,15 +495,22 @@ def run_native_chat(
             print(f"generation error: {exc}", file=error_stream)
             return 2
 
+        elapsed_s = time.perf_counter() - started
         response = response.strip()
-        print(response, file=output_stream)
+        if streamed:
+            print("", flush=True, file=output_stream)
+        else:
+            print(response, flush=True, file=output_stream)
         if args.show_stats:
+            tokens_per_second = stats.generated_tokens / elapsed_s if elapsed_s > 0 else 0.0
             print(
                 "stats: "
+                f"elapsed={elapsed_s:.2f}s "
+                f"tokens_per_second={tokens_per_second:.2f} "
                 f"accepted={stats.accepted_draft_tokens} "
                 f"target_calls={stats.target_calls}/{stats.baseline_target_calls} "
                 f"estimated_speedup={stats.estimated_speedup:.2f}x",
-                file=error_stream,
+                file=output_stream,
             )
         turns.append({"role": "assistant", "content": response})
 
@@ -663,7 +682,8 @@ def add_native_run_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--no-boost", action="store_true", help="Run the serial baseline path.")
     parser.add_argument("--strict", action="store_true", help="MLX only: disable prompt cache for strict evidence mode.")
     parser.add_argument("--lazy", action="store_true", help="MLX only: use lazy model loading.")
-    parser.add_argument("--device", default=None, help="HF only: device such as cpu, mps, or cuda.")
+    parser.add_argument("--device", default="auto", help="HF only: auto, cpu, mps, or cuda. Auto prefers MPS on Mac.")
+    parser.add_argument("--dtype", choices=["auto", "float16", "bfloat16", "float32"], default="auto", help="HF only: model dtype. Auto uses float16 on MPS.")
     parser.add_argument("--local-files-only", action="store_true", help="HF only: do not download missing model files.")
 
 
@@ -676,6 +696,20 @@ def add_ollama_run_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--ctx", type=int, default=None, help="Ollama num_ctx option.")
     parser.add_argument("--num-predict", type=int, default=None, help="Ollama num_predict option.")
     parser.add_argument("--temperature", type=float, default=None, help="Ollama temperature option.")
+
+
+def torch_dtype_from_name(name: str):
+    if name == "auto":
+        return None
+    try:
+        import torch
+    except ImportError as exc:
+        raise ImportError("Install Hugging Face support with `pip install machboost[hf]`.") from exc
+    return {
+        "float16": torch.float16,
+        "bfloat16": torch.bfloat16,
+        "float32": torch.float32,
+    }[name]
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
