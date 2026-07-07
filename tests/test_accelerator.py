@@ -42,6 +42,21 @@ class ScriptedService:
         return accepted, residual
 
 
+class FakeChatTokenizer:
+    eos_token_id = 0
+    all_special_ids = [0]
+    unk_token_id = -1
+
+    def apply_chat_template(self, messages, tokenize=False, add_generation_prompt=True, **kwargs):
+        rendered = "".join(f"<{message['role']}>{message['content']}</{message['role']}>" for message in messages)
+        if add_generation_prompt:
+            rendered += "<assistant>"
+        return rendered
+
+    def convert_tokens_to_ids(self, token):
+        return {"<|im_end|>": 0}.get(token, self.unk_token_id)
+
+
 class AcceleratorTests(unittest.TestCase):
     def test_generate_result_uses_context_drafts(self):
         prompt = "Question: ship policy?\nAnswer: "
@@ -66,6 +81,17 @@ class AcceleratorTests(unittest.TestCase):
         text, stats = accelerator.generate(prompt, max_tokens=len(completion), context=completion)
 
         self.assertEqual(text, completion)
+        self.assertGreater(stats.accepted_draft_tokens, 0)
+
+    def test_generate_chat_uses_template_and_cleans_role_prefix(self):
+        completion = "Assistant: hello there"
+        service = ScriptedService("<user>hi</user><assistant>", completion)
+        service.tokenizer = FakeChatTokenizer()
+        accelerator = Accelerator(service, context_texts=[completion], ngram=2, max_draft_tokens=8)
+
+        text, stats = accelerator.generate_chat([{"role": "user", "content": "hi"}], max_tokens=len(completion))
+
+        self.assertEqual(text, "hello there")
         self.assertGreater(stats.accepted_draft_tokens, 0)
 
     def test_benchmark_uses_accelerator_context(self):
