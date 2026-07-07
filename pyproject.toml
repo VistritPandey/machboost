@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "machboost"
-version = "0.1.1"
+version = "0.1.2"
 description = "Exact local-context speculative acceleration for local LLM inference."
 readme = "README.md"
 requires-python = ">=3.9"
