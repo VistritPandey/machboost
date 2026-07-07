@@ -62,7 +62,7 @@ machboost run Qwen/Qwen2.5-3B-Instruct --backend hf --context ./docs --show-stat
 
 If the model is not already cached, the selected backend may download it through its normal Hugging Face or MLX loader. Use `--local-files-only` with the Hugging Face backend to require an existing local cache.
 
-Use the high-level `Accelerator` when you want MachBoost to load a model and build the draft corpus from strings, files, or directories:
+Use the high-level `Accelerator` when you want MachBoost to load a model and build the draft corpus from strings, files, or directories. Calibrate before enabling the boosted path for a workflow:
 
 ```python
 from machboost import Accelerator, GatePolicy
@@ -77,24 +77,25 @@ boost = Accelerator.from_mlx(
 
 calibration = boost.calibrate(
     [
-        "Continue the rollout checklist from the local docs:",
-        "Copy the JSON deployment policy from the local config:",
+        "Copy the exact release checklist item from the local docs:",
+        "Emit the deployment JSON field from the local config:",
     ],
     max_tokens=32,
     gate_policy=GatePolicy(min_speedup=1.05, min_acceptance_rate=0.10),
 )
 
-text, stats = boost.generate(
-    "Continue the rollout checklist from the local docs:",
-    max_tokens=128,
-)
-
-print(text)
-print(stats.estimated_speedup)
 print(calibration.summary)
+
+if calibration.enabled:
+    text, stats = boost.generate(
+        "Copy the exact release checklist item from the local docs:",
+        max_tokens=64,
+    )
+    print(text)
+    print(stats.estimated_speedup)
 ```
 
-Hugging Face causal language models use the same shape:
+For chat models, use the chat-aware API. It applies the tokenizer's chat template and stops on special end-of-turn tokens:
 
 ```python
 from machboost import Accelerator
@@ -105,7 +106,12 @@ boost = Accelerator.from_huggingface(
     local_files_only=True,
 )
 
-text, stats = boost.generate("Continue from the local context:", max_tokens=64)
+text, stats = boost.generate_chat(
+    [{"role": "user", "content": "Summarize the local release checklist in one sentence."}],
+    max_tokens=64,
+)
+
+print(text)
 ```
 
 For custom runtimes, wrap a verifier-capable service:
