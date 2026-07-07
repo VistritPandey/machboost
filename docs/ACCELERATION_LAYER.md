@@ -1,14 +1,12 @@
 # MachBoost Acceleration Layer
 
-## Goal
+MachBoost is an exact local-context speculative acceleration layer. It drafts candidate tokens from nearby text and asks the target runtime to verify those tokens before committing them.
 
-Turn the current Hugging Face prototype into a local inference acceleration layer that can sit beside developer workflows without changing model output.
-
-The layer should make one decision repeatedly:
+The central question is:
 
 > Can local context safely draft tokens that the target model would have generated anyway?
 
-If yes, MachBoost verifies and accepts those tokens faster than serial decoding. If no, MachBoost falls back to normal generation and records why.
+If yes, MachBoost can reduce target-model work. If no, the package falls back to normal generation and records why.
 
 ## Non-Goals
 
@@ -18,56 +16,58 @@ If yes, MachBoost verifies and accepts those tokens faster than serial decoding.
 - No hosted service dependency.
 - No claim that black-box inference can be accelerated without runtime support.
 
-## Runtime Reality
-
-There are two integration classes.
+## Runtime Classes
 
 ### Native Acceleration
 
 This is where real speedups happen. The runtime must expose enough internals to:
 
-- Tokenize and detokenize text.
-- Prefill a prompt and retain KV cache state.
-- Read logits or greedy next-token decisions.
-- Verify a candidate token span against the target model.
-- Crop or advance KV cache after accepting a verified prefix.
+- tokenize and detokenize text
+- compute next-token logits or greedy decisions
+- verify a candidate token span against the target model
+- advance or rebuild KV/cache state after accepting a verified prefix
 
-Good targets:
+Current package adapters:
 
-- Hugging Face Transformers: current prototype.
-- MLX / mlx-lm: best Mac-first next target.
-- llama.cpp: likely production target if verifier hooks are available or patchable.
-- Custom local Python runtimes.
+- Hugging Face Transformers
+- MLX / `mlx-lm`
+- custom Python services that implement `next_token` and `verify`
+
+Future native targets:
+
+- llama.cpp / llama-server
+- an Ollama runner patch or fork
+- an OpenAI-compatible sidecar backed by a native runtime
 
 ### Wrapper / Policy Mode
 
-Black-box local servers can still be wrapped for diagnostics, benchmarking, and policy reports, but not true verifier acceleration unless they expose a draft/verify API.
+Black-box local servers can still be wrapped for diagnostics, benchmarking, and option management. They cannot receive exact MachBoost speedups unless they expose a verifier API.
 
 Examples:
 
-- Existing Ollama HTTP API.
-- OpenAI-compatible local servers.
-- Existing long-running model daemons.
+- Ollama HTTP
+- OpenAI-compatible local servers
+- existing long-running model daemons
 
 For these, MachBoost can still provide:
 
-- Workload classification.
-- Context-overlap analysis.
-- Benchmark comparison.
-- “Acceleration likely / unlikely” reports.
-- Native-adapter recommendations.
+- workload classification
+- context-overlap analysis
+- benchmark comparison
+- capability reports
+- native-adapter recommendations
 
-## Layer Architecture
+## Architecture
 
 ```text
 Prompt + local context
         |
         v
-Context Router ---> Policy Gate ------ no ----> normal generation
+Context Router ---> Policy Gate ------ no ----> serial generation
         |              |
         |             yes
         v              v
-Candidate Drafter -> Runtime Verifier -> accepted prefix -> stream/output
+Candidate Drafter -> Runtime Verifier -> accepted prefix -> output
         |              |
         v              v
 Results Recorder <----+
@@ -75,131 +75,129 @@ Results Recorder <----+
 
 ## Core Interfaces
 
-### Context Router
-
-Collects possible draft sources:
-
-- Prompt text.
-- Retrieved RAG chunks.
-- Local files.
-- Recent transcript or generated output.
-- Structured templates.
-
-The router must score source quality and avoid adding irrelevant context just because it exists.
-
 ### Candidate Drafter
 
-Produces candidate continuations from local context.
+The current drafter indexes token n-grams from a caller-provided corpus. At generation time it matches suffixes of the current prefix and proposes the tokens that followed the best matching span.
 
-Current implementation:
+Current behavior:
 
-- N-gram local-context lookup.
-- Longest suffix match.
-- Multiple candidate lengths.
+- n-gram local-context lookup
+- longest suffix preference
+- configurable maximum draft length
+- optional multiple candidate attempts
 
-Likely next improvements:
+Likely improvements:
 
-- Source locality scoring.
-- Prompt-visible source priority.
-- Trie/tree candidate packing.
-- Repetition/template detection.
-- Retrieval-score weighting.
+- suffix arrays or suffix automata for faster lookup
+- source locality scoring
+- prompt-visible source priority
+- trie/tree candidate packing
+- retrieval-score weighting
 
 ### Runtime Verifier
 
-Checks draft tokens against the target model.
+The verifier checks candidate tokens against the target model.
 
-Current implementation:
+Current behavior:
 
-- Greedy exact-match verification.
-- Hybrid verification: step-verify an anchor token, then block-verify the tail.
-- Verified-prefix acceptance when a later token mismatches.
+- greedy exact-match verification
+- accepted-prefix commits
+- residual-token fallback on mismatch where supported
+- MLX strict/stateless mode for clean evidence runs
 
-Future verifier work:
-
-- Tree/trie multi-candidate verification.
-- Runtime-specific KV cache optimizations.
-- Sampling-compatible verification modes where possible.
+Important limitation: sampling-compatible verification is not claimed in v1. Current public evidence is for greedy decoding and exact token equality.
 
 ### Policy Gate
 
-Decides whether speculation should run.
+The policy gate decides whether speculation should run.
 
 Inputs:
 
-- Workload type.
-- Context overlap.
-- Early acceptance rate.
-- Draft span length.
-- Verification overhead.
-- Exact-match status.
+- benchmark speedup
+- exact-match status
+- acceptance rate
+- accepted draft span length
+- target-call or forward-call reduction
 
 Outputs:
 
-- `enable`: speculation is likely useful.
-- `neutral`: safe but not clearly useful.
-- `disable`: use normal generation.
+- `enabled`: speculation is likely useful
+- `disabled`: serial generation is safer or faster
 
-The policy gate is the product layer. It prevents the research mechanism from becoming an always-on slowdown.
+The policy gate is product-critical because local-context drafting is not universal. It should accelerate grounded workflows and stay out of the way for open-ended prompts.
 
 ### Results Recorder
 
-Every run should emit machine-readable results:
+Evidence and benchmark rows should be machine-readable:
 
-- Model and backend.
-- Fixture or workload type.
-- Baseline total/decode tokens per second.
-- Boosted total/decode tokens per second.
-- Exact-match rate.
-- Accepted draft tokens.
-- Target-model forward reduction.
-- Policy decision.
-- Warnings.
+- model and backend
+- fixture or workload type
+- baseline and boosted tokens/sec
+- exact-match rate
+- accepted draft tokens
+- target-model forward reduction
+- policy decision
+- warnings and mode flags
 
 This keeps future dashboards, CI budgets, and technical reports possible without adding SaaS to v1.
 
-## Proposed Public Interfaces
+## Public Interfaces
 
-### CLI
-
-```sh
-machboost accel probe --context . --prompt prompt.txt --json
-machboost accel bench --backend hf --model Qwen/Qwen2.5-3B-Instruct --fixtures use_cases --repeat 5
-machboost accel serve --backend mlx --model ./model --port 11435
-```
-
-### Python
+### Python API
 
 ```python
 from machboost import Accelerator
 
-accel = Accelerator.from_hf(
-    model="Qwen/Qwen2.5-3B-Instruct",
+accel = Accelerator.from_mlx(
+    "mlx-community/Qwen3.5-0.8B-MLX-4bit",
     context_paths=["README.md", "docs/"],
-    policy="auto",
 )
 
-for token in accel.generate(prompt, max_new_tokens=128):
-    print(token, end="", flush=True)
+text, stats = accel.generate(prompt, max_tokens=128)
 ```
 
-### OpenAI-Compatible Sidecar
+### Custom Service
+
+```python
+from machboost import machboost
+
+boosted = machboost(
+    service,
+    corpus_tokens=local_context_tokens,
+    ngram=4,
+    max_draft_tokens=8,
+)
+
+tokens, stats = boosted.generate(prompt_tokens, max_tokens=128)
+```
+
+### CLI
+
+The Python package currently exposes lightweight install checks:
 
 ```sh
-machboost accel serve --backend mlx --model ./model --openai-compatible
+machboost doctor
+machboost self-test
+machboost version
 ```
 
-Apps can then point at MachBoost as a local OpenAI-compatible endpoint. This only provides true acceleration when MachBoost owns the runtime or the backend exposes verification hooks.
+The Go CLI remains available from source for local systems experiments:
+
+```sh
+go run ./cmd/machboost doctor
+go run ./cmd/machboost bench command -- sleep 1
+```
 
 ## Adapter Capability Matrix
 
-| Backend | Wrapper | Native Speedup | Notes |
+| Backend | Wrapper | Native Speedup | Status |
 |---|---:|---:|---|
-| Hugging Face | yes | yes | Prototype exists. Good for research, slower absolute Mac speed. |
-| MLX | planned | planned | Best Mac-first product target. |
-| llama.cpp | planned | possible | Needs verifier/KV hooks or patch. |
-| Ollama HTTP | yes | not yet | Existing API is black-box; native integration would need deeper support. |
-| OpenAI-compatible local servers | yes | only if owned | Sidecar can expose API, but cannot accelerate arbitrary black-box servers. |
+| Hugging Face | yes | yes | package adapter and benchmark scripts exist |
+| MLX / `mlx-lm` | yes | yes | package adapter and strict evidence mode exist |
+| Custom Python service | yes | yes, if verifier exists | supported through `machboost(...)` |
+| Ollama HTTP | yes | no | benchmark/capability wrapper only |
+| llama.cpp | planned | possible | needs verifier/KV hooks or patch |
+| OpenAI-compatible servers | yes | only if owned | sidecar can wrap, but black-box acceleration is not claimed |
 
 ## Milestones
 
@@ -207,49 +205,40 @@ Apps can then point at MachBoost as a local OpenAI-compatible endpoint. This onl
 
 Status: done.
 
-- HF verifier prototype.
-- Repeatable benchmark suite.
-- Use-case and negative-control fixtures.
+- Hugging Face verifier prototype.
+- MLX package adapter.
+- Repeatable benchmark suites.
+- Direct Hugging Face prompt-lookup comparison.
+- Strict MLX evidence artifacts.
 - Exact-match JSON reports.
 
-### P1: Policy Gate
+### P1: Package Layer
 
-Build a short probe that classifies workloads as `enable`, `neutral`, or `disable`.
+Status: in progress.
 
-Acceptance criteria:
+- Public Python API.
+- Optional backend extras.
+- Install doctor and self-test CLI.
+- Examples and package docs.
+- Calibration and gate policy APIs.
 
-- Keeps strong use-case wins.
-- Avoids slowdowns on negative controls.
-- Emits stable JSON.
+### P2: Runtime Expansion
 
-### P2: MLX Adapter
+Next targets:
 
-Port the verifier to MLX/`mlx-lm`.
-
-Acceptance criteria:
-
-- Same exact-match guarantees.
-- Better absolute tokens per second than HF/MPS.
-- Repeatable gains on at least RAG, config, docs, tests, and logs.
+- repeated larger-model evaluations
+- cache-enabled MLX exactness work
+- llama.cpp verifier hook investigation
+- Ollama MLX runner patch or fork
 
 ### P3: Sidecar Server
 
-Expose an OpenAI-compatible local endpoint backed by a native adapter.
+Future target:
 
-Acceptance criteria:
-
-- Existing local clients can switch base URL.
-- Streaming works.
-- Policy gate can disable speculation per request.
-
-### P4: llama.cpp / Ollama Path
-
-Investigate whether verifier hooks can land in llama.cpp or be exposed through an adapter.
-
-Acceptance criteria:
-
-- No output quality regression.
-- Clear answer on whether Ollama can support native verification without service patching.
+- OpenAI-compatible local endpoint
+- streaming output
+- per-request policy decisions
+- native acceleration only when MachBoost owns or patches the runtime
 
 ## Product Principle
 
