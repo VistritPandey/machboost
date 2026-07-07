@@ -160,8 +160,15 @@ class BoostedService:
         self.drafter = drafter
         self.candidate_limit = max(1, int(candidate_limit))
 
-    def generate(self, prompt_tokens: Iterable[Token], *, max_tokens: int) -> Tuple[Tuple[Token, ...], RunStats]:
+    def generate(
+        self,
+        prompt_tokens: Iterable[Token],
+        *,
+        max_tokens: int,
+        stop_tokens: Optional[Iterable[Token]] = None,
+    ) -> Tuple[Tuple[Token, ...], RunStats]:
         prompt = tuple(int(token) for token in prompt_tokens)
+        stop_set = {int(token) for token in stop_tokens or ()}
         generated: list[Token] = []
         self.drafter.reset(prompt)
 
@@ -171,8 +178,9 @@ class BoostedService:
         accepted_draft_tokens = 0
         accepted_draft_spans = 0
         rejected_candidates = 0
+        stopped = False
 
-        while len(generated) < max_tokens:
+        while len(generated) < max_tokens and not stopped:
             remaining = max_tokens - len(generated)
             prefix = prompt + tuple(generated)
             candidates = self.drafter.candidates(max_tokens=remaining, limit=self.candidate_limit)
@@ -192,10 +200,12 @@ class BoostedService:
 
                     if accepted > 0:
                         committed_tokens = candidate.tokens[:accepted]
-                        generated.extend(committed_tokens)
-                        self.drafter.observe(committed_tokens)
-                        accepted_draft_tokens += accepted
-                        accepted_draft_spans += 1
+                        visible_tokens, stopped = _without_stop_tokens(committed_tokens, stop_set)
+                        if visible_tokens:
+                            generated.extend(visible_tokens)
+                            self.drafter.observe(visible_tokens)
+                            accepted_draft_tokens += len(visible_tokens)
+                            accepted_draft_spans += 1
                         committed = True
                         break
 
@@ -207,6 +217,8 @@ class BoostedService:
                     continue
 
                 if fallback_residual is not None:
+                    if _is_stop_token(fallback_residual, stop_set):
+                        break
                     generated.append(fallback_residual)
                     self.drafter.observe((fallback_residual,))
                     continue
@@ -214,6 +226,8 @@ class BoostedService:
             token = self.service.next_token(prefix)
             next_token_calls += 1
             if token is None:
+                break
+            if _is_stop_token(token, stop_set):
                 break
             generated.append(int(token))
             self.drafter.observe((int(token),))
@@ -278,8 +292,15 @@ class MachBoost:
     def wrap(self, service: StepService) -> BoostedService:
         return BoostedService(service, self.drafter, candidate_limit=self.candidate_limit)
 
-    def generate(self, service: StepService, prompt_tokens: Iterable[Token], *, max_tokens: int) -> Tuple[Tuple[Token, ...], RunStats]:
-        return self.wrap(service).generate(prompt_tokens, max_tokens=max_tokens)
+    def generate(
+        self,
+        service: StepService,
+        prompt_tokens: Iterable[Token],
+        *,
+        max_tokens: int,
+        stop_tokens: Optional[Iterable[Token]] = None,
+    ) -> Tuple[Tuple[Token, ...], RunStats]:
+        return self.wrap(service).generate(prompt_tokens, max_tokens=max_tokens, stop_tokens=stop_tokens)
 
 
 def machboost(
@@ -303,6 +324,20 @@ def machboost(
     if service is None:
         return boost
     return boost.wrap(service)
+
+
+def _is_stop_token(token: Token, stop_tokens: set[Token]) -> bool:
+    return bool(stop_tokens) and int(token) in stop_tokens
+
+
+def _without_stop_tokens(tokens: Iterable[Token], stop_tokens: set[Token]) -> Tuple[Tuple[Token, ...], bool]:
+    visible: list[Token] = []
+    for token in tokens:
+        token = int(token)
+        if _is_stop_token(token, stop_tokens):
+            return tuple(visible), True
+        visible.append(token)
+    return tuple(visible), False
 
 
 def _better(left: Candidate, right: Candidate) -> bool:
