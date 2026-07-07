@@ -137,7 +137,7 @@ This keeps the project honest: fast where it owns or patches the decode path, us
 
 ## Runner Patch Spike
 
-The local checkout at `/Users/Vis/Downloads/ollama-main` is not a git repository, so the first pass should be carried as a documented patch or a proper fork rather than mutating the downloaded folder in place.
+The first pass should be carried as a documented patch or a proper fork rather than mutating an installed Ollama app in place.
 
 The MLX runner has the right validation machinery already:
 
