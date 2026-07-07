@@ -143,7 +143,8 @@ class CLITests(unittest.TestCase):
         self.assertIn("estimated_speedup=2.50x", errors.getvalue())
         self.assertEqual(FakeAccelerator.calls[-1][0], "hf")
         self.assertEqual(FakeAccelerator.calls[-1][2]["context_paths"], ["README.md"])
-        self.assertIn("User: hello", FakeAccelerator.instances[-1].prompts[-1][0])
+        self.assertEqual(FakeAccelerator.instances[-1].messages[-1][0][0]["role"], "system")
+        self.assertEqual(FakeAccelerator.instances[-1].messages[-1][0][-1]["content"], "hello")
 
     def test_ollama_chat_shortcut_pulls_missing_model_and_streams_response(self):
         output = io.StringIO()
@@ -244,6 +245,7 @@ class FakeAccelerator:
         self.model = model
         self.kwargs = kwargs
         self.prompts = []
+        self.messages = []
         self.instances.append(self)
 
     @classmethod
@@ -260,6 +262,10 @@ class FakeAccelerator:
     def from_mlx(cls, model, **kwargs):
         cls.calls.append(("mlx", model, kwargs))
         return cls("mlx", model, kwargs)
+
+    def generate_chat(self, messages, max_tokens=128):
+        self.messages.append((messages, max_tokens))
+        return "native response", FakeStats()
 
     def generate(self, prompt, max_tokens=128):
         self.prompts.append((prompt, max_tokens))
