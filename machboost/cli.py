@@ -7,12 +7,15 @@ import os
 import platform
 import sys
 from dataclasses import asdict, dataclass
+from importlib import metadata
 from pathlib import Path
 from typing import Optional, Sequence
 
 from . import __version__, machboost
 from .accelerator import Accelerator
 from .adapters.ollama import OllamaHTTPAdapter, OllamaHTTPError
+
+DEFAULT_CHAT_SYSTEM = "Answer directly and concisely. Do not reveal hidden reasoning."
 
 
 @dataclass(frozen=True)
@@ -66,12 +69,15 @@ class ScriptedVerifierService:
         return accepted, residual
 
 
-def package_status(module_name: str, version_attr: str = "__version__") -> PackageStatus:
+def package_status(
+    module_name: str,
+    version_attr: str = "__version__",
+    distribution_name: Optional[str] = None,
+) -> PackageStatus:
     if importlib.util.find_spec(module_name) is None:
         return PackageStatus(False)
     try:
-        module = __import__(module_name)
-        version = getattr(module, version_attr, None)
+        version = metadata.version(distribution_name or module_name.replace("_", "-"))
     except Exception:
         version = None
     return PackageStatus(True, str(version) if version else None)
@@ -94,7 +100,7 @@ def doctor_data() -> dict:
             "torch": asdict(package_status("torch")),
             "transformers": asdict(package_status("transformers")),
             "mlx": asdict(package_status("mlx")),
-            "mlx_lm": asdict(package_status("mlx_lm")),
+            "mlx_lm": asdict(package_status("mlx_lm", distribution_name="mlx-lm")),
         },
     }
 
@@ -182,7 +188,7 @@ def native_backend_status() -> dict:
     torch = package_status("torch")
     transformers = package_status("transformers")
     mlx = package_status("mlx")
-    mlx_lm = package_status("mlx_lm")
+    mlx_lm = package_status("mlx_lm", distribution_name="mlx-lm")
     return {
         "hf": {
             "available": torch.available and transformers.available,
@@ -465,9 +471,10 @@ def run_native_chat(
             continue
 
         turns.append({"role": "user", "content": user_text})
-        prompt = render_chat_prompt(args.system, turns)
+        messages = [{"role": "system", "content": args.system or DEFAULT_CHAT_SYSTEM}]
+        messages.extend(turns)
         try:
-            response, stats = accelerator.generate(prompt, max_tokens=args.max_tokens)
+            response, stats = accelerator.generate_chat(messages, max_tokens=args.max_tokens)
         except KeyboardInterrupt:
             print("", file=output_stream)
             return 130
