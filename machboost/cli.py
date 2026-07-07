@@ -9,6 +9,7 @@ from dataclasses import asdict, dataclass
 from typing import Optional, Sequence
 
 from . import __version__, machboost
+from .accelerator import Accelerator
 from .adapters.ollama import OllamaHTTPAdapter, OllamaHTTPError
 
 
@@ -129,6 +130,124 @@ def print_human_self_test(data: dict) -> None:
     print(f"estimated speedup: {data['estimated_speedup']:.2f}x")
 
 
+def select_native_backend(model: str, backend: str) -> str:
+    if backend != "auto":
+        return backend
+    normalized = model.lower()
+    if normalized.startswith("mlx-community/") or "mlx" in normalized:
+        return "mlx"
+    return "hf"
+
+
+def render_chat_prompt(system: str, turns: Sequence[dict[str, str]]) -> str:
+    lines: list[str] = []
+    if system:
+        lines.append(f"System: {system.strip()}")
+    for turn in turns:
+        role = turn["role"].strip().capitalize()
+        lines.append(f"{role}: {turn['content']}")
+    lines.append("Assistant:")
+    return "\n".join(lines)
+
+
+def load_native_accelerator(args: argparse.Namespace, *, stream=None) -> Accelerator:
+    stream = stream or sys.stderr
+    backend = select_native_backend(args.model, args.backend)
+    context_paths = args.context or None
+    print(f"loading {args.model!r} with native {backend} backend...", file=stream)
+    print("if the model is not cached, HF/MLX may download it into its local cache", file=stream)
+
+    common = {
+        "context_paths": context_paths,
+        "max_context_chars": args.max_context_chars,
+        "ngram": args.ngram,
+        "max_draft_tokens": args.max_draft_tokens,
+        "candidate_limit": args.candidate_limit,
+        "boost_enabled": not args.no_boost,
+    }
+    if backend == "mlx":
+        return Accelerator.from_mlx(
+            args.model,
+            lazy=args.lazy,
+            cache_enabled=not args.strict,
+            **common,
+        )
+    if backend == "hf":
+        return Accelerator.from_huggingface(
+            args.model,
+            device=args.device,
+            local_files_only=args.local_files_only,
+            **common,
+        )
+    raise ValueError(f"unsupported backend: {backend}")
+
+
+def run_native_chat(
+    args: argparse.Namespace,
+    *,
+    input_func=input,
+    output_stream=None,
+    error_stream=None,
+) -> int:
+    output_stream = output_stream or sys.stdout
+    error_stream = error_stream or sys.stderr
+    try:
+        accelerator = load_native_accelerator(args, stream=error_stream)
+    except Exception as exc:
+        print(f"machboost run error: {exc}", file=error_stream)
+        if args.backend == "auto":
+            print("try passing --backend mlx or --backend hf explicitly", file=error_stream)
+        return 2
+
+    turns: list[dict[str, str]] = []
+    print(f"machboost run: {args.model}", file=output_stream)
+    print("Type /bye, /exit, or /quit to leave. Type /clear to reset chat history.", file=output_stream)
+
+    while True:
+        try:
+            user_text = input_func(">>> ")
+        except EOFError:
+            print("", file=output_stream)
+            return 0
+        except KeyboardInterrupt:
+            print("", file=output_stream)
+            return 130
+
+        command = user_text.strip()
+        if not command:
+            continue
+        if command in {"/bye", "/exit", "/quit"}:
+            return 0
+        if command == "/clear":
+            turns = []
+            print("chat history cleared", file=output_stream)
+            continue
+
+        turns.append({"role": "user", "content": user_text})
+        prompt = render_chat_prompt(args.system, turns)
+        try:
+            response, stats = accelerator.generate(prompt, max_tokens=args.max_tokens)
+        except KeyboardInterrupt:
+            print("", file=output_stream)
+            return 130
+        except Exception as exc:
+            turns.pop()
+            print(f"generation error: {exc}", file=error_stream)
+            return 2
+
+        response = response.strip()
+        print(response, file=output_stream)
+        if args.show_stats:
+            print(
+                "stats: "
+                f"accepted={stats.accepted_draft_tokens} "
+                f"target_calls={stats.target_calls}/{stats.baseline_target_calls} "
+                f"estimated_speedup={stats.estimated_speedup:.2f}x",
+                file=error_stream,
+            )
+        turns.append({"role": "assistant", "content": response})
+
+
 def ollama_options(args: argparse.Namespace) -> dict:
     options = {}
     if args.temperature is not None:
@@ -243,6 +362,9 @@ def build_parser() -> argparse.ArgumentParser:
     self_test = subcommands.add_parser("self-test", help="Run an in-memory exactness smoke test.")
     self_test.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
 
+    native_run = subcommands.add_parser("run", help="Run a native MachBoost HF/MLX model interactively.")
+    add_native_run_arguments(native_run)
+
     chat = subcommands.add_parser("chat", help="Ollama-compatible interactive chat shortcut.")
     add_ollama_run_arguments(chat)
 
@@ -253,6 +375,37 @@ def build_parser() -> argparse.ArgumentParser:
 
     subcommands.add_parser("version", help="Print the installed MachBoost version.")
     return parser
+
+
+def add_native_run_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "model",
+        help="Hugging Face or MLX model name/path, for example Qwen/Qwen2.5-3B-Instruct.",
+    )
+    parser.add_argument(
+        "--backend",
+        choices=["auto", "mlx", "hf"],
+        default="auto",
+        help="Model backend. Auto chooses MLX for mlx-community models and HF otherwise.",
+    )
+    parser.add_argument(
+        "--context",
+        action="append",
+        default=[],
+        help="Local file or directory to use as MachBoost draft context.",
+    )
+    parser.add_argument("--max-context-chars", type=int, default=200_000)
+    parser.add_argument("--max-tokens", type=int, default=128)
+    parser.add_argument("--ngram", type=int, default=2)
+    parser.add_argument("--max-draft-tokens", type=int, default=8)
+    parser.add_argument("--candidate-limit", type=int, default=1)
+    parser.add_argument("--system", default="", help="Optional system message.")
+    parser.add_argument("--show-stats", action="store_true", help="Print MachBoost draft/verify stats after replies.")
+    parser.add_argument("--no-boost", action="store_true", help="Run the serial baseline path.")
+    parser.add_argument("--strict", action="store_true", help="MLX only: disable prompt cache for strict evidence mode.")
+    parser.add_argument("--lazy", action="store_true", help="MLX only: use lazy model loading.")
+    parser.add_argument("--device", default=None, help="HF only: device such as cpu, mps, or cuda.")
+    parser.add_argument("--local-files-only", action="store_true", help="HF only: do not download missing model files.")
 
 
 def add_ollama_run_arguments(parser: argparse.ArgumentParser) -> None:
@@ -286,6 +439,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if args.command == "version":
         print(__version__)
         return 0
+    if args.command == "run":
+        return run_native_chat(args)
     if args.command == "chat":
         return run_ollama_chat(args)
     if args.command == "ollama" and args.ollama_command == "run":
