@@ -170,6 +170,13 @@ class MLXCausalLMService:
 
         prefix = tuple(int(token) for token in prefix_tokens)
         candidate = tuple(int(token) for token in candidate_tokens)
+        if (
+            self._cache is not None
+            and len(prefix) == len(self._cache_prefix) + 1
+            and prefix[:-1] == self._cache_prefix
+        ):
+            return self._verification_cached_extension(prefix, candidate)
+
         cached_logits = self._cached_next_logits(prefix)
         if cached_logits is not None:
             return self._verification_cached(prefix, candidate, cached_logits)
@@ -197,6 +204,39 @@ class MLXCausalLMService:
             accepted += 1
 
         bonus = self._argmax(self._row(logits, start + accepted)) if accepted == len(candidate_tokens) else None
+        return Verification(accepted, residual, bonus)
+
+    def _verification_cached_extension(
+        self,
+        prefix_tokens: Tuple[Token, ...],
+        candidate_tokens: Tuple[Token, ...],
+    ) -> Verification:
+        trial_cache = self._cache
+        input_tokens = prefix_tokens[-1:] + candidate_tokens
+        logits = self._logits(input_tokens, cache=trial_cache)
+        predictions = self._argmax_rows(logits, len(input_tokens))
+        accepted = 0
+        residual: Optional[Token] = None
+
+        for offset, candidate in enumerate(candidate_tokens):
+            predicted = predictions[offset]
+            row = self._row(logits, offset)
+            if predicted != int(candidate) or not self._passes_margin(row, int(candidate)):
+                residual = predicted
+                break
+            accepted += 1
+
+        committed = candidate_tokens[:accepted]
+        rejected = len(candidate_tokens) - accepted
+        bonus = predictions[-1] if rejected == 0 else None
+        if rejected > 0 and not self._trim_cache(trial_cache, rejected):
+            self.reset_cache()
+            self._cached_next_logits(prefix_tokens + committed)
+        else:
+            self._cache = trial_cache
+            self._cache_prefix = prefix_tokens + committed
+            self._cache_logits = self._row(logits, accepted)
+
         return Verification(accepted, residual, bonus)
 
     def _verification_cached(
