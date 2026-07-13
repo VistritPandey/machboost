@@ -230,10 +230,6 @@ class Accelerator:
             )
 
         corpus_tokens = tuple(prompt_tokens) + run_context_tokens
-        reset_cache = getattr(self.service, "reset_cache", None)
-        if callable(reset_cache):
-            reset_cache()
-
         boosted = machboost(
             self.service,
             corpus_tokens=corpus_tokens,
@@ -242,6 +238,19 @@ class Accelerator:
             max_draft_tokens=self.max_draft_tokens,
             candidate_limit=self.candidate_limit,
         )
+        boosted.drafter.reset(prompt_tokens)
+        if not boosted.drafter.candidates(max_tokens=max_tokens, limit=self.candidate_limit):
+            return self._generate_serial_result(
+                prompt_tokens,
+                max_tokens=max_tokens,
+                stop_tokens=stop_tokens,
+                stop_strings=stop_strings,
+                on_tokens=on_tokens,
+            )
+
+        reset_cache = getattr(self.service, "reset_cache", None)
+        if callable(reset_cache):
+            reset_cache()
         tokens, stats = boosted.generate(
             prompt_tokens,
             max_tokens=max_tokens,
