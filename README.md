@@ -3,11 +3,11 @@
 [![CI](https://github.com/VistritPandey/machboost/actions/workflows/ci.yml/badge.svg)](https://github.com/VistritPandey/machboost/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-MachBoost is an experimental Python package for exact local-context speculative acceleration of local LLM inference.
+MachBoost is an experimental resident local-inference server and Python package for MLX and Hugging Face models. It provides an Ollama-like model workflow, keeps models warm between requests, streams chat and code completions, and can apply exact local-context speculative acceleration when retrieved documents or source files predict the model's continuation.
 
 It drafts candidate tokens from nearby text such as prompts, retrieved chunks, repo files, policies, configs, and docs. A backend verifier then accepts only the tokens that match the target model's greedy continuation. When the local context predicts the next tokens well, MachBoost can reduce target-model calls without changing the generated token sequence.
 
-MachBoost is local-first and alpha-stage. It does not upload telemetry, mutate global runtime settings, change model weights, or claim universal speedups.
+MachBoost is local-first and alpha-stage. It does not upload telemetry, mutate global runtime settings, change model weights, or claim universal speedups. Ordinary open-ended chat follows the backend's native generation path; context-backed verification is enabled only when a candidate exists.
 
 ## Install
 
@@ -52,15 +52,39 @@ python -m machboost self-test --json
 
 ## Quick Start
 
-Start a native local chat from the command line:
+Start a native local chat from the command line. Short aliases select MLX on a compatible Apple Silicon installation and Hugging Face elsewhere:
 
 ```sh
 machboost list
-machboost run mlx-community/Qwen3.5-0.8B-MLX-4bit --backend mlx --context ./docs --context ./src
-machboost run Qwen/Qwen2.5-3B-Instruct --backend hf --show-stats
+machboost pull qwen2.5:3b
+machboost run qwen2.5:3b
 ```
 
-If the model is not already cached, the selected backend may download it through its normal Hugging Face or MLX loader. Use `--local-files-only` with the Hugging Face backend to require an existing local cache.
+`machboost run` starts a local server automatically when needed. The server keeps the model in unified memory until `machboost stop`, `machboost shutdown`, or process exit, so subsequent commands avoid model reload latency. Preload a model before the first user request with:
+
+```sh
+machboost warm qwen2.5:3b
+machboost ps
+```
+
+Use full repository IDs when a model has no short alias. If the model is not cached, the selected backend may download it through its normal Hugging Face or MLX loader. Use `--local-files-only` with Hugging Face to require an existing cache.
+
+Stream a raw completion for an editor or code tool:
+
+```sh
+machboost complete qwen2.5-coder:3b "def fibonacci(n):" --max-tokens 128
+machboost complete qwen2.5:3b --file ./prompt.txt --context ./docs --show-stats
+```
+
+The resident server also exposes Ollama-compatible and OpenAI-compatible HTTP endpoints on `http://127.0.0.1:11435`:
+
+```sh
+curl http://127.0.0.1:11435/api/chat -d '{
+  "model": "qwen2.5:3b",
+  "messages": [{"role": "user", "content": "Hello"}],
+  "stream": false
+}'
+```
 
 Use the high-level `Accelerator` when you want MachBoost to load a model and build the draft corpus from strings, files, or directories. Calibrate before enabling the boosted path for a workflow:
 
@@ -137,6 +161,23 @@ verify(prefix_tokens, candidate_tokens) -> accepted_count
 
 A black-box service with only `next_token(prefix_tokens)` remains exact, but it cannot skip target-model work.
 
+Applications can control a resident server directly:
+
+```python
+from machboost import MachBoostClient
+
+client = MachBoostClient()
+client.load("qwen2.5:3b", keep_alive="forever")
+
+for chunk in client.chat(
+    "qwen2.5:3b",
+    [{"role": "user", "content": "Summarize the deployment policy."}],
+    options={"context_paths": ["./docs"], "num_predict": 128},
+    stream=True,
+):
+    print(chunk.get("message", {}).get("content", ""), end="", flush=True)
+```
+
 ## When It Helps
 
 MachBoost is most useful when the model is likely to continue with text already present nearby:
@@ -151,17 +192,36 @@ It is usually neutral or slower for open-ended creative writing, one-word answer
 
 ## Command Line
 
-The Python package installs a native model runner:
+The Python package installs an Ollama-style resident model workflow:
 
 ```sh
 machboost list
 machboost list --json
-machboost run mlx-community/Qwen3.5-0.8B-MLX-4bit --backend mlx
-machboost run Qwen/Qwen2.5-3B-Instruct --backend hf
-machboost run Qwen/Qwen2.5-3B-Instruct --backend hf --context ./docs --context ./src --show-stats
+machboost pull qwen2.5:3b
+machboost warm qwen2.5:3b
+machboost run qwen2.5:3b
+machboost chat qwen2.5:3b
+machboost complete qwen2.5-coder:3b "def parse_config(text):"
+machboost ps
+machboost show qwen2.5:3b
+machboost stop qwen2.5:3b
+machboost shutdown
 ```
 
-`machboost list` shows cached Hugging Face and MLX models that the native runner can likely load, plus backend readiness. `machboost run MODEL` loads a Hugging Face or MLX model, builds a MachBoost draft corpus from any `--context` files or directories, and opens a streaming interactive chat. Inside the chat, use `/bye`, `/exit`, `/quit`, EOF, or Ctrl-C to leave, and `/clear` to reset chat history.
+`machboost list` shows cached Hugging Face and MLX models, backend readiness, and available short aliases. `machboost run MODEL` connects to the resident server, loads the model once, builds a draft corpus from any `--context` files or directories, and opens a streaming interactive chat. Inside chat, use `/bye`, `/exit`, `/quit`, EOF, or Ctrl-C to leave, and `/clear` to reset history. Leaving chat does not unload the model.
+
+Run the server in the foreground when integrating it with another application or process manager:
+
+```sh
+machboost serve --host 127.0.0.1 --port 11435
+```
+
+By default, models remain warm indefinitely. A finite lifetime can be selected per load or run:
+
+```sh
+machboost warm qwen2.5:3b --keep-alive 1h
+machboost run qwen2.5:3b --keep-alive 10m
+```
 
 Plain open-ended chat without local context uses a fast serial greedy path and should report `estimated_speedup=1.00x`. MachBoost speedups require useful `--context` that predicts upcoming tokens.
 
@@ -170,6 +230,8 @@ Useful native options:
 ```sh
 machboost list --backend mlx
 machboost list --all
+machboost run qwen2.5:3b --show-stats
+machboost run qwen2.5:3b --direct
 machboost run Qwen/Qwen2.5-3B-Instruct --backend hf --device mps --max-tokens 128
 machboost run Qwen/Qwen2.5-3B-Instruct --backend hf --dtype float16 --show-stats
 machboost run Qwen/Qwen2.5-3B-Instruct --backend hf --local-files-only
@@ -177,7 +239,7 @@ machboost run mlx-community/Qwen3.5-0.8B-MLX-4bit --backend mlx --strict
 machboost run mlx-community/Qwen2.5-3B-Instruct-4bit --backend mlx --context ./docs --ngram 1 --reentry-probe-tokens 1
 ```
 
-`--reentry-probe-tokens` is experimental and disabled by default. On Apple Silicon, the Hugging Face backend defaults to `--device auto --dtype auto`, which selects MPS with float16 when available. Ollama can still be faster for general chat because it uses optimized quantized runners; MachBoost's native path is mainly for exact local-context acceleration and research/debuggable verifier hooks.
+`--reentry-probe-tokens` is experimental and disabled by default. `--direct` restores the one-process behavior for debugging. On Apple Silicon, a short alias prefers the MLX 4-bit model; explicit Hugging Face models default to `--device auto --dtype auto`, which selects MPS with float16 when available.
 
 The package also includes install checks:
 
@@ -187,11 +249,10 @@ machboost self-test --json
 machboost version
 ```
 
-An Ollama-compatible chat wrapper is available for compatibility:
+An explicit Ollama wrapper remains available for compatibility with an existing Ollama installation:
 
 ```sh
 machboost ollama run qwen2.5:3b
-machboost chat qwen2.5:3b
 ```
 
 If the model is missing, MachBoost asks the local Ollama server to pull it first, then opens an interactive chat. Inside the chat, use `/bye`, `/exit`, `/quit`, EOF, or Ctrl-C to leave, and `/clear` to reset chat history.
@@ -203,7 +264,7 @@ machboost ollama run qwen2.5:3b --ctx 4096 --temperature 0
 machboost ollama run llama3.2 --system "Answer concisely." --no-pull
 ```
 
-This wrapper uses Ollama's public HTTP API. It is useful for a familiar local UX, model pulling, and chat, but it is not native MachBoost verifier acceleration.
+This wrapper uses Ollama's public HTTP API and is not native MachBoost verifier acceleration. `machboost run` and `machboost chat` use the MachBoost resident runtime.
 
 The repository also includes the original Go CLI for diagnostics, command wrapping, and local benchmark experiments:
 
@@ -223,6 +284,7 @@ The Go CLI is useful for local systems experiments. The Python package is the pr
 |---|---|---|
 | MLX / `mlx-lm` | native adapter | Best Mac-first path. Strict evidence mode can disable prompt cache for clean exactness checks. |
 | Hugging Face Transformers | native adapter | Useful for research and broad model coverage. |
+| MachBoost resident server | native control plane | Keeps MLX/HF models warm and exposes Ollama/OpenAI-compatible streaming APIs. |
 | Custom Python service | native if verifier exists | Implement `next_token`, `verify`, `encode`, and `decode` as needed. |
 | Ollama HTTP | wrapper only | Useful for benchmarking/capability detection; public HTTP does not expose logits/token IDs/KV hooks needed for exact acceleration. |
 
@@ -235,6 +297,8 @@ Public benchmark artifacts live in [results](results/), with a summary in [resul
 | `mlx_native_default_qwen25_3b_20260713.json` | `mlx-community/Qwen2.5-3B-Instruct-4bit` | default code continuation | 5 | 100% | 1.96x |
 | `mlx_native_reentry_qwen25_3b_20260713.json` | same | experimental RAG re-entry | 5 | 100% | 1.58x |
 | `mlx_native_reentry_qwen25_3b_20260713.json` | same | open-ended native fallback | 5 | 100% | 1.08x |
+
+Resident-server latency is tracked separately in `resident_qwen25_3b_20260713.json`. On the same M1 Max, five warm forced 64-token requests reached a 0.657-second median wall time and 97.5 end-to-end tok/s. Five short streaming chats reached a 0.298-second median time to first text and 0.358-second median total latency. These requests used native fallback with zero accepted draft tokens, so they measure warm serving rather than the context speculation algorithm.
 
 The default code path accepted a median 51 of 64 tokens and reduced logical target forwards by 76.6%. One-token re-entry broadens coverage to copied RAG answers, accepting a median 30 tokens. The current repeated medians are below 2x and remain workload-specific. Older `strict` and 9B artifacts compared against synchronous or cache-disabled baselines and remain available only as diagnostics; they do not establish an improvement over optimized `mlx-lm` or Ollama.
 
