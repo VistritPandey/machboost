@@ -2,6 +2,32 @@
 
 This directory stores public benchmark artifacts for the local-context speculative decoding prototype.
 
+## Current Native-Baseline Evidence, July 13 2026
+
+Artifact: `mlx_native_adaptive_qwen25_3b_20260713.json`
+
+The current harness compares MachBoost against `mlx-lm` native streaming generation, includes prompt processing in both wall-clock measurements, alternates baseline-first and boosted-first order, records fresh nonces, and preserves every raw row. The artifact also records package versions, hardware, memory, timestamps, and thermal status.
+
+Model: `mlx-community/Qwen2.5-3B-Instruct-4bit`
+
+Hardware: Apple M1 Max, 32 GB unified memory
+
+Generation: greedy, 64 requested tokens, three fresh-nonce repeats per fixture
+
+| Fixture | Selected Path | Exact Match | Paired Speedups | Median Speedup | Baseline tok/s | MachBoost tok/s |
+|---|---|---:|---:|---:|---:|---:|
+| `code` | adaptive context verifier | 100% | 2.51x, 2.36x, 1.59x | 2.36x | 77.14 | 127.30 |
+| `rag` | native fallback | 100% | 0.96x, 1.00x, 0.94x | 0.96x | 91.18 | 88.47 |
+| `creative_open` | native fallback | 100% | 1.00x, 1.01x, 0.96x | 1.00x | 98.56 | 99.46 |
+
+The code fixture accepted a median 51 draft tokens and reduced logical target forwards by 78.1%. The implementation fuses the pending verifier token with the next draft block, rewinds the MLX KV cache in place, and resumes native asynchronous MLX decoding when context candidates end.
+
+This is not a universal 2x result. It is a repeated greater-than-2x median for a literal context-backed code continuation. Semantic RAG and open-ended generation use native fallback. Individual runs remain noisy even when both sides execute the same native path.
+
+## Legacy Diagnostic Artifacts
+
+Artifacts below this point predate the native MLX baseline and the adaptive fallback path. In particular, the July 6 "strict" MLX runs compared against a synchronous/stateless path near 10 tok/s and must not be used to claim a 3x to 8x improvement over optimized `mlx-lm`, Ollama, or another production runtime. They remain tracked for implementation history and regression analysis.
+
 ## Qwen2.5-3B Use Cases, Repeat 3
 
 Command:
