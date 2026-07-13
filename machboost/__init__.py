@@ -1,3 +1,5 @@
+__version__ = "0.2.0"
+
 from .accelerator import Accelerator, AcceleratorResult, CalibrationResult
 from .bench import (
     BenchmarkCase,
@@ -16,8 +18,9 @@ from .core import (
     RunStats,
     machboost,
 )
-
-__version__ = "0.1.4"
+from .client import MachBoostAPIError, MachBoostClient
+from .models import ModelAlias, ModelResolution, resolve_model
+from .server import RuntimeManager
 
 __all__ = [
     "Accelerator",
@@ -31,10 +34,16 @@ __all__ = [
     "GateDecision",
     "GatePolicy",
     "MachBoost",
+    "MachBoostAPIError",
+    "MachBoostClient",
+    "ModelAlias",
+    "ModelResolution",
     "RunStats",
+    "RuntimeManager",
     "benchmark",
     "benchmark_cases",
     "machboost",
+    "resolve_model",
     "summarize_results",
     "__version__",
 ]
