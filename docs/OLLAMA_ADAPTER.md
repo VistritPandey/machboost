@@ -1,10 +1,21 @@
-# Ollama Adapter Notes
+# Ollama Compatibility and Adapter Notes
 
 ## Summary
 
-Ollama can be a real native target for MachBoost, but not through the public HTTP generate API alone. The useful integration point is inside the model runner, where tokenization, logits, sampling state, KV cache state, accepted-prefix commits, and rollback are available.
+MachBoost 0.2 has its own resident Hugging Face/MLX runtime and exposes an Ollama-compatible HTTP surface. That compatibility lets existing clients use a MachBoost-owned decode path; it does not make an external Ollama process faster.
 
-The product-facing native command is `machboost run MODEL`, which currently targets Hugging Face and MLX backends directly. The Ollama commands described here are compatibility and research-adapter paths, not the main runner interface.
+An installed Ollama runtime can still be a real native target for MachBoost, but not through Ollama's public HTTP API alone. That integration point is inside the model runner, where tokenization, logits, sampling state, KV cache state, accepted-prefix commits, and rollback are available.
+
+The product-facing commands are native:
+
+```sh
+machboost pull qwen2.5:3b
+machboost warm qwen2.5:3b
+machboost run qwen2.5:3b
+machboost complete qwen2.5-coder:3b "def fibonacci(n):"
+```
+
+They auto-start the MachBoost server on `127.0.0.1:11435`, resolve short aliases to MLX on Apple Silicon when possible, and keep loaded models resident until their keep-alive expires or the user stops them.
 
 The local Ollama checkout already contains several relevant hooks:
 
@@ -38,6 +49,16 @@ Paths below are from the Ollama repository root.
 
 ## What This Means
 
+### MachBoost Ollama-Compatible Server
+
+MachBoost owns the model and decode loop in this mode. Supported endpoints include:
+
+- `/api/version`, `/api/tags`, `/api/ps`, and `/api/show`
+- `/api/pull`, `/api/load`, `/api/stop`, and `/api/shutdown`
+- streaming and non-streaming `/api/chat` and `/api/generate`
+
+The same process also exposes OpenAI-compatible `/v1/models`, `/v1/chat/completions`, and `/v1/completions` endpoints. This is protocol compatibility, not a claim of complete Ollama feature parity. Model creation, copying, deletion, embeddings, and multimodal inputs remain outside the 0.2 surface.
+
 ### External Ollama HTTP Wrapper
 
 Useful for:
@@ -62,10 +83,9 @@ MachBoost exposes this wrapper through:
 
 ```sh
 machboost ollama run qwen2.5:3b
-machboost chat qwen2.5:3b
 ```
 
-The flow mirrors the common `ollama run MODEL` experience: check installed models with `/api/tags`, pull a missing model with `/api/pull`, then stream chat responses with `/api/chat`. It intentionally remains wrapper mode.
+The flow mirrors the common `ollama run MODEL` experience against an external Ollama daemon: check installed models with `/api/tags`, pull a missing model with `/api/pull`, then stream chat responses with `/api/chat`. It intentionally remains wrapper mode. `machboost run` and `machboost chat` use the native resident MachBoost runtime instead.
 
 ### GGUF / llama-server Track
 
@@ -139,12 +159,12 @@ The same conceptual interface can back the Hugging Face prototype, MLX, and futu
 
 ## Product Guidance
 
-For public users, do not mutate an installed Ollama app in place. Ship one of:
+For public users, the default is now the standalone resident MachBoost server. It gives clients familiar streaming APIs without mutating an installed Ollama app. A future native Ollama integration should ship one of:
 
 - A documented fork for research builds.
 - A patch file users apply to a known Ollama commit.
 - A separate runner binary once Ollama runner selection can support it cleanly.
-- A MachBoost sidecar for wrappers and benchmarking, with native acceleration only when the backend supports verifier hooks.
+- A compatibility sidecar for wrappers and benchmarking, with native acceleration only when the backend supports verifier hooks.
 
 This keeps the project honest: fast where it owns or patches the decode path, useful but not magical where it only wraps a black-box server.
 
