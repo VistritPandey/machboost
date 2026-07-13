@@ -830,6 +830,28 @@ def run_pull(args: argparse.Namespace, *, output_stream=None, error_stream=None)
         return 2
 
 
+def run_warm(args: argparse.Namespace, *, output_stream=None, error_stream=None) -> int:
+    output_stream = output_stream or sys.stdout
+    error_stream = error_stream or sys.stderr
+    try:
+        client = connect_resident(args, error_stream=error_stream)
+        result = client.load(
+            args.model,
+            options=native_server_options(args),
+            keep_alive=args.keep_alive,
+        )
+        instance = result["instance"]
+        print(
+            f"loaded {instance['model']} on {instance['backend']} in "
+            f"{result['load_duration_seconds']:.2f}s; keep_alive={args.keep_alive}",
+            file=output_stream,
+        )
+        return 0
+    except MachBoostAPIError as exc:
+        print(f"machboost warm error: {exc}", file=error_stream)
+        return 2
+
+
 def run_ps(args: argparse.Namespace, *, output_stream=None, error_stream=None) -> int:
     output_stream = output_stream or sys.stdout
     error_stream = error_stream or sys.stderr
@@ -920,6 +942,9 @@ def build_parser() -> argparse.ArgumentParser:
     add_native_run_arguments(complete)
     complete.add_argument("prompt", nargs="?", help="Prompt text. Reads stdin when omitted.")
     complete.add_argument("--file", help="Read the completion prompt from a UTF-8 text file.")
+
+    warm = subcommands.add_parser("warm", help="Preload a native model into resident memory.")
+    add_native_run_arguments(warm)
 
     serve = subcommands.add_parser("serve", help="Start the resident MachBoost inference server.")
     serve.add_argument("--host", default=DEFAULT_HOST)
@@ -1067,6 +1092,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return run_resident_completion(args)
     if args.command == "serve":
         return run_serve(args)
+    if args.command == "warm":
+        return run_warm(args)
     if args.command == "pull":
         return run_pull(args)
     if args.command == "ps":
