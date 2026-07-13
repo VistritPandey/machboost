@@ -411,6 +411,7 @@ def load_native_accelerator(args: argparse.Namespace, *, stream=None) -> Acceler
         "ngram": args.ngram,
         "max_draft_tokens": args.max_draft_tokens,
         "candidate_limit": args.candidate_limit,
+        "reentry_probe_tokens": args.reentry_probe_tokens,
         "boost_enabled": not args.no_boost,
     }
     if backend == "mlx":
@@ -677,6 +678,12 @@ def add_native_run_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--ngram", type=int, default=2)
     parser.add_argument("--max-draft-tokens", type=int, default=8)
     parser.add_argument("--candidate-limit", type=int, default=1)
+    parser.add_argument(
+        "--reentry-probe-tokens",
+        type=int,
+        default=0,
+        help="MLX experimental: generate this many native seed tokens before context re-entry.",
+    )
     parser.add_argument("--system", default="", help="Optional system message.")
     parser.add_argument("--show-stats", action="store_true", help="Print MachBoost draft/verify stats after replies.")
     parser.add_argument("--no-boost", action="store_true", help="Run the serial baseline path.")
