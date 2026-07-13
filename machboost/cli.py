@@ -15,6 +15,8 @@ from typing import Optional, Sequence
 from . import __version__, machboost
 from .accelerator import Accelerator
 from .adapters.ollama import OllamaHTTPAdapter, OllamaHTTPError
+from .client import MachBoostAPIError, MachBoostClient, ensure_server
+from .server import DEFAULT_HOST, DEFAULT_PORT, serve as serve_runtime
 
 DEFAULT_CHAT_SYSTEM = "Answer directly and concisely. Do not reveal hidden reasoning."
 
@@ -621,6 +623,267 @@ def run_ollama_chat(
         messages.append({"role": "assistant", "content": "".join(chunks)})
 
 
+def native_server_options(args: argparse.Namespace) -> dict:
+    return {
+        "backend": args.backend,
+        "context_paths": list(args.context or ()),
+        "max_context_chars": args.max_context_chars,
+        "ngram": args.ngram,
+        "max_draft_tokens": args.max_draft_tokens,
+        "candidate_limit": args.candidate_limit,
+        "reentry_probe_tokens": args.reentry_probe_tokens,
+        "no_boost": args.no_boost,
+        "strict": args.strict,
+        "device": args.device,
+        "local_files_only": args.local_files_only,
+        "num_predict": args.max_tokens,
+    }
+
+
+def connect_resident(args: argparse.Namespace, *, error_stream=None) -> MachBoostClient:
+    error_stream = error_stream or sys.stderr
+    if args.no_autostart:
+        client = MachBoostClient(args.endpoint, timeout=args.timeout)
+        if not client.is_healthy():
+            raise MachBoostAPIError("MachBoost server is not running; start it with `machboost serve`")
+        return client
+    client, started = ensure_server(args.endpoint, timeout=min(30.0, args.timeout))
+    client.timeout = args.timeout
+    if started:
+        print(f"started resident MachBoost server at {client.endpoint}", file=error_stream)
+    return client
+
+
+def run_resident_chat(
+    args: argparse.Namespace,
+    *,
+    input_func=input,
+    output_stream=None,
+    error_stream=None,
+) -> int:
+    output_stream = output_stream or sys.stdout
+    error_stream = error_stream or sys.stderr
+    try:
+        client = connect_resident(args, error_stream=error_stream)
+    except MachBoostAPIError as exc:
+        print(f"machboost server error: {exc}", file=error_stream)
+        return 2
+
+    turns: list[dict[str, str]] = []
+    print(f"machboost run: {args.model}", file=output_stream)
+    print(f"server: {client.endpoint} (model stays warm until stop or shutdown)", file=output_stream)
+    print("Type /bye, /exit, or /quit to leave. Type /clear to reset chat history.", file=output_stream)
+
+    while True:
+        try:
+            user_text = input_func(">>> ")
+        except EOFError:
+            print("", file=output_stream)
+            return 0
+        except KeyboardInterrupt:
+            print("", file=output_stream)
+            return 130
+
+        command = user_text.strip()
+        if not command:
+            continue
+        if command in {"/bye", "/exit", "/quit"}:
+            return 0
+        if command == "/clear":
+            turns = []
+            print("chat history cleared", file=output_stream)
+            continue
+
+        turns.append({"role": "user", "content": user_text})
+        messages = [{"role": "system", "content": args.system or DEFAULT_CHAT_SYSTEM}, *turns]
+        response_parts: list[str] = []
+        final_row: dict = {}
+        started = time.perf_counter()
+        try:
+            rows = client.chat(
+                args.model,
+                messages,
+                options=native_server_options(args),
+                keep_alive=args.keep_alive,
+                stream=True,
+            )
+            for row in rows:
+                message = row.get("message") or {}
+                chunk = str(message.get("content") or "")
+                if chunk:
+                    print(chunk, end="", flush=True, file=output_stream)
+                    response_parts.append(chunk)
+                if row.get("done"):
+                    final_row = row
+        except KeyboardInterrupt:
+            print("", file=output_stream)
+            turns.pop()
+            return 130
+        except MachBoostAPIError as exc:
+            turns.pop()
+            print(f"\ngeneration error: {exc}", file=error_stream)
+            return 2
+
+        print("", flush=True, file=output_stream)
+        response = "".join(response_parts).strip()
+        if args.show_stats:
+            print_resident_stats(final_row, time.perf_counter() - started, stream=output_stream)
+        turns.append({"role": "assistant", "content": response})
+
+
+def run_resident_completion(args: argparse.Namespace, *, output_stream=None, error_stream=None) -> int:
+    output_stream = output_stream or sys.stdout
+    error_stream = error_stream or sys.stderr
+    try:
+        prompt = completion_prompt(args)
+        if args.direct:
+            accelerator = load_native_accelerator(args, stream=error_stream)
+            text, stats = accelerator.generate(prompt, max_tokens=args.max_tokens, on_text=lambda text: print(text, end="", flush=True, file=output_stream))
+            print("", file=output_stream)
+            if args.show_stats:
+                print(f"stats: generated={stats.generated_tokens} accepted={stats.accepted_draft_tokens}", file=output_stream)
+            return 0
+
+        client = connect_resident(args, error_stream=error_stream)
+        started = time.perf_counter()
+        rows = client.generate(
+            args.model,
+            prompt,
+            options=native_server_options(args),
+            keep_alive=args.keep_alive,
+            stream=True,
+        )
+        final_row: dict = {}
+        for row in rows:
+            chunk = str(row.get("response") or "")
+            if chunk:
+                print(chunk, end="", flush=True, file=output_stream)
+            if row.get("done"):
+                final_row = row
+        print("", file=output_stream)
+        if args.show_stats:
+            print_resident_stats(final_row, time.perf_counter() - started, stream=output_stream)
+        return 0
+    except (MachBoostAPIError, OSError, ValueError) as exc:
+        print(f"machboost complete error: {exc}", file=error_stream)
+        return 2
+
+
+def completion_prompt(args: argparse.Namespace) -> str:
+    if args.file:
+        if args.prompt:
+            raise ValueError("pass either a prompt or --file, not both")
+        return Path(args.file).expanduser().read_text(encoding="utf-8")
+    if args.prompt is not None:
+        return args.prompt
+    return sys.stdin.read()
+
+
+def print_resident_stats(row: dict, elapsed_s: float, *, stream=None) -> None:
+    stream = stream or sys.stdout
+    metrics = row.get("machboost") or {}
+    stats = metrics.get("stats") or {}
+    generated = int(row.get("eval_count") or stats.get("generated_tokens") or 0)
+    rate = generated / elapsed_s if elapsed_s > 0 else 0.0
+    print(
+        "stats: "
+        f"elapsed={elapsed_s:.2f}s "
+        f"tokens_per_second={rate:.2f} "
+        f"accepted={int(stats.get('accepted_draft_tokens') or 0)} "
+        f"target_calls={int(stats.get('target_calls') or 0)}/{int(stats.get('baseline_target_calls') or 0)} "
+        f"backend={metrics.get('backend', 'unknown')}",
+        file=stream,
+    )
+
+
+def run_serve(args: argparse.Namespace, *, output_stream=None, error_stream=None) -> int:
+    output_stream = output_stream or sys.stdout
+    error_stream = error_stream or sys.stderr
+    print(f"MachBoost server listening on http://{args.host}:{args.port}", file=output_stream)
+    print("Models remain loaded until `machboost stop`, `machboost shutdown`, or process exit.", file=output_stream)
+    try:
+        serve_runtime(args.host, args.port)
+    except KeyboardInterrupt:
+        print("\nMachBoost server stopped.", file=error_stream)
+    except OSError as exc:
+        print(f"machboost serve error: {exc}", file=error_stream)
+        return 2
+    return 0
+
+
+def run_pull(args: argparse.Namespace, *, output_stream=None, error_stream=None) -> int:
+    output_stream = output_stream or sys.stdout
+    error_stream = error_stream or sys.stderr
+    try:
+        client = connect_resident(args, error_stream=error_stream)
+        print(f"pulling {args.model}...", file=output_stream)
+        result = client.pull(args.model, revision=args.revision)
+        print(f"success: {result['path']}", file=output_stream)
+        return 0
+    except MachBoostAPIError as exc:
+        print(f"machboost pull error: {exc}", file=error_stream)
+        return 2
+
+
+def run_ps(args: argparse.Namespace, *, output_stream=None, error_stream=None) -> int:
+    output_stream = output_stream or sys.stdout
+    error_stream = error_stream or sys.stderr
+    client = MachBoostClient(args.endpoint, timeout=args.timeout)
+    if not client.is_healthy():
+        print("MachBoost server is not running.", file=output_stream)
+        return 0
+    try:
+        models = client.ps()
+    except MachBoostAPIError as exc:
+        print(f"machboost ps error: {exc}", file=error_stream)
+        return 2
+    if args.json:
+        print(json.dumps({"models": models}, indent=2), file=output_stream)
+        return 0
+    if not models:
+        print("No resident models.", file=output_stream)
+        return 0
+    print(f"{'NAME':<48} {'BACKEND':<8} {'REQUESTS':>8} {'IDLE':>9} {'KEEP ALIVE':>12}", file=output_stream)
+    for model in models:
+        keep_alive = "forever" if model["keep_alive_seconds"] < 0 else f"{model['keep_alive_seconds']:.0f}s"
+        print(
+            f"{model['model']:<48} {model['backend']:<8} {model['requests']:>8} "
+            f"{model['idle_seconds']:>8.1f}s {keep_alive:>12}",
+            file=output_stream,
+        )
+    return 0
+
+
+def run_server_action(args: argparse.Namespace, action: str, *, output_stream=None, error_stream=None) -> int:
+    output_stream = output_stream or sys.stdout
+    error_stream = error_stream or sys.stderr
+    client = MachBoostClient(args.endpoint, timeout=args.timeout)
+    if not client.is_healthy():
+        print("MachBoost server is not running.", file=error_stream)
+        return 2
+    try:
+        if action == "show":
+            result = client.show(args.model)
+        elif action == "stop":
+            result = client.stop(args.model)
+        elif action == "shutdown":
+            result = client.shutdown()
+        else:
+            raise ValueError(f"unknown server action: {action}")
+    except MachBoostAPIError as exc:
+        print(f"machboost {action} error: {exc}", file=error_stream)
+        return 2
+    if getattr(args, "json", False):
+        print(json.dumps(result, indent=2), file=output_stream)
+    elif action == "show":
+        print(json.dumps(result, indent=2), file=output_stream)
+    elif action == "stop":
+        print(f"unloaded {result.get('unloaded', 0)} model instance(s)", file=output_stream)
+    else:
+        print(f"server stopped; unloaded {result.get('unloaded', 0)} model instance(s)", file=output_stream)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="MachBoost local inference acceleration utilities.")
     subcommands = parser.add_subparsers(dest="command")
@@ -642,11 +905,41 @@ def build_parser() -> argparse.ArgumentParser:
         help="Hugging Face hub cache directory to inspect instead of the defaults. Can be repeated.",
     )
 
-    native_run = subcommands.add_parser("run", help="Run a native MachBoost HF/MLX model interactively.")
+    native_run = subcommands.add_parser("run", help="Chat with a native model through the resident MachBoost server.")
     add_native_run_arguments(native_run)
 
-    chat = subcommands.add_parser("chat", help="Ollama-compatible interactive chat shortcut.")
-    add_ollama_run_arguments(chat)
+    chat = subcommands.add_parser("chat", help="Alias for resident native `machboost run`.")
+    add_native_run_arguments(chat)
+
+    complete = subcommands.add_parser("complete", help="Stream raw text or code completion from a resident model.")
+    add_native_run_arguments(complete)
+    complete.add_argument("prompt", nargs="?", help="Prompt text. Reads stdin when omitted.")
+    complete.add_argument("--file", help="Read the completion prompt from a UTF-8 text file.")
+
+    serve = subcommands.add_parser("serve", help="Start the resident MachBoost inference server.")
+    serve.add_argument("--host", default=DEFAULT_HOST)
+    serve.add_argument("--port", type=int, default=DEFAULT_PORT)
+
+    pull = subcommands.add_parser("pull", help="Download a Hugging Face or MLX model into the local cache.")
+    pull.add_argument("model")
+    pull.add_argument("--revision", default=None)
+    add_server_connection_arguments(pull, include_autostart=True)
+
+    ps = subcommands.add_parser("ps", help="List models currently loaded in MachBoost memory.")
+    ps.add_argument("--json", action="store_true")
+    add_server_connection_arguments(ps)
+
+    show = subcommands.add_parser("show", help="Show a resident model's runtime state.")
+    show.add_argument("model")
+    show.add_argument("--json", action="store_true")
+    add_server_connection_arguments(show)
+
+    stop = subcommands.add_parser("stop", help="Unload a model from resident memory.")
+    stop.add_argument("model", nargs="?", help="Model to unload. Omit to unload every model.")
+    add_server_connection_arguments(stop)
+
+    shutdown = subcommands.add_parser("shutdown", help="Stop the resident server and unload every model.")
+    add_server_connection_arguments(shutdown)
 
     ollama = subcommands.add_parser("ollama", help="Ollama-compatible wrapper commands.")
     ollama_subcommands = ollama.add_subparsers(dest="ollama_command")
@@ -693,6 +986,16 @@ def add_native_run_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--device", default="auto", help="HF only: auto, cpu, mps, or cuda. Auto prefers MPS on Mac.")
     parser.add_argument("--dtype", choices=["auto", "float16", "bfloat16", "float32"], default="auto", help="HF only: model dtype. Auto uses float16 on MPS.")
     parser.add_argument("--local-files-only", action="store_true", help="HF only: do not download missing model files.")
+    parser.add_argument("--direct", action="store_true", help="Load in this process instead of using the resident server.")
+    parser.add_argument("--keep-alive", default="forever", help="Resident lifetime, for example forever, 10m, or 1h.")
+    add_server_connection_arguments(parser, include_autostart=True)
+
+
+def add_server_connection_arguments(parser: argparse.ArgumentParser, *, include_autostart: bool = False) -> None:
+    parser.add_argument("--endpoint", default=None, help="MachBoost server URL. Defaults to MACHBOOST_HOST or localhost:11435.")
+    parser.add_argument("--timeout", type=float, default=300.0, help="Server request timeout in seconds.")
+    if include_autostart:
+        parser.add_argument("--no-autostart", action="store_true", help="Require an already-running MachBoost server.")
 
 
 def add_ollama_run_arguments(parser: argparse.ArgumentParser) -> None:
@@ -752,9 +1055,23 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(__version__)
         return 0
     if args.command == "run":
-        return run_native_chat(args)
+        return run_native_chat(args) if args.direct else run_resident_chat(args)
     if args.command == "chat":
-        return run_ollama_chat(args)
+        return run_native_chat(args) if args.direct else run_resident_chat(args)
+    if args.command == "complete":
+        return run_resident_completion(args)
+    if args.command == "serve":
+        return run_serve(args)
+    if args.command == "pull":
+        return run_pull(args)
+    if args.command == "ps":
+        return run_ps(args)
+    if args.command == "show":
+        return run_server_action(args, "show")
+    if args.command == "stop":
+        return run_server_action(args, "stop")
+    if args.command == "shutdown":
+        return run_server_action(args, "shutdown")
     if args.command == "ollama" and args.ollama_command == "run":
         return run_ollama_chat(args)
     parser.print_help()
