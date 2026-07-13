@@ -43,6 +43,14 @@ Re-entry broadens useful coverage: RAG accepts a median 30 draft tokens after on
 
 The current repeated default result is close to, but below, 2x. This is not a universal acceleration result. The implementation fuses verifier continuation with the next draft block, rewinds the MLX KV cache in place, matches native MLX prompt prefill, and resumes native asynchronous decoding when context candidates end.
 
+## Runtime Suitability Probe, July 13 2026
+
+Artifact: `runtime_probe_qwen25_3b_20260713.json`
+
+A separate forced 64-token decode probe compared Qwen2.5 3B runtimes on the same M1 Max. Native `mlx-lm` reached a median 127.41 tok/s, while Ollama reached 94.68 tok/s, a 1.35x MLX advantage. `vllm-mlx` 0.4.0 reached 15.80 tok/s for five serial prompts and 93.19 tok/s aggregate for five concurrent prompts in its built-in benchmark. The latter improves concurrent completion time but does not improve single-request decode latency.
+
+This is not an exact-weight comparison: MLX and Ollama use different 4-bit formats. The artifact records raw rates, versions, commands' workload shape, and additional caveats. It supports selecting native MLX for Apple Silicon single-stream chat; it does not support a universal 2x claim.
+
 ## Legacy Diagnostic Artifacts
 
 Artifacts below this point predate the native MLX baseline and the adaptive fallback path. In particular, the July 6 "strict" MLX runs compared against a synchronous/stateless path near 10 tok/s and must not be used to claim a 3x to 8x improvement over optimized `mlx-lm`, Ollama, or another production runtime. They remain tracked for implementation history and regression analysis.
