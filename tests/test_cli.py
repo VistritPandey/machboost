@@ -157,14 +157,14 @@ class CLITests(unittest.TestCase):
         self.assertEqual(FakeAccelerator.instances[-1].messages[-1][0][0]["role"], "system")
         self.assertEqual(FakeAccelerator.instances[-1].messages[-1][0][-1]["content"], "hello")
 
-    def test_ollama_chat_shortcut_pulls_missing_model_and_streams_response(self):
+    def test_explicit_ollama_wrapper_pulls_missing_model_and_streams_response(self):
         output = io.StringIO()
         errors = io.StringIO()
         prompts = iter(["hello", "/bye"])
 
         with patch.object(cli, "OllamaHTTPAdapter", FakeOllamaAdapter):
             code = cli.run_ollama_chat(
-                cli.build_parser().parse_args(["chat", "qwen2.5:3b"]),
+                cli.build_parser().parse_args(["ollama", "run", "qwen2.5:3b"]),
                 input_func=lambda prompt: next(prompts),
                 output_stream=output,
                 error_stream=errors,
@@ -190,6 +190,77 @@ class CLITests(unittest.TestCase):
 
         self.assertEqual(code, 0)
         self.assertNotIn("pulling", errors.getvalue())
+
+    def test_resident_run_streams_chat_and_forwards_acceleration_options(self):
+        output = io.StringIO()
+        errors = io.StringIO()
+        prompts = iter(["hello", "/bye"])
+        client = FakeResidentClient()
+
+        with patch.object(cli, "connect_resident", return_value=client):
+            code = cli.run_resident_chat(
+                cli.build_parser().parse_args(
+                    [
+                        "run",
+                        "mlx-community/Qwen2.5-3B-Instruct-4bit",
+                        "--context",
+                        "docs",
+                        "--ngram",
+                        "3",
+                        "--show-stats",
+                    ]
+                ),
+                input_func=lambda prompt: next(prompts),
+                output_stream=output,
+                error_stream=errors,
+            )
+
+        self.assertEqual(code, 0)
+        self.assertIn("resident response", output.getvalue())
+        self.assertIn("backend=mlx", output.getvalue())
+        self.assertEqual(client.chat_calls[0][2]["context_paths"], ["docs"])
+        self.assertEqual(client.chat_calls[0][2]["ngram"], 3)
+        self.assertEqual(client.chat_calls[0][3], "forever")
+
+    def test_resident_completion_streams_raw_output(self):
+        output = io.StringIO()
+        errors = io.StringIO()
+        client = FakeResidentClient()
+
+        with patch.object(cli, "connect_resident", return_value=client):
+            code = cli.run_resident_completion(
+                cli.build_parser().parse_args(
+                    ["complete", "mlx-community/example", "def add", "--max-tokens", "16"]
+                ),
+                output_stream=output,
+                error_stream=errors,
+            )
+
+        self.assertEqual(code, 0)
+        self.assertEqual(output.getvalue(), "completion\n")
+        self.assertEqual(client.generate_calls[0][1], "def add")
+        self.assertEqual(client.generate_calls[0][2]["num_predict"], 16)
+
+    def test_ps_prints_resident_model_table(self):
+        output = io.StringIO()
+        client = FakeResidentClient()
+
+        with patch.object(cli, "MachBoostClient", return_value=client):
+            code = cli.run_ps(
+                cli.build_parser().parse_args(["ps"]),
+                output_stream=output,
+            )
+
+        self.assertEqual(code, 0)
+        self.assertIn("mlx-community/example", output.getvalue())
+        self.assertIn("forever", output.getvalue())
+
+    def test_chat_command_uses_native_resident_arguments(self):
+        args = cli.build_parser().parse_args(["chat", "mlx-community/example", "--backend", "mlx"])
+
+        self.assertEqual(args.command, "chat")
+        self.assertEqual(args.backend, "mlx")
+        self.assertEqual(args.keep_alive, "forever")
 
 
 class FakePullStatus:
@@ -232,6 +303,60 @@ class FakeOllamaAdapter:
 class InstalledFakeOllamaAdapter(FakeOllamaAdapter):
     def has_model(self):
         return True
+
+
+class FakeResidentClient:
+    endpoint = "http://127.0.0.1:11435"
+
+    def __init__(self):
+        self.chat_calls = []
+        self.generate_calls = []
+
+    def is_healthy(self):
+        return True
+
+    def chat(self, model, messages, *, options, keep_alive, stream):
+        self.chat_calls.append((model, messages, options, keep_alive, stream))
+        return iter(
+            [
+                {"message": {"content": "resident "}, "done": False},
+                {"message": {"content": "response"}, "done": False},
+                {
+                    "message": {"content": ""},
+                    "done": True,
+                    "eval_count": 2,
+                    "machboost": {
+                        "backend": "mlx",
+                        "stats": {
+                            "generated_tokens": 2,
+                            "accepted_draft_tokens": 1,
+                            "target_calls": 1,
+                            "baseline_target_calls": 2,
+                        },
+                    },
+                },
+            ]
+        )
+
+    def generate(self, model, prompt, *, options, keep_alive, stream):
+        self.generate_calls.append((model, prompt, options, keep_alive, stream))
+        return iter(
+            [
+                {"response": "completion", "done": False},
+                {"response": "", "done": True, "eval_count": 1, "machboost": {"backend": "mlx", "stats": {}}},
+            ]
+        )
+
+    def ps(self):
+        return [
+            {
+                "model": "mlx-community/example",
+                "backend": "mlx",
+                "requests": 3,
+                "idle_seconds": 1.5,
+                "keep_alive_seconds": -1.0,
+            }
+        ]
 
 
 def write_cached_model(cache_dir, model_id, config):
