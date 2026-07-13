@@ -399,6 +399,7 @@ def run_mlx(args: argparse.Namespace, fixtures: list[Fixture]) -> list[BenchRow]
             ngram=args.ngram,
             max_draft_tokens=args.max_draft_tokens,
             candidate_limit=args.candidate_limit,
+            reentry_probe_tokens=args.reentry_probe_tokens,
         )
 
         def run_baseline():
@@ -699,6 +700,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--ngram", type=int, default=2)
     parser.add_argument("--max-draft-tokens", type=int, default=8)
     parser.add_argument("--candidate-limit", type=int, default=1)
+    parser.add_argument("--reentry-probe-tokens", type=int, default=0)
     parser.add_argument("--source-mode", choices=["prompt-context", "context", "prompt"], default="context")
     parser.add_argument("--verify-mode", choices=["block", "hybrid", "sequential"], default="hybrid")
     parser.add_argument("--anchor-tokens", type=int, default=1)
@@ -742,6 +744,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "ngram": args.ngram,
             "max_draft_tokens": args.max_draft_tokens,
             "candidate_limit": args.candidate_limit,
+            "reentry_probe_tokens": args.reentry_probe_tokens,
             "source_mode": args.source_mode,
             "verify_mode": args.verify_mode,
             "mlx_disable_cache": args.mlx_disable_cache,
