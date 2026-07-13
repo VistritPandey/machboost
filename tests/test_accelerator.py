@@ -126,7 +126,13 @@ class AcceleratorTests(unittest.TestCase):
         prompt = "Question: what does the note say?\nAnswer:"
         completion = "The exact answer is in context."
         service = ResumableFallbackService(prompt, completion)
-        accelerator = Accelerator(service, context_texts=[completion], ngram=3, max_draft_tokens=32)
+        accelerator = Accelerator(
+            service,
+            context_texts=[completion],
+            ngram=3,
+            max_draft_tokens=32,
+            reentry_probe_tokens=3,
+        )
 
         result = accelerator.generate_result(prompt, max_tokens=len(completion))
 
