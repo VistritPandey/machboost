@@ -85,6 +85,7 @@ class CLITests(unittest.TestCase):
         self.assertIn("mlx-community/Qwen3.5-0.8B-MLX-4bit", names)
         self.assertNotIn("thenlper/gte-base", names)
         self.assertEqual(data["hidden_unsupported_count"], 1)
+        self.assertIn("qwen2.5:3b", {alias["name"] for alias in data["aliases"]})
 
     def test_main_list_json_can_show_unsupported_cached_models(self):
         output = io.StringIO()
@@ -108,6 +109,10 @@ class CLITests(unittest.TestCase):
         self.assertEqual(cli.select_native_backend("mlx-community/Qwen3.5-0.8B-MLX-4bit", "auto"), "mlx")
         self.assertEqual(cli.select_native_backend("Qwen/Qwen2.5-3B-Instruct", "auto"), "hf")
         self.assertEqual(cli.select_native_backend("mlx-community/Qwen3.5-0.8B-MLX-4bit", "hf"), "hf")
+
+    def test_short_model_alias_selects_native_mlx_backend(self):
+        with patch("machboost.models.native_mlx_available", return_value=True):
+            self.assertEqual(cli.select_native_backend("qwen2.5:3b", "auto"), "mlx")
 
     def test_render_chat_prompt_includes_system_and_history(self):
         prompt = cli.render_chat_prompt(
