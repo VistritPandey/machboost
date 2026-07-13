@@ -42,6 +42,20 @@ class ScriptedStepService:
         return self.target[offset]
 
 
+class ScriptedVerifierWithNativeTail(ScriptedVerifierService):
+    def __init__(self, target):
+        super().__init__(target)
+        self.native_tail_calls = 0
+
+    def continue_tokens(self, prefix_tokens, *, max_tokens, stop_tokens=None, on_tokens=None):
+        self.native_tail_calls += 1
+        offset = self._offset(prefix_tokens)
+        tokens = self.target[offset : offset + max_tokens]
+        if on_tokens is not None and tokens:
+            on_tokens(tokens)
+        return tokens
+
+
 class PythonPackageTest(unittest.TestCase):
     def test_corpus_drafter_uses_observed_history(self):
         drafter = CorpusDrafter([1, 2, 3, 4, 5, 6], ngram=2, max_draft_tokens=4)
@@ -78,6 +92,20 @@ class PythonPackageTest(unittest.TestCase):
         self.assertEqual(service.calls, stats.target_calls)
         self.assertGreaterEqual(stats.target_calls, stats.baseline_target_calls)
         self.assertLessEqual(stats.estimated_speedup, 1.0)
+
+    def test_native_probe_reenters_context_drafting(self):
+        prompt = (100, 101, 102)
+        target = (1, 2, 3, 4, 5, 6)
+        service = ScriptedVerifierWithNativeTail(target)
+
+        boosted = machboost(service, corpus_tokens=target, ngram=2, max_draft_tokens=8)
+        generated, stats = boosted.generate(prompt, max_tokens=len(target))
+
+        self.assertEqual(generated, target)
+        self.assertEqual(stats.next_token_calls, 2)
+        self.assertEqual(stats.accepted_draft_tokens, 4)
+        self.assertEqual(service.native_tail_calls, 0)
+        self.assertEqual(stats.estimated_speedup, 2.0)
 
     def test_candidate_limit_can_try_alternate_context_match(self):
         prompt = (100, 101, 102)
