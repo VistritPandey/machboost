@@ -11,9 +11,13 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 import hashlib
+from importlib import metadata
 import json
 from pathlib import Path
+import platform
+import subprocess
 import sys
 import tempfile
 import time
@@ -49,6 +53,7 @@ class BenchRow:
     expectation: str
     nonce: str
     mode: str
+    run_order: str
     output_match: bool
     baseline_ms: float
     boosted_ms: float
@@ -351,6 +356,7 @@ def run_hf(args: argparse.Namespace, fixtures: list[Fixture]) -> list[BenchRow]:
                     expectation=fixture.expectation,
                     nonce=fixture.nonce,
                     mode="native_verifier_kv_cache",
+                    run_order="baseline_first",
                     output_match=result.output_match,
                     baseline_ms=float(baseline.elapsed_ms),
                     boosted_ms=float(boosted.elapsed_ms),
@@ -406,9 +412,11 @@ def run_mlx(args: argparse.Namespace, fixtures: list[Fixture]) -> list[BenchRow]
             return result, time.perf_counter() - started, service.forward_calls
 
         if index % 2 == 0:
+            run_order = "baseline_first"
             baseline_tokens, baseline_elapsed, baseline_forwards = run_baseline()
             boosted_result, boosted_elapsed, boosted_forwards = run_boosted()
         else:
+            run_order = "boosted_first"
             boosted_result, boosted_elapsed, boosted_forwards = run_boosted()
             baseline_tokens, baseline_elapsed, baseline_forwards = run_baseline()
 
@@ -427,6 +435,7 @@ def run_mlx(args: argparse.Namespace, fixtures: list[Fixture]) -> list[BenchRow]
                 expectation=fixture.expectation,
                 nonce=fixture.nonce,
                 mode="native_fallback" if stats.accepted_draft_tokens == 0 else "adaptive_context_verifier",
+                run_order=run_order,
                 output_match=baseline_tokens == boosted_tokens,
                 baseline_ms=baseline_elapsed * 1000,
                 boosted_ms=boosted_elapsed * 1000,
@@ -509,6 +518,7 @@ def run_ollama(args: argparse.Namespace, fixtures: list[Fixture]) -> list[BenchR
                 expectation=fixture.expectation,
                 nonce=fixture.nonce,
                 mode="http_wrapper_no_native_verifier",
+                run_order="baseline_first",
                 output_match=baseline_output == boosted_output,
                 baseline_ms=ollama_ms(baseline) or baseline_elapsed * 1000,
                 boosted_ms=boosted.total_ms or boosted_elapsed * 1000,
@@ -645,6 +655,40 @@ def percentile(values: list[float | int], pct: float) -> float:
     return ordered[lower] + (ordered[upper] - ordered[lower]) * fraction
 
 
+def command_output(*command: str) -> str:
+    try:
+        result = subprocess.run(command, check=False, capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return (result.stdout or result.stderr).strip()
+
+
+def package_version(name: str) -> str | None:
+    try:
+        return metadata.version(name)
+    except metadata.PackageNotFoundError:
+        return None
+
+
+def environment_snapshot() -> dict[str, Any]:
+    return {
+        "captured_at": datetime.now(timezone.utc).isoformat(),
+        "platform": platform.platform(),
+        "machine": platform.machine(),
+        "python": platform.python_version(),
+        "cpu": command_output("sysctl", "-n", "machdep.cpu.brand_string"),
+        "memory_bytes": command_output("sysctl", "-n", "hw.memsize"),
+        "thermal_status": command_output("pmset", "-g", "therm"),
+        "packages": {
+            "machboost": package_version("machboost"),
+            "mlx": package_version("mlx"),
+            "mlx_lm": package_version("mlx-lm"),
+            "torch": package_version("torch"),
+            "transformers": package_version("transformers"),
+        },
+    }
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Benchmark MachBoost across HF, MLX, and Ollama backends.")
     parser.add_argument("--backends", default="all", help="Comma-separated: hf,mlx,ollama,all")
@@ -672,6 +716,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
+    environment_before = environment_snapshot()
     fixture_names = [item.strip() for item in args.fixtures.split(",") if item.strip()]
     fixtures = [
         build_fixture(name, make_nonce(args.seed, repeat, name))
@@ -701,6 +746,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "verify_mode": args.verify_mode,
             "mlx_disable_cache": args.mlx_disable_cache,
         },
+        "environment_before": environment_before,
+        "environment_after": environment_snapshot(),
         "summaries": summarize(rows),
         "fixture_summaries": summarize_by_fixture(rows),
         "rows": data_rows,
