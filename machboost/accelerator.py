@@ -65,6 +65,7 @@ class Accelerator:
         max_suffix_tokens: int = DEFAULT_MAX_SUFFIX_TOKENS,
         max_draft_tokens: int = DEFAULT_MAX_DRAFT_TOKENS,
         candidate_limit: int = 1,
+        reentry_probe_tokens: int = 0,
         boost_enabled: bool = True,
     ) -> None:
         self.service = service
@@ -73,6 +74,7 @@ class Accelerator:
         self.max_suffix_tokens = max_suffix_tokens
         self.max_draft_tokens = max_draft_tokens
         self.candidate_limit = max(1, int(candidate_limit))
+        self.reentry_probe_tokens = max(0, int(reentry_probe_tokens))
         self.boost_enabled = bool(boost_enabled)
         self.context_tokens = self._encode_many(self.context_texts)
 
@@ -88,6 +90,7 @@ class Accelerator:
         max_suffix_tokens: int = DEFAULT_MAX_SUFFIX_TOKENS,
         max_draft_tokens: int = DEFAULT_MAX_DRAFT_TOKENS,
         candidate_limit: int = 1,
+        reentry_probe_tokens: int = 0,
         tokenizer_config: Optional[dict] = None,
         model_config: Optional[dict] = None,
         adapter_path: Optional[str] = None,
@@ -118,6 +121,7 @@ class Accelerator:
             max_suffix_tokens=max_suffix_tokens,
             max_draft_tokens=max_draft_tokens,
             candidate_limit=candidate_limit,
+            reentry_probe_tokens=reentry_probe_tokens,
             boost_enabled=boost_enabled,
         )
 
@@ -133,6 +137,7 @@ class Accelerator:
         max_suffix_tokens: int = DEFAULT_MAX_SUFFIX_TOKENS,
         max_draft_tokens: int = DEFAULT_MAX_DRAFT_TOKENS,
         candidate_limit: int = 1,
+        reentry_probe_tokens: int = 0,
         device: Optional[str] = None,
         local_files_only: bool = False,
         torch_dtype=None,
@@ -161,6 +166,7 @@ class Accelerator:
             max_suffix_tokens=max_suffix_tokens,
             max_draft_tokens=max_draft_tokens,
             candidate_limit=candidate_limit,
+            reentry_probe_tokens=reentry_probe_tokens,
             boost_enabled=boost_enabled,
         )
 
@@ -237,12 +243,16 @@ class Accelerator:
             max_suffix_tokens=self.max_suffix_tokens,
             max_draft_tokens=self.max_draft_tokens,
             candidate_limit=self.candidate_limit,
+            reentry_probe_tokens=self.reentry_probe_tokens,
         )
         boosted.drafter.reset(prompt_tokens)
         has_initial_candidate = bool(
             boosted.drafter.candidates(max_tokens=max_tokens, limit=self.candidate_limit)
         )
-        if not has_initial_candidate and not callable(getattr(self.service, "continue_tokens", None)):
+        if not has_initial_candidate and (
+            self.reentry_probe_tokens <= 0
+            or not callable(getattr(self.service, "continue_tokens", None))
+        ):
             return self._generate_serial_result(
                 prompt_tokens,
                 max_tokens=max_tokens,
