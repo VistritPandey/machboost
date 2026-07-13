@@ -55,6 +55,20 @@ class NativeFallbackService(ScriptedService):
         return tokens
 
 
+class ResumableFallbackService(ScriptedService):
+    def __init__(self, prompt, completion):
+        super().__init__(prompt, completion)
+        self.native_tail_calls = 0
+
+    def continue_tokens(self, prefix_tokens, *, max_tokens, stop_tokens=None, on_tokens=None):
+        self.native_tail_calls += 1
+        offset = max(0, len(prefix_tokens) - self.prompt_len)
+        tokens = self.completion[offset : offset + max_tokens]
+        if on_tokens is not None and tokens:
+            on_tokens(tokens)
+        return tokens
+
+
 class FakeChatTokenizer:
     eos_token_id = 0
     all_special_ids = [0]
@@ -107,6 +121,19 @@ class AcceleratorTests(unittest.TestCase):
         self.assertEqual(result.text, completion)
         self.assertEqual(service.native_calls, 1)
         self.assertEqual(result.stats.accepted_draft_tokens, 0)
+
+    def test_generate_can_reenter_drafting_after_native_probe(self):
+        prompt = "Question: what does the note say?\nAnswer:"
+        completion = "The exact answer is in context."
+        service = ResumableFallbackService(prompt, completion)
+        accelerator = Accelerator(service, context_texts=[completion], ngram=3, max_draft_tokens=32)
+
+        result = accelerator.generate_result(prompt, max_tokens=len(completion))
+
+        self.assertEqual(result.text, completion)
+        self.assertEqual(result.stats.next_token_calls, 3)
+        self.assertGreater(result.stats.accepted_draft_tokens, 0)
+        self.assertEqual(service.native_tail_calls, 0)
 
     def test_generate_chat_uses_template_and_cleans_role_prefix(self):
         completion = "Assistant: hello there"
