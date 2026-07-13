@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from machboost.models import MODEL_ALIASES, alias_rows, resolve_model
+from machboost.models import MODEL_ALIASES, alias_rows, model_targets, resolve_model
 
 
 class ModelCatalogTests(unittest.TestCase):
@@ -39,6 +39,15 @@ class ModelCatalogTests(unittest.TestCase):
 
         self.assertEqual([row["name"] for row in rows], sorted(MODEL_ALIASES))
         self.assertTrue(all(row["mlx"] or row["hf"] for row in rows))
+
+    def test_alias_targets_include_both_native_backends(self):
+        self.assertEqual(
+            model_targets("qwen2.5:3b"),
+            {
+                "mlx-community/Qwen2.5-3B-Instruct-4bit",
+                "Qwen/Qwen2.5-3B-Instruct",
+            },
+        )
 
 
 if __name__ == "__main__":
