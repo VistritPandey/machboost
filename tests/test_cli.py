@@ -260,6 +260,20 @@ class CLITests(unittest.TestCase):
         self.assertIn("mlx-community/example", output.getvalue())
         self.assertIn("forever", output.getvalue())
 
+    def test_warm_preloads_model_through_resident_client(self):
+        output = io.StringIO()
+        client = FakeResidentClient()
+
+        with patch.object(cli, "connect_resident", return_value=client):
+            code = cli.run_warm(
+                cli.build_parser().parse_args(["warm", "qwen2.5:3b", "--keep-alive", "2h"]),
+                output_stream=output,
+            )
+
+        self.assertEqual(code, 0)
+        self.assertIn("mlx-community/Qwen2.5-3B-Instruct-4bit", output.getvalue())
+        self.assertEqual(client.load_calls[0][2], "2h")
+
     def test_chat_command_uses_native_resident_arguments(self):
         args = cli.build_parser().parse_args(["chat", "mlx-community/example", "--backend", "mlx"])
 
@@ -316,6 +330,7 @@ class FakeResidentClient:
     def __init__(self):
         self.chat_calls = []
         self.generate_calls = []
+        self.load_calls = []
 
     def is_healthy(self):
         return True
@@ -362,6 +377,17 @@ class FakeResidentClient:
                 "keep_alive_seconds": -1.0,
             }
         ]
+
+    def load(self, model, *, options, keep_alive):
+        self.load_calls.append((model, options, keep_alive))
+        return {
+            "status": "success",
+            "load_duration_seconds": 1.25,
+            "instance": {
+                "model": "mlx-community/Qwen2.5-3B-Instruct-4bit",
+                "backend": "mlx",
+            },
+        }
 
 
 def write_cached_model(cache_dir, model_id, config):
