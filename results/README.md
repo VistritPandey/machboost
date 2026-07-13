@@ -43,6 +43,21 @@ Re-entry broadens useful coverage: RAG accepts a median 30 draft tokens after on
 
 The current repeated default result is close to, but below, 2x. This is not a universal acceleration result. The implementation fuses verifier continuation with the next draft block, rewinds the MLX KV cache in place, matches native MLX prompt prefill, and resumes native asynchronous decoding when context candidates end.
 
+## Resident Server Evidence, July 13 2026
+
+Artifact: `resident_qwen25_3b_20260713.json`
+
+MachBoost 0.2.0 adds a resident HTTP server that keeps native MLX/Hugging Face models loaded between CLI, Ollama-compatible, and OpenAI-compatible requests. The model was preloaded with `machboost warm qwen2.5:3b --keep-alive forever` and resolved to `mlx-community/Qwen2.5-3B-Instruct-4bit`.
+
+| Workload | Rows | Median TTFT | Median Total | Median End-to-End tok/s |
+|---|---:|---:|---:|---:|
+| forced 64-token completion | 5 | not measured | 0.657s | 97.47 |
+| short streaming chat | 5 | 0.298s | 0.358s | not comparable across variable output lengths |
+
+The first completion after loading took 0.973 seconds because the Metal execution path still required initialization; the next four took 0.650-0.663 seconds. Every row used native fallback with zero accepted draft tokens, so this experiment measures warm serving and corrected streaming detokenization rather than context-backed speculation.
+
+The historical Ollama same-family probe recorded a 0.883-second median total duration for the forced 64-token shape, versus 0.657 seconds for the resident MachBoost run, a 1.35x wall-time ratio. The repositories use different 4-bit formats and the runs were not interleaved, so this is a runtime-suitability observation rather than exact-weight or paper-grade superiority evidence.
+
 ## Runtime Suitability Probe, July 13 2026
 
 Artifact: `runtime_probe_qwen25_3b_20260713.json`
