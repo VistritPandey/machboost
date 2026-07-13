@@ -53,6 +53,22 @@ class MachBoostClient:
             payload["revision"] = revision
         return self.post("/api/pull", payload)
 
+    def load(
+        self,
+        model: str,
+        *,
+        options: Optional[dict[str, Any]] = None,
+        keep_alive: Any = "forever",
+    ) -> dict[str, Any]:
+        return self.post(
+            "/api/load",
+            {
+                "model": model,
+                "options": dict(options or {}),
+                "keep_alive": keep_alive,
+            },
+        )
+
     def show(self, model: str) -> dict[str, Any]:
         return self.post("/api/show", {"model": model})
 
