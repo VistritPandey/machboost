@@ -224,7 +224,7 @@ class Accelerator:
         on_text: Optional[Callable[[str], None]] = None,
     ) -> AcceleratorResult:
         prompt_tokens = self.service.encode(prompt)
-        on_tokens = self._on_tokens(on_text)
+        token_streamer = self._on_tokens(on_text)
         run_context_tokens = self.context_tokens + self._encode_many(resolve_context(context))
         if not self.boost_enabled or (not run_context_tokens and callable(getattr(self.service, "generate_tokens", None))):
             return self._generate_serial_result(
@@ -232,7 +232,7 @@ class Accelerator:
                 max_tokens=max_tokens,
                 stop_tokens=stop_tokens,
                 stop_strings=stop_strings,
-                on_tokens=on_tokens,
+                on_tokens=token_streamer,
             )
 
         corpus_tokens = run_context_tokens
@@ -258,7 +258,7 @@ class Accelerator:
                 max_tokens=max_tokens,
                 stop_tokens=stop_tokens,
                 stop_strings=stop_strings,
-                on_tokens=on_tokens,
+                on_tokens=token_streamer,
             )
 
         reset_cache = getattr(self.service, "reset_cache", None)
@@ -268,8 +268,10 @@ class Accelerator:
             prompt_tokens,
             max_tokens=max_tokens,
             stop_tokens=stop_tokens,
-            on_tokens=on_tokens,
+            on_tokens=token_streamer,
         )
+        if token_streamer is not None:
+            token_streamer.finish()
         text = truncate_at_stop_strings(self.service.decode(tokens), stop_strings)
         return AcceleratorResult(text=text, tokens=tokens, stats=stats)
 
@@ -326,13 +328,7 @@ class Accelerator:
     def _on_tokens(self, on_text: Optional[Callable[[str], None]]):
         if on_text is None:
             return None
-
-        def emit(tokens: Tuple[Token, ...]) -> None:
-            text = self.service.decode(tokens)
-            if text:
-                on_text(text)
-
-        return emit
+        return TokenTextStreamer(self.service, on_text)
 
     def _generate_serial_result(
         self,
@@ -370,6 +366,9 @@ class Accelerator:
             )
             tokens = measurement.tokens
             target_calls = measurement.target_calls
+
+        if on_tokens is not None and callable(getattr(on_tokens, "finish", None)):
+            on_tokens.finish()
 
         stats = RunStats(
             generated_tokens=len(tokens),
@@ -599,6 +598,50 @@ class ChatTextStreamer:
             return
         self.emit(self.buffer[:safe_len])
         self.buffer = self.buffer[safe_len:]
+
+
+class TokenTextStreamer:
+    def __init__(self, service, emit: Callable[[str], None]) -> None:
+        self.service = service
+        self.emit = emit
+        self.tokens: list[Token] = []
+        self.emitted_text = ""
+        self.detokenizer = self._make_detokenizer()
+
+    def __call__(self, tokens: Tuple[Token, ...]) -> None:
+        if self.detokenizer is not None:
+            for token in tokens:
+                self.detokenizer.add_token(int(token))
+                segment = str(self.detokenizer.last_segment or "")
+                if segment:
+                    self.emit(segment)
+            return
+
+        self.tokens.extend(int(token) for token in tokens)
+        text = self.service.decode(self.tokens)
+        segment = text[len(self.emitted_text) :]
+        if segment:
+            self.emit(segment)
+        self.emitted_text = text
+
+    def finish(self) -> None:
+        if self.detokenizer is None:
+            return
+        self.detokenizer.finalize()
+        segment = str(self.detokenizer.last_segment or "")
+        if segment:
+            self.emit(segment)
+
+    def _make_detokenizer(self):
+        tokenizer = getattr(self.service, "tokenizer", None)
+        if tokenizer is None:
+            return None
+        try:
+            detokenizer = tokenizer.detokenizer
+            detokenizer.reset()
+            return detokenizer
+        except (AttributeError, TypeError):
+            return None
 
 
 def first_stop_index(text: str, stop_strings: Iterable[str]) -> Optional[int]:
