@@ -130,6 +130,26 @@ class TokenByTokenNativeService(NativeFallbackService):
         return tokens
 
 
+class PredecodedNativeService(NativeFallbackService):
+    supports_native_text_streaming = True
+
+    def generate_tokens(
+        self,
+        prompt_tokens,
+        *,
+        max_tokens,
+        stop_tokens=None,
+        on_tokens=None,
+        on_text=None,
+    ):
+        self.native_calls += 1
+        tokens = self.completion[:max_tokens]
+        self.received_on_tokens = on_tokens
+        if on_text is not None:
+            on_text(self.decode(tokens))
+        return tokens
+
+
 class AcceleratorTests(unittest.TestCase):
     def test_generate_result_uses_context_drafts(self):
         prompt = "Question: ship policy?\nAnswer: "
@@ -180,6 +200,19 @@ class AcceleratorTests(unittest.TestCase):
         self.assertEqual(result.text, completion)
         self.assertEqual("".join(chunks), completion)
         self.assertEqual(service.decode_calls, 1)
+
+    def test_native_predecoded_text_bypasses_second_detokenizer(self):
+        prompt = "Complete: "
+        completion = "alpha beta"
+        service = PredecodedNativeService(prompt, completion)
+        accelerator = Accelerator(service)
+        chunks = []
+
+        result = accelerator.generate_result(prompt, max_tokens=len(completion), on_text=chunks.append)
+
+        self.assertEqual(result.text, completion)
+        self.assertEqual("".join(chunks), completion)
+        self.assertIsNone(service.received_on_tokens)
 
     def test_generate_can_reenter_drafting_after_native_probe(self):
         prompt = "Question: what does the note say?\nAnswer:"
