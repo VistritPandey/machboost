@@ -135,3 +135,11 @@ def select_backend_for_repo(model: str, backend: str = "auto") -> str:
 
 def alias_rows() -> list[dict]:
     return [MODEL_ALIASES[name].to_dict() for name in sorted(MODEL_ALIASES)]
+
+
+def model_targets(model: str) -> set[str]:
+    requested = model.strip()
+    alias = MODEL_ALIASES.get(requested.lower())
+    if alias is None:
+        return {str(Path(requested).expanduser()) if Path(requested).expanduser().exists() else requested}
+    return {target for target in (alias.mlx, alias.hf) if target}
