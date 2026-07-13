@@ -227,36 +227,36 @@ The Go CLI is useful for local systems experiments. The Python package is the pr
 
 ## Evidence
 
-Public benchmark artifacts live in [results](results/), with a summary in [results/README.md](results/README.md). The current headline artifacts are:
+Public benchmark artifacts live in [results](results/), with a summary in [results/README.md](results/README.md). The current native-baseline evidence is:
 
-| Artifact | Model | Rows | Exact Match | Median Speedup | Notes |
+| Artifact | Model | Path | Repeats | Exact Match | Median Paired Speedup |
 |---|---|---:|---:|---:|---|
-| `mlx_evidence_v2_strict_aggregate_20260706.json` | `mlx-community/Qwen3.5-0.8B-MLX-4bit` | 90 | 100% | 3.00x | repeated strict MLX run |
-| `hf_prompt_lookup_compare_qwen25_3b.json` | `Qwen/Qwen2.5-3B-Instruct` | 42 method rows | 100% over requested budget | 2.47x for MachBoost context | direct comparison with HF prompt lookup |
-| `mlx_qwen35_9b_strict_smoke.json` | `mlx-community/Qwen3.5-9B-MLX-4bit` | 2 | 100% | 7.50x | larger-model smoke test |
+| `mlx_native_adaptive_qwen25_3b_20260713.json` | `mlx-community/Qwen2.5-3B-Instruct-4bit` | adaptive code continuation | 3 | 100% | 2.36x |
+| `mlx_native_adaptive_qwen25_3b_20260713.json` | same | native RAG fallback | 3 | 100% | 0.96x |
+| `mlx_native_adaptive_qwen25_3b_20260713.json` | same | native open-ended fallback | 3 | 100% | 1.00x |
+
+The accelerated code path accepted 51 of 64 tokens in every repeat and reduced logical target forwards from 64 to 14. This is a conditional result, not a universal 2x claim. Older `strict` and 9B artifacts compared against synchronous or cache-disabled baselines and remain available only as diagnostics; they do not establish an improvement over optimized `mlx-lm` or Ollama.
 
 The research paper source and PDF are included in [paper](paper/). Keeping `paper/` and `results/` in the public repository is intentional: they make the claims auditable. They are not imported by the package at runtime.
 
 ## Reproduce Benchmarks
 
-Run the strict MLX suite:
+Run the paired native-MLX suite:
 
 ```sh
 python3 scripts/backend_bench_matrix.py \
   --backends mlx \
-  --fixtures real_readme_api,real_core_code,real_paper_method,policy,json,rag,code,repo_quote,creative_open,short_answer \
+  --fixtures code,rag,creative_open \
   --repeat 3 \
   --max-new-tokens 64 \
-  --max-draft-tokens 8 \
-  --ngram 2 \
-  --candidate-limit 1 \
+  --max-draft-tokens 32 \
+  --ngram 3 \
   --source-mode context \
-  --mlx-disable-cache \
-  --mlx-model mlx-community/Qwen3.5-0.8B-MLX-4bit \
-  --output results/local/mlx_strict.json
+  --mlx-model mlx-community/Qwen2.5-3B-Instruct-4bit \
+  --output results/local/mlx_native_adaptive.json
 ```
 
-Compare against Hugging Face prompt lookup:
+The harness includes prompt processing in both paths, alternates baseline-first and boosted-first ordering, uses fresh nonces, and records environment provenance. For historical comparison with Hugging Face prompt lookup:
 
 ```sh
 python3 scripts/hf_prompt_lookup_compare.py \
