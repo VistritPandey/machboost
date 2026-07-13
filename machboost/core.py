@@ -155,10 +155,18 @@ class CorpusDrafter:
 
 
 class BoostedService:
-    def __init__(self, service: StepService, drafter: CorpusDrafter, *, candidate_limit: int = 1) -> None:
+    def __init__(
+        self,
+        service: StepService,
+        drafter: CorpusDrafter,
+        *,
+        candidate_limit: int = 1,
+        reentry_probe_tokens: int = 0,
+    ) -> None:
         self.service = service
         self.drafter = drafter
         self.candidate_limit = max(1, int(candidate_limit))
+        self.reentry_probe_tokens = max(0, int(reentry_probe_tokens))
 
     def generate(
         self,
@@ -180,7 +188,7 @@ class BoostedService:
         accepted_draft_spans = 0
         rejected_candidates = 0
         stopped = False
-        probe_remaining = min(self.drafter.ngram, max_tokens) if self.drafter.corpus else 0
+        probe_remaining = min(self.reentry_probe_tokens, max_tokens) if self.drafter.corpus else 0
 
         while len(generated) < max_tokens and not stopped:
             remaining = max_tokens - len(generated)
@@ -227,7 +235,7 @@ class BoostedService:
                         fallback_residual = residual
 
                 if committed:
-                    probe_remaining = min(self.drafter.ngram, max_tokens - len(generated))
+                    probe_remaining = min(self.reentry_probe_tokens, max_tokens - len(generated))
                     continue
 
                 if fallback_residual is not None:
@@ -237,7 +245,7 @@ class BoostedService:
                     self.drafter.observe((fallback_residual,))
                     if on_tokens is not None:
                         on_tokens((fallback_residual,))
-                    probe_remaining = min(self.drafter.ngram, max_tokens - len(generated))
+                    probe_remaining = min(self.reentry_probe_tokens, max_tokens - len(generated))
                     continue
 
             if not candidates and probe_remaining > 0:
@@ -334,6 +342,7 @@ class MachBoost:
         max_suffix_tokens: int = DEFAULT_MAX_SUFFIX_TOKENS,
         max_draft_tokens: int = DEFAULT_MAX_DRAFT_TOKENS,
         candidate_limit: int = 1,
+        reentry_probe_tokens: int = 0,
     ) -> None:
         corpus = corpus_tokens if corpus_tokens is not None else context_tokens
         if corpus is None:
@@ -345,9 +354,15 @@ class MachBoost:
             max_draft_tokens=max_draft_tokens,
         )
         self.candidate_limit = max(1, int(candidate_limit))
+        self.reentry_probe_tokens = max(0, int(reentry_probe_tokens))
 
     def wrap(self, service: StepService) -> BoostedService:
-        return BoostedService(service, self.drafter, candidate_limit=self.candidate_limit)
+        return BoostedService(
+            service,
+            self.drafter,
+            candidate_limit=self.candidate_limit,
+            reentry_probe_tokens=self.reentry_probe_tokens,
+        )
 
     def generate(
         self,
@@ -375,6 +390,7 @@ def machboost(
     max_suffix_tokens: int = DEFAULT_MAX_SUFFIX_TOKENS,
     max_draft_tokens: int = DEFAULT_MAX_DRAFT_TOKENS,
     candidate_limit: int = 1,
+    reentry_probe_tokens: int = 0,
 ) -> Union[MachBoost, BoostedService]:
     boost = MachBoost(
         corpus_tokens=corpus_tokens,
@@ -383,6 +399,7 @@ def machboost(
         max_suffix_tokens=max_suffix_tokens,
         max_draft_tokens=max_draft_tokens,
         candidate_limit=candidate_limit,
+        reentry_probe_tokens=reentry_probe_tokens,
     )
     if service is None:
         return boost
