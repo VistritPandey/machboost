@@ -258,6 +258,19 @@ class MLXAdapterTest(unittest.TestCase):
         self.assertEqual(service.next_token(prompt + (1,)), 2)
         self.assertEqual(service.forward_calls, 2)
 
+    def test_cached_verify_fuses_pending_continuation_with_next_draft(self):
+        prompt = (100, 101, 102)
+        service = cache_service((1, 2, 3, 4, 5, 6, 7, 8), prompt_len=len(prompt))
+
+        first = service.verification(prompt, (1, 2, 3, 4))
+        second = service.verification(prompt + (1, 2, 3, 4, 5), (6, 7, 8))
+
+        self.assertEqual(first.bonus_token, 5)
+        self.assertEqual(second.accepted, 3)
+        self.assertEqual(service.forward_calls, 3)
+        self.assertEqual(service.model.inputs, [prompt, (1, 2, 3, 4), (5, 6, 7, 8)])
+        self.assertEqual(service._cache[0].tokens, list(prompt + (1, 2, 3, 4, 5, 6, 7, 8)))
+
     def test_cached_verify_rebuilds_non_trimmable_cache_after_rejection(self):
         prompt = (100, 101, 102)
         service = cloneable_cache_service((1, 2, 3, 4), prompt_len=len(prompt))
