@@ -28,6 +28,17 @@ class CLITests(unittest.TestCase):
         self.assertGreater(data["accepted_draft_tokens"], 0)
         self.assertGreater(data["estimated_speedup"], 1.0)
 
+    def test_human_self_test_does_not_present_synthetic_metric_as_speedup(self):
+        output = io.StringIO()
+
+        with redirect_stdout(output):
+            cli.print_human_self_test(self_test_data())
+
+        rendered = output.getvalue()
+        self.assertIn("synthetic target-call reduction:", rendered)
+        self.assertIn("not a wall-clock benchmark", rendered)
+        self.assertNotIn("estimated speedup:", rendered)
+
     def test_main_version_prints_version(self):
         output = io.StringIO()
 
