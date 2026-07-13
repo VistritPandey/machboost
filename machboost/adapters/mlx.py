@@ -203,39 +203,7 @@ class MLXCausalLMService:
         candidate_tokens: Tuple[Token, ...],
         current_logits,
     ) -> Verification:
-        predicted = self._argmax(current_logits)
-        first_candidate = int(candidate_tokens[0])
-        if predicted != first_candidate or not self._passes_margin(current_logits, first_candidate):
-            return Verification(0, predicted)
-
-        trial_cache = self._clone_cache(self._cache)
-        if trial_cache is None:
-            return self._verification_cached_mutating(prefix_tokens, candidate_tokens, current_logits)
-
-        logits = self._logits(candidate_tokens, cache=trial_cache)
-        accepted = 1
-        residual: Optional[Token] = None
-
-        for offset, candidate in enumerate(candidate_tokens[1:], start=1):
-            row = self._row(logits, offset - 1)
-            predicted = self._argmax(row)
-            if predicted != int(candidate) or not self._passes_margin(row, int(candidate)):
-                residual = predicted
-                break
-            accepted += 1
-
-        committed = candidate_tokens[:accepted]
-        rejected = len(candidate_tokens) - accepted
-        if rejected == 0 or self._trim_cache(trial_cache, rejected):
-            self._cache = trial_cache
-            self._cache_prefix = prefix_tokens + committed
-            self._cache_logits = self._row(logits, accepted - 1)
-        else:
-            commit_logits = self._logits(committed, cache=self._cache)
-            self._cache_prefix = prefix_tokens + committed
-            self._cache_logits = self._row(commit_logits, accepted - 1)
-
-        return Verification(accepted, residual)
+        return self._verification_cached_mutating(prefix_tokens, candidate_tokens, current_logits)
 
     def _verification_cached_mutating(
         self,
@@ -250,12 +218,13 @@ class MLXCausalLMService:
 
         trial_cache = self._cache
         logits = self._logits(candidate_tokens, cache=trial_cache)
+        predictions = self._argmax_rows(logits, len(candidate_tokens))
         accepted = 1
         residual: Optional[Token] = None
 
         for offset, candidate in enumerate(candidate_tokens[1:], start=1):
             row = self._row(logits, offset - 1)
-            predicted = self._argmax(row)
+            predicted = predictions[offset - 1]
             if predicted != int(candidate) or not self._passes_margin(row, int(candidate)):
                 residual = predicted
                 break
@@ -272,30 +241,6 @@ class MLXCausalLMService:
             self._cache_logits = self._row(logits, accepted - 1)
 
         return Verification(accepted, residual)
-
-    def _clone_cache(self, cache):
-        if cache is None:
-            return None
-        cloned = []
-        for item in cache:
-            clone = self._clone_cache_item(item)
-            if clone is None:
-                return None
-            cloned.append(clone)
-        return cloned
-
-    def _clone_cache_item(self, item):
-        from_state = getattr(item.__class__, "from_state", None)
-        if not callable(from_state) or not hasattr(item, "state"):
-            return None
-        state = item.state
-        if isinstance(state, list):
-            state = list(state)
-        meta_state = getattr(item, "meta_state", None)
-        try:
-            return item.__class__.from_state(state, meta_state)
-        except TypeError:
-            return None
 
     def _logits(self, tokens: Sequence[Token], *, cache=None):
         mx = self._mx()
@@ -415,6 +360,18 @@ class MLXCausalLMService:
                 return int(value.item())
             return int(value)
         return max(range(len(row)), key=lambda i: row[i])
+
+    def _argmax_rows(self, logits, count: int) -> list[Token]:
+        mx = self._mx()
+        if count > 0 and hasattr(mx, "argmax"):
+            try:
+                values = mx.argmax(logits[0, :count], axis=-1)
+                if hasattr(mx, "eval"):
+                    mx.eval(values)
+                return [int(value) for value in values.tolist()]
+            except (AttributeError, IndexError, TypeError):
+                pass
+        return [self._argmax(self._row(logits, pos)) for pos in range(count)]
 
     def _passes_margin(self, row, token: Token) -> bool:
         if self.min_verify_margin <= 0:
