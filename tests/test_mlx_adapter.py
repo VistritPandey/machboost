@@ -1,4 +1,6 @@
 import unittest
+from types import ModuleType, SimpleNamespace
+from unittest.mock import patch
 
 from machboost import machboost
 from machboost.adapters import MLXCausalLMService
@@ -197,6 +199,37 @@ class MLXAdapterTest(unittest.TestCase):
         self.assertEqual(generated, (1, 2, 3, 4))
         self.assertEqual(tuple(token for chunk in chunks for token in chunk), generated)
         self.assertEqual(service.model.inputs, [prompt, (1,), (2,), (3,)])
+
+    def test_generate_tokens_uses_native_mlx_stream(self):
+        observed = {}
+        mlx_lm = ModuleType("mlx_lm")
+
+        def stream_generate(model, tokenizer, prompt, *, max_tokens):
+            observed.update(model=model, tokenizer=tokenizer, prompt=prompt, max_tokens=max_tokens)
+            for token in (1, 2, 99):
+                yield SimpleNamespace(token=token)
+
+        mlx_lm.stream_generate = stream_generate
+        model = object()
+        tokenizer = object()
+        service = MLXCausalLMService(model, tokenizer)
+        chunks = []
+
+        with patch.dict("sys.modules", {"mlx_lm": mlx_lm}):
+            generated = service.generate_tokens(
+                (100, 101, 102),
+                max_tokens=4,
+                stop_tokens=(99,),
+                on_tokens=chunks.append,
+            )
+
+        self.assertEqual(generated, (1, 2))
+        self.assertEqual(chunks, [(1,), (2,)])
+        self.assertEqual(service.forward_calls, 2)
+        self.assertEqual(observed["model"], model)
+        self.assertEqual(observed["tokenizer"], tokenizer)
+        self.assertEqual(observed["prompt"], [100, 101, 102])
+        self.assertEqual(observed["max_tokens"], 4)
 
     def test_cached_verify_commits_accepted_candidate(self):
         prompt = (100, 101, 102)
