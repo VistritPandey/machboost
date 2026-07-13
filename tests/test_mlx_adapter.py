@@ -186,8 +186,8 @@ class MLXAdapterTest(unittest.TestCase):
         self.assertEqual(service.next_token(prompt + (1,)), 2)
         self.assertEqual(service.next_token(prompt + (1, 2)), 3)
 
-        self.assertEqual(service.forward_calls, 3)
-        self.assertEqual(service.model.inputs, [prompt, (1,), (2,)])
+        self.assertEqual(service.forward_calls, 4)
+        self.assertEqual(service.model.inputs, [prompt[:-1], prompt[-1:], (1,), (2,)])
 
     def test_generate_tokens_streams_with_cache(self):
         prompt = (100, 101, 102)
@@ -198,7 +198,7 @@ class MLXAdapterTest(unittest.TestCase):
 
         self.assertEqual(generated, (1, 2, 3, 4))
         self.assertEqual(tuple(token for chunk in chunks for token in chunk), generated)
-        self.assertEqual(service.model.inputs, [prompt, (1,), (2,), (3,)])
+        self.assertEqual(service.model.inputs, [prompt[:-1], prompt[-1:], (1,), (2,), (3,)])
 
     def test_generate_tokens_uses_native_mlx_stream(self):
         observed = {}
@@ -240,10 +240,10 @@ class MLXAdapterTest(unittest.TestCase):
         self.assertEqual(detail.accepted, 4)
         self.assertIsNone(detail.residual_token)
         self.assertEqual(detail.bonus_token, 5)
-        self.assertEqual(service.forward_calls, 2)
+        self.assertEqual(service.forward_calls, 3)
         self.assertEqual(service._cache[0].tokens, list(prompt + (1, 2, 3, 4)))
         self.assertEqual(service.next_token(prompt + (1, 2, 3, 4)), 5)
-        self.assertEqual(service.forward_calls, 2)
+        self.assertEqual(service.forward_calls, 3)
 
     def test_cached_verify_trims_rejected_tail(self):
         prompt = (100, 101, 102)
@@ -256,7 +256,7 @@ class MLXAdapterTest(unittest.TestCase):
         self.assertEqual(service._cache[0].tokens, list(prompt + (1,)))
         self.assertEqual(service._cache[0].trims, [2])
         self.assertEqual(service.next_token(prompt + (1,)), 2)
-        self.assertEqual(service.forward_calls, 2)
+        self.assertEqual(service.forward_calls, 3)
 
     def test_cached_verify_fuses_pending_continuation_with_next_draft(self):
         prompt = (100, 101, 102)
@@ -267,8 +267,8 @@ class MLXAdapterTest(unittest.TestCase):
 
         self.assertEqual(first.bonus_token, 5)
         self.assertEqual(second.accepted, 3)
-        self.assertEqual(service.forward_calls, 3)
-        self.assertEqual(service.model.inputs, [prompt, (1, 2, 3, 4), (5, 6, 7, 8)])
+        self.assertEqual(service.forward_calls, 4)
+        self.assertEqual(service.model.inputs, [prompt[:-1], prompt[-1:], (1, 2, 3, 4), (5, 6, 7, 8)])
         self.assertEqual(service._cache[0].tokens, list(prompt + (1, 2, 3, 4, 5, 6, 7, 8)))
 
     def test_continue_tokens_resumes_from_pending_verifier_token(self):
@@ -318,7 +318,7 @@ class MLXAdapterTest(unittest.TestCase):
         self.assertEqual(residual, 2)
         self.assertEqual(service._cache[0].tokens, list(prompt + (1,)))
         self.assertEqual(service.next_token(prompt + (1,)), 2)
-        self.assertEqual(service.forward_calls, 3)
+        self.assertEqual(service.forward_calls, 5)
 
 
 if __name__ == "__main__":
