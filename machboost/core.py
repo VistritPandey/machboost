@@ -191,7 +191,7 @@ class BoostedService:
                 committed = False
                 for candidate in candidates:
                     candidate_rounds += 1
-                    accepted, residual = self._verify(prefix, candidate.tokens)
+                    accepted, residual, bonus = self._verify(prefix, candidate.tokens)
                     verify_calls += 1 if hasattr(self.service, "verify") else 0
                     if not hasattr(self.service, "verify"):
                         next_token_calls += min(
@@ -200,15 +200,24 @@ class BoostedService:
                         )
 
                     if accepted > 0:
-                        committed_tokens = candidate.tokens[:accepted]
-                        visible_tokens, stopped = _without_stop_tokens(committed_tokens, stop_set)
+                        accepted_tokens = candidate.tokens[:accepted]
+                        visible_tokens, stopped = _without_stop_tokens(accepted_tokens, stop_set)
+                        committed_tokens = list(visible_tokens)
+                        continuation = residual if residual is not None else bonus
+                        if not stopped and continuation is not None and len(generated) + len(committed_tokens) < max_tokens:
+                            if _is_stop_token(continuation, stop_set):
+                                stopped = True
+                            else:
+                                committed_tokens.append(int(continuation))
                         if visible_tokens:
-                            generated.extend(visible_tokens)
-                            self.drafter.observe(visible_tokens)
-                            if on_tokens is not None:
-                                on_tokens(visible_tokens)
                             accepted_draft_tokens += len(visible_tokens)
                             accepted_draft_spans += 1
+                        if committed_tokens:
+                            committed_chunk = tuple(committed_tokens)
+                            generated.extend(committed_chunk)
+                            self.drafter.observe(committed_chunk)
+                            if on_tokens is not None:
+                                on_tokens(committed_chunk)
                         committed = True
                         break
 
@@ -253,25 +262,36 @@ class BoostedService:
         )
         return tuple(generated), stats
 
-    def _verify(self, prefix: Tuple[Token, ...], candidate: Tuple[Token, ...]) -> Tuple[int, Optional[Token]]:
+    def _verify(
+        self,
+        prefix: Tuple[Token, ...],
+        candidate: Tuple[Token, ...],
+    ) -> Tuple[int, Optional[Token], Optional[Token]]:
+        verification = getattr(self.service, "verification", None)
+        if callable(verification):
+            detail = verification(prefix, candidate)
+            if hasattr(detail, "accepted") and hasattr(detail, "residual_token"):
+                accepted = max(0, min(int(detail.accepted), len(candidate)))
+                return accepted, detail.residual_token, getattr(detail, "bonus_token", None)
+
         verify = getattr(self.service, "verify", None)
         if callable(verify):
             result = verify(prefix, candidate)
             if isinstance(result, tuple):
                 accepted, residual = result
-                return max(0, min(int(accepted), len(candidate))), residual
-            return max(0, min(int(result), len(candidate))), None
+                return max(0, min(int(accepted), len(candidate))), residual, None
+            return max(0, min(int(result), len(candidate))), None, None
 
         accepted = 0
         for token in candidate:
             predicted = self.service.next_token(prefix + candidate[:accepted])
             if predicted is None:
-                return accepted, None
+                return accepted, None, None
             predicted = int(predicted)
             if predicted != token:
-                return accepted, predicted
+                return accepted, predicted, None
             accepted += 1
-        return accepted, None
+        return accepted, None, None
 
 
 class MachBoost:
