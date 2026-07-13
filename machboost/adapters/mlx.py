@@ -129,6 +129,51 @@ class MLXCausalLMService:
                 on_tokens((token,))
         return tuple(generated)
 
+    def continue_tokens(
+        self,
+        prefix_tokens: TokenSeq,
+        *,
+        max_tokens: int,
+        stop_tokens: Optional[Iterable[Token]] = None,
+        on_tokens=None,
+    ) -> Optional[Tuple[Token, ...]]:
+        prefix = tuple(int(token) for token in prefix_tokens)
+        if max_tokens <= 0:
+            return ()
+        if (
+            self._cache is None
+            or len(prefix) != len(self._cache_prefix) + 1
+            or prefix[:-1] != self._cache_prefix
+        ):
+            return None
+
+        try:
+            from mlx_lm.generate import generate_step
+        except ImportError as exc:
+            raise ImportError("Install MLX support with `pip install machboost[mlx]`.") from exc
+
+        mx = self._mx()
+        stop_set = {int(token) for token in stop_tokens or ()}
+        prompt = self._array([prefix[-1]], mx)
+        generated: list[Token] = []
+        try:
+            for token, _ in generate_step(
+                prompt,
+                self.model,
+                max_tokens=max_tokens,
+                prompt_cache=self._cache,
+            ):
+                token = int(token)
+                if token in stop_set:
+                    break
+                generated.append(token)
+                self.forward_calls += 1
+                if on_tokens is not None:
+                    on_tokens((token,))
+        finally:
+            self.reset_cache()
+        return tuple(generated)
+
     def _generate_tokens_native(
         self,
         prompt_tokens: TokenSeq,
