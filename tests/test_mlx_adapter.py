@@ -175,7 +175,7 @@ class MLXAdapterTest(unittest.TestCase):
         self.assertEqual(generated, target)
         self.assertEqual(service.forward_calls, 2)
         self.assertEqual(stats.target_calls, 2)
-        self.assertEqual(stats.accepted_draft_tokens, len(target))
+        self.assertEqual(stats.accepted_draft_tokens, len(target) - 1)
         self.assertGreaterEqual(stats.estimated_speedup, 4.0)
 
     def test_cached_next_token_extends_existing_cache(self):
@@ -235,10 +235,11 @@ class MLXAdapterTest(unittest.TestCase):
         prompt = (100, 101, 102)
         service = cache_service((1, 2, 3, 4, 5), prompt_len=len(prompt))
 
-        accepted, residual = service.verify(prompt, (1, 2, 3, 4))
+        detail = service.verification(prompt, (1, 2, 3, 4))
 
-        self.assertEqual(accepted, 4)
-        self.assertIsNone(residual)
+        self.assertEqual(detail.accepted, 4)
+        self.assertIsNone(detail.residual_token)
+        self.assertEqual(detail.bonus_token, 5)
         self.assertEqual(service.forward_calls, 2)
         self.assertEqual(service._cache[0].tokens, list(prompt + (1, 2, 3, 4)))
         self.assertEqual(service.next_token(prompt + (1, 2, 3, 4)), 5)
@@ -257,7 +258,7 @@ class MLXAdapterTest(unittest.TestCase):
         self.assertEqual(service.next_token(prompt + (1,)), 2)
         self.assertEqual(service.forward_calls, 2)
 
-    def test_cached_verify_clones_non_trimmable_cache_before_rejection(self):
+    def test_cached_verify_rebuilds_non_trimmable_cache_after_rejection(self):
         prompt = (100, 101, 102)
         service = cloneable_cache_service((1, 2, 3, 4), prompt_len=len(prompt))
 
