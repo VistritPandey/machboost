@@ -271,6 +271,43 @@ class MLXAdapterTest(unittest.TestCase):
         self.assertEqual(service.model.inputs, [prompt, (1, 2, 3, 4), (5, 6, 7, 8)])
         self.assertEqual(service._cache[0].tokens, list(prompt + (1, 2, 3, 4, 5, 6, 7, 8)))
 
+    def test_continue_tokens_resumes_from_pending_verifier_token(self):
+        prompt = (100, 101, 102)
+        service = cache_service((1, 2, 3, 4, 5, 6, 7), prompt_len=len(prompt))
+        detail = service.verification(prompt, (1, 2, 3, 4))
+        observed = {}
+        chunks = []
+        mlx_lm = ModuleType("mlx_lm")
+        generate_module = ModuleType("mlx_lm.generate")
+
+        def generate_step(prompt_tokens, model, *, max_tokens, prompt_cache):
+            observed.update(
+                prompt=prompt_tokens,
+                model=model,
+                max_tokens=max_tokens,
+                prompt_cache=prompt_cache,
+            )
+            for token in (6, 7, 99):
+                yield token, None
+
+        generate_module.generate_step = generate_step
+        mlx_lm.generate = generate_module
+
+        with patch.dict("sys.modules", {"mlx_lm": mlx_lm, "mlx_lm.generate": generate_module}):
+            generated = service.continue_tokens(
+                prompt + (1, 2, 3, 4, detail.bonus_token),
+                max_tokens=4,
+                stop_tokens=(99,),
+                on_tokens=chunks.append,
+            )
+
+        self.assertEqual(generated, (6, 7))
+        self.assertEqual(chunks, [(6,), (7,)])
+        self.assertEqual(observed["prompt"], [5])
+        self.assertEqual(observed["model"], service.model)
+        self.assertEqual(observed["max_tokens"], 4)
+        self.assertIsNone(service._cache)
+
     def test_cached_verify_rebuilds_non_trimmable_cache_after_rejection(self):
         prompt = (100, 101, 102)
         service = cloneable_cache_service((1, 2, 3, 4), prompt_len=len(prompt))
