@@ -78,6 +78,17 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(self.client.stop("mlx-community/example")["unloaded"], 1)
         self.assertEqual(self.client.ps(), [])
 
+    def test_client_can_preload_model_without_generation(self):
+        response = self.client.load(
+            "qwen2.5:3b",
+            options={"backend": "mlx"},
+            keep_alive="2h",
+        )
+
+        self.assertEqual(response["status"], "success")
+        self.assertEqual(response["instance"]["keep_alive_seconds"], 7200.0)
+        self.assertEqual(response["instance"]["requests"], 0)
+
     def test_http_errors_become_api_errors(self):
         with self.assertRaisesRegex(MachBoostAPIError, "missing required field"):
             self.client.post("/api/chat", {"messages": []})
