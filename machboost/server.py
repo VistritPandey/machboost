@@ -418,6 +418,22 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                 result = self.runtime.pull(model, revision=payload.get("revision"))
                 self.send_json(result)
                 return
+            if path == "/api/load":
+                model = required_string(payload, "model", aliases=("name",))
+                entry, load_duration = self.runtime.get_or_load(
+                    model,
+                    options=dict(payload.get("options") or {}),
+                    keep_alive=payload.get("keep_alive"),
+                )
+                self.send_json(
+                    {
+                        "status": "success",
+                        "model": model,
+                        "load_duration_seconds": load_duration,
+                        "instance": entry.to_dict(),
+                    }
+                )
+                return
             if path == "/api/stop":
                 model = payload.get("model") or payload.get("name")
                 unloaded = self.runtime.stop(str(model)) if model else self.runtime.stop()
