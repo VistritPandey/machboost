@@ -37,7 +37,19 @@ Future native targets:
 
 - llama.cpp / llama-server
 - an Ollama runner patch or fork
-- an OpenAI-compatible sidecar backed by a native runtime
+
+### Resident Runtime
+
+MachBoost 0.2 adds a long-running control plane around the native adapters. It:
+
+- loads each model once and retains it in unified memory
+- streams generated text without re-decoding the entire prefix per token
+- applies finite or indefinite model keep-alive policies
+- serializes generation per model while serving independent models concurrently
+- exposes both Ollama-compatible and OpenAI-compatible HTTP endpoints
+- supports explicit preload, inspection, stop, and shutdown operations
+
+Resident serving removes repeated model-loading costs and makes MachBoost usable by editors, chat clients, scripts, and internal assistants. It is an operational latency improvement; it is separate from speculative token acceleration and should be measured separately.
 
 ### Wrapper / Policy Mode
 
@@ -156,6 +168,21 @@ accel = Accelerator.from_mlx(
 text, stats = accel.generate(prompt, max_tokens=128)
 ```
 
+### Resident Client
+
+```python
+from machboost import MachBoostClient
+
+client = MachBoostClient()
+client.load("qwen2.5:3b", keep_alive="forever")
+
+for chunk in client.chat(
+    "qwen2.5:3b",
+    [{"role": "user", "content": "Explain the retry logic."}],
+):
+    print(chunk, end="", flush=True)
+```
+
 ### Custom Service
 
 ```python
@@ -173,15 +200,19 @@ tokens, stats = boosted.generate(prompt_tokens, max_tokens=128)
 
 ### CLI
 
-The Python package exposes a native model runner:
+The Python package exposes a resident native model runner:
 
 ```sh
 machboost list
-machboost run mlx-community/Qwen3.5-0.8B-MLX-4bit --backend mlx --context ./docs --show-stats
-machboost run Qwen/Qwen2.5-3B-Instruct --backend hf --context ./src --local-files-only
+machboost pull qwen2.5:3b
+machboost warm qwen2.5:3b --keep-alive forever
+machboost run qwen2.5:3b --context ./docs --show-stats
+machboost complete qwen2.5-coder:3b --file ./prompt.txt
+machboost ps
+machboost stop qwen2.5:3b
 ```
 
-`machboost list` reports cached Hugging Face and MLX models that the native runner can likely load. `machboost run MODEL` loads a Hugging Face or MLX model, builds a draft corpus from local context files or directories, and opens an interactive chat. If a model is not cached, the selected backend may download it through its normal loader. This is the product-facing local runner path.
+`machboost list` reports cached Hugging Face and MLX models plus portable short aliases. `machboost run MODEL` auto-starts the local server, resolves the best available backend, loads the model when needed, builds a draft corpus from local context files or directories, and opens an interactive streaming chat. Leaving chat does not unload the model. Use `--direct` for the earlier one-process behavior.
 
 The package also exposes lightweight install checks:
 
@@ -191,14 +222,13 @@ machboost self-test
 machboost version
 ```
 
-The Ollama-compatible HTTP wrapper is available separately:
+The native server listens on `http://127.0.0.1:11435` and implements Ollama-compatible chat, generate, model-listing, and lifecycle endpoints plus OpenAI-compatible chat and text completion endpoints. The external Ollama wrapper remains available separately:
 
 ```sh
 machboost ollama run qwen2.5:3b
-machboost chat qwen2.5:3b
 ```
 
-That wrapper can pull and chat with Ollama models, but it is not the native verifier-accelerated path.
+That explicit wrapper can pull and chat with models owned by an Ollama daemon, but it is not the native verifier-accelerated path. `machboost chat` is an alias for native `machboost run`.
 
 The Go CLI remains available from source for local systems experiments:
 
@@ -209,14 +239,15 @@ go run ./cmd/machboost bench command -- sleep 1
 
 ## Adapter Capability Matrix
 
-| Backend | Wrapper | Native Speedup | Status |
+| Backend | Resident serving | Native speculation | Status |
 |---|---:|---:|---|
-| Hugging Face | yes | yes | package adapter and benchmark scripts exist |
-| MLX / `mlx-lm` | yes | yes | package adapter and strict evidence mode exist |
-| Custom Python service | yes | yes, if verifier exists | supported through `machboost(...)` |
-| Ollama HTTP | yes | no | benchmark/capability wrapper only |
+| Hugging Face | yes | yes | native adapter, streaming server, and benchmarks exist |
+| MLX / `mlx-lm` | yes | yes | native adapter, fast text streaming, and strict evidence mode exist |
+| Custom Python service | caller-owned | yes, if verifier exists | supported through `machboost(...)` |
+| External Ollama HTTP | already resident | no | compatibility wrapper and benchmarks only |
 | llama.cpp | planned | possible | needs verifier/KV hooks or patch |
-| OpenAI-compatible servers | yes | only if owned | sidecar can wrap, but black-box acceleration is not claimed |
+
+Protocol compatibility does not imply full feature parity. Version 0.2 does not yet provide Ollama model creation/copy/deletion, embeddings, or multimodal requests.
 
 ## Milestones
 
@@ -233,7 +264,7 @@ Status: done.
 
 ### P1: Package Layer
 
-Status: in progress.
+Status: done for 0.2.
 
 - Public Python API.
 - Optional backend extras.
@@ -241,7 +272,18 @@ Status: in progress.
 - Examples and package docs.
 - Calibration and gate policy APIs.
 
-### P2: Runtime Expansion
+### P2: Resident Serving
+
+Status: done for 0.2.
+
+- Long-running Hugging Face/MLX model ownership.
+- Streaming CLI chat and raw completion.
+- Model alias resolution and backend selection.
+- Pull, preload, inspect, unload, and shutdown lifecycle.
+- Ollama-compatible and OpenAI-compatible local APIs.
+- End-to-end resident latency evidence.
+
+### P3: Runtime Expansion
 
 Next targets:
 
@@ -250,14 +292,15 @@ Next targets:
 - llama.cpp verifier hook investigation
 - Ollama MLX runner patch or fork
 
-### P3: Sidecar Server
+### P4: Multimodal Runtime
 
-Future target:
+Next product target after text-runtime hardening:
 
-- OpenAI-compatible local endpoint
-- streaming output
-- per-request policy decisions
-- native acceleration only when MachBoost owns or patches the runtime
+- image and video request schemas
+- multimodal model capability discovery
+- image preprocessing and prompt-cache reuse
+- time-to-first-token and end-to-end visual-task benchmarks
+- exact input/output comparisons where deterministic evaluation is possible
 
 ## Product Principle
 
