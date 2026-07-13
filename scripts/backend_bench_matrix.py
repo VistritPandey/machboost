@@ -24,10 +24,10 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from machboost import machboost
+from machboost import Accelerator
 from machboost.adapters import MLXCausalLMService, OllamaHTTPAdapter
 
-SCHEMA_VERSION = "machboost.backend_bench_matrix.v1"
+SCHEMA_VERSION = "machboost.backend_bench_matrix.v2"
 
 
 @dataclass(frozen=True)
@@ -369,16 +369,14 @@ def run_hf(args: argparse.Namespace, fixtures: list[Fixture]) -> list[BenchRow]:
     return rows
 
 
-def serial_mlx_generate(service: MLXCausalLMService, prompt_tokens: tuple[int, ...], max_tokens: int):
-    generated: list[int] = []
+def native_mlx_generate(service: MLXCausalLMService, prompt: str, max_tokens: int):
+    service.reset_cache()
+    service.forward_calls = 0
     started = time.perf_counter()
-    while len(generated) < max_tokens:
-        token = service.next_token(prompt_tokens + tuple(generated))
-        if token is None:
-            break
-        generated.append(int(token))
+    prompt_tokens = service.encode(prompt)
+    generated = service.generate_tokens(prompt_tokens, max_tokens=max_tokens)
     elapsed = time.perf_counter() - started
-    return tuple(generated), elapsed
+    return tuple(generated), elapsed, service.forward_calls
 
 
 def run_mlx(args: argparse.Namespace, fixtures: list[Fixture]) -> list[BenchRow]:
@@ -388,29 +386,37 @@ def run_mlx(args: argparse.Namespace, fixtures: list[Fixture]) -> list[BenchRow]
         cache_enabled=not args.mlx_disable_cache,
     )
     rows: list[BenchRow] = []
-    for fixture in fixtures:
-        prompt_tokens = service.encode(fixture.prompt)
-        source_tokens = service.encode(source_text(fixture, args.source_mode))
-
-        service.reset_cache()
-        service.forward_calls = 0
-        baseline_tokens, baseline_elapsed = serial_mlx_generate(service, prompt_tokens, args.max_new_tokens)
-        baseline_forwards = service.forward_calls
-        baseline_output = service.decode(baseline_tokens)
-
-        service.reset_cache()
-        service.forward_calls = 0
-        boosted = machboost(
+    for index, fixture in enumerate(fixtures):
+        accelerator = Accelerator(
             service,
-            corpus_tokens=source_tokens,
+            context_texts=[source_text(fixture, args.source_mode)],
             ngram=args.ngram,
             max_draft_tokens=args.max_draft_tokens,
             candidate_limit=args.candidate_limit,
         )
-        started = time.perf_counter()
-        boosted_tokens, stats = boosted.generate(prompt_tokens, max_tokens=args.max_new_tokens)
-        boosted_elapsed = time.perf_counter() - started
-        boosted_output = service.decode(boosted_tokens)
+
+        def run_baseline():
+            return native_mlx_generate(service, fixture.prompt, args.max_new_tokens)
+
+        def run_boosted():
+            service.reset_cache()
+            service.forward_calls = 0
+            started = time.perf_counter()
+            result = accelerator.generate_result(fixture.prompt, max_tokens=args.max_new_tokens)
+            return result, time.perf_counter() - started, service.forward_calls
+
+        if index % 2 == 0:
+            baseline_tokens, baseline_elapsed, baseline_forwards = run_baseline()
+            boosted_result, boosted_elapsed, boosted_forwards = run_boosted()
+        else:
+            boosted_result, boosted_elapsed, boosted_forwards = run_boosted()
+            baseline_tokens, baseline_elapsed, baseline_forwards = run_baseline()
+
+        baseline_output = service.decode(baseline_tokens)
+        boosted_tokens = boosted_result.tokens
+        boosted_output = boosted_result.text
+        stats = boosted_result.stats
+        service.reset_cache()
 
         rows.append(
             BenchRow(
@@ -420,7 +426,7 @@ def run_mlx(args: argparse.Namespace, fixtures: list[Fixture]) -> list[BenchRow]
                 workflow=fixture.workflow,
                 expectation=fixture.expectation,
                 nonce=fixture.nonce,
-                mode="stateless_verifier_adapter" if args.mlx_disable_cache else "cache_aware_verifier_adapter",
+                mode="native_fallback" if stats.accepted_draft_tokens == 0 else "adaptive_context_verifier",
                 output_match=baseline_tokens == boosted_tokens,
                 baseline_ms=baseline_elapsed * 1000,
                 boosted_ms=boosted_elapsed * 1000,
@@ -428,12 +434,15 @@ def run_mlx(args: argparse.Namespace, fixtures: list[Fixture]) -> list[BenchRow]
                 boosted_tokens_per_second=tokens_per_second(len(boosted_tokens), boosted_elapsed),
                 speedup=(baseline_elapsed / boosted_elapsed) if boosted_elapsed > 0 else 0.0,
                 baseline_forwards=baseline_forwards,
-                boosted_forwards=service.forward_calls,
+                boosted_forwards=boosted_forwards,
                 accepted_draft_tokens=stats.accepted_draft_tokens,
                 generated_tokens=len(boosted_tokens),
                 baseline_output_preview=preview(baseline_output),
                 boosted_output_preview=preview(boosted_output),
-                note="MLX path uses the package cache-aware verifier adapter with MLX prompt cache.",
+                note=(
+                    "Paired wall time compares native mlx-lm generation with the adaptive package path; "
+                    "fixture order alternates baseline-first and boosted-first."
+                ),
             )
         )
     return rows
@@ -646,7 +655,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--ngram", type=int, default=2)
     parser.add_argument("--max-draft-tokens", type=int, default=8)
     parser.add_argument("--candidate-limit", type=int, default=1)
-    parser.add_argument("--source-mode", choices=["prompt-context", "context", "prompt"], default="prompt-context")
+    parser.add_argument("--source-mode", choices=["prompt-context", "context", "prompt"], default="context")
     parser.add_argument("--verify-mode", choices=["block", "hybrid", "sequential"], default="hybrid")
     parser.add_argument("--anchor-tokens", type=int, default=1)
     parser.add_argument("--device", choices=["auto", "cpu", "mps"], default="auto")
