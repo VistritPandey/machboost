@@ -346,13 +346,23 @@ class Accelerator:
             self.service.forward_calls = 0
 
         generate_tokens = getattr(self.service, "generate_tokens", None)
+        native_text_streaming = False
         if callable(generate_tokens):
+            native_text_streaming = bool(
+                on_tokens is not None
+                and getattr(self.service, "supports_native_text_streaming", False)
+            )
+            generate_kwargs = {
+                "max_tokens": max_tokens,
+                "stop_tokens": stop_tokens,
+                "on_tokens": None if native_text_streaming else on_tokens,
+            }
+            if native_text_streaming:
+                generate_kwargs["on_text"] = on_tokens.emit
             tokens = tuple(
                 generate_tokens(
                     prompt_tokens,
-                    max_tokens=max_tokens,
-                    stop_tokens=stop_tokens,
-                    on_tokens=on_tokens,
+                    **generate_kwargs,
                 )
             )
             target_calls = int(getattr(self.service, "forward_calls", len(tokens)))
@@ -367,7 +377,11 @@ class Accelerator:
             tokens = measurement.tokens
             target_calls = measurement.target_calls
 
-        if on_tokens is not None and callable(getattr(on_tokens, "finish", None)):
+        if (
+            on_tokens is not None
+            and not native_text_streaming
+            and callable(getattr(on_tokens, "finish", None))
+        ):
             on_tokens.finish()
 
         stats = RunStats(
