@@ -14,7 +14,7 @@ from urllib.parse import urlparse
 
 from . import __version__
 from .accelerator import Accelerator
-from .models import resolve_model
+from .models import model_targets, resolve_model
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 11435
@@ -251,10 +251,10 @@ class RuntimeManager:
         }
 
     def stop(self, model: Optional[str] = None) -> int:
-        resolved_model = resolve_model(model).model if model else None
+        targets = model_targets(model) if model else None
         with self._lock:
             configs = [
-                config for config in self._models if resolved_model is None or config.model == resolved_model
+                config for config in self._models if targets is None or config.model in targets
             ]
             entries = [self._models.pop(config) for config in configs]
         for entry in entries:
