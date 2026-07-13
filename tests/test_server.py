@@ -185,6 +185,23 @@ class HTTPServerTests(unittest.TestCase):
         self.assertEqual(len(self.loaded), 1)
         self.assertEqual(self.loaded[0][1].chat_calls[0][1], 11)
 
+    def test_load_endpoint_preloads_without_generating(self):
+        _, _, body = self.request(
+            "/api/load",
+            {
+                "model": "qwen2.5:3b",
+                "keep_alive": "1h",
+                "options": {"backend": "mlx"},
+            },
+        )
+
+        response = json.loads(body)
+        self.assertEqual(response["status"], "success")
+        self.assertEqual(response["instance"]["model"], "mlx-community/Qwen2.5-3B-Instruct-4bit")
+        self.assertEqual(response["instance"]["keep_alive_seconds"], 3600.0)
+        self.assertEqual(self.loaded[0][1].chat_calls, [])
+        self.assertEqual(self.loaded[0][1].generate_calls, [])
+
     def test_ollama_chat_streams_ndjson_chunks(self):
         _, headers, body = self.request(
             "/api/chat",
