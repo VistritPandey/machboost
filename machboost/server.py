@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 
 from . import __version__
 from .accelerator import Accelerator
+from .models import resolve_model
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 11435
@@ -21,12 +22,7 @@ DEFAULT_KEEP_ALIVE = -1.0
 
 
 def select_backend(model: str, backend: str = "auto") -> str:
-    if backend != "auto":
-        return backend
-    normalized = model.lower()
-    if normalized.startswith("mlx-community/") or "mlx" in normalized:
-        return "mlx"
-    return "hf"
+    return resolve_model(model, backend).backend
 
 
 def parse_keep_alive(value: Any, *, default: float = DEFAULT_KEEP_ALIVE) -> float:
@@ -240,16 +236,26 @@ class RuntimeManager:
         path = Path(model).expanduser()
         if path.exists():
             return {"status": "success", "model": model, "path": str(path.resolve())}
+        resolution = resolve_model(model)
         try:
             from huggingface_hub import snapshot_download
         except ImportError as exc:
             raise ImportError("Model downloads require `huggingface-hub` or a MachBoost MLX/HF extra.") from exc
-        downloaded = snapshot_download(repo_id=model, revision=revision)
-        return {"status": "success", "model": model, "path": str(downloaded)}
+        downloaded = snapshot_download(repo_id=resolution.model, revision=revision)
+        return {
+            "status": "success",
+            "model": model,
+            "resolved_model": resolution.model,
+            "backend": resolution.backend,
+            "path": str(downloaded),
+        }
 
     def stop(self, model: Optional[str] = None) -> int:
+        resolved_model = resolve_model(model).model if model else None
         with self._lock:
-            configs = [config for config in self._models if model is None or config.model == model]
+            configs = [
+                config for config in self._models if resolved_model is None or config.model == resolved_model
+            ]
             entries = [self._models.pop(config) for config in configs]
         for entry in entries:
             release_accelerator(entry.accelerator)
@@ -279,13 +285,13 @@ class RuntimeManager:
 
 
 def model_config(model: str, options: dict[str, Any]) -> ModelConfig:
-    backend = select_backend(model, str(options.get("backend", "auto")))
+    resolution = resolve_model(model, str(options.get("backend", "auto")))
     paths = options.get("context_paths") or options.get("context") or ()
     if isinstance(paths, str):
         paths = (paths,)
     return ModelConfig(
-        model=model,
-        backend=backend,
+        model=resolution.model,
+        backend=resolution.backend,
         context_paths=tuple(str(path) for path in paths),
         max_context_chars=int(options.get("max_context_chars", 200_000)),
         ngram=int(options.get("ngram", 2)),
@@ -424,8 +430,16 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                 return
             if path == "/api/show":
                 model = str(payload.get("model") or payload.get("name") or "")
-                matches = [item for item in self.runtime.ps() if item["model"] == model]
-                self.send_json({"model": model, "loaded": bool(matches), "instances": matches})
+                resolved_model = resolve_model(model).model
+                matches = [item for item in self.runtime.ps() if item["model"] == resolved_model]
+                self.send_json(
+                    {
+                        "model": model,
+                        "resolved_model": resolved_model,
+                        "loaded": bool(matches),
+                        "instances": matches,
+                    }
+                )
                 return
             if path == "/v1/chat/completions":
                 self.handle_openai_chat(payload)
