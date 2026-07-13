@@ -16,6 +16,7 @@ from . import __version__, machboost
 from .accelerator import Accelerator
 from .adapters.ollama import OllamaHTTPAdapter, OllamaHTTPError
 from .client import MachBoostAPIError, MachBoostClient, ensure_server
+from .models import alias_rows, resolve_model
 from .server import DEFAULT_HOST, DEFAULT_PORT, serve as serve_runtime
 
 DEFAULT_CHAT_SYSTEM = "Answer directly and concisely. Do not reveal hidden reasoning."
@@ -147,6 +148,7 @@ def model_list_data(
         "hidden_unsupported_count": count_hidden_unsupported(cache_paths, backend=backend)
         if not include_unsupported
         else 0,
+        "aliases": alias_rows(),
         "examples": [
             {
                 "backend": "mlx",
@@ -376,18 +378,18 @@ def print_human_model_list(data: dict) -> None:
     elif data.get("hidden_unsupported_count", 0):
         print(f"unsupported cached repos: {data['hidden_unsupported_count']} hidden; use --all to show them")
 
+    print("short aliases:")
+    for alias in data.get("aliases", ()):
+        target = alias.get("mlx") or alias.get("hf")
+        print(f"  {alias['name']:<22} {target}")
+
     print("remote examples:")
     for example in data["examples"]:
         print(f"  {example['command']}")
 
 
 def select_native_backend(model: str, backend: str) -> str:
-    if backend != "auto":
-        return backend
-    normalized = model.lower()
-    if normalized.startswith("mlx-community/") or "mlx" in normalized:
-        return "mlx"
-    return "hf"
+    return resolve_model(model, backend).backend
 
 
 def render_chat_prompt(system: str, turns: Sequence[dict[str, str]]) -> str:
@@ -403,9 +405,12 @@ def render_chat_prompt(system: str, turns: Sequence[dict[str, str]]) -> str:
 
 def load_native_accelerator(args: argparse.Namespace, *, stream=None) -> Accelerator:
     stream = stream or sys.stderr
-    backend = select_native_backend(args.model, args.backend)
+    resolution = resolve_model(args.model, args.backend)
+    backend = resolution.backend
     context_paths = args.context or None
-    print(f"loading {args.model!r} with native {backend} backend...", file=stream)
+    if resolution.alias:
+        print(f"resolved {resolution.alias!r} to {resolution.model!r}", file=stream)
+    print(f"loading {resolution.model!r} with native {backend} backend...", file=stream)
     print("if the model is not cached, HF/MLX may download it into its local cache", file=stream)
 
     common = {
@@ -419,14 +424,14 @@ def load_native_accelerator(args: argparse.Namespace, *, stream=None) -> Acceler
     }
     if backend == "mlx":
         return Accelerator.from_mlx(
-            args.model,
+            resolution.model,
             lazy=args.lazy,
             cache_enabled=not args.strict,
             **common,
         )
     if backend == "hf":
         return Accelerator.from_huggingface(
-            args.model,
+            resolution.model,
             device=args.device,
             local_files_only=args.local_files_only,
             torch_dtype=torch_dtype_from_name(args.dtype),
