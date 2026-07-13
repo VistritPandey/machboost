@@ -176,11 +176,11 @@ from machboost import MachBoostClient
 client = MachBoostClient()
 client.load("qwen2.5:3b", keep_alive="forever")
 
-for chunk in client.chat(
+for event in client.chat(
     "qwen2.5:3b",
     [{"role": "user", "content": "Explain the retry logic."}],
 ):
-    print(chunk, end="", flush=True)
+    print((event.get("message") or {}).get("content", ""), end="", flush=True)
 ```
 
 ### Custom Service
