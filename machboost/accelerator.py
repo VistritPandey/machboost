@@ -239,7 +239,10 @@ class Accelerator:
             candidate_limit=self.candidate_limit,
         )
         boosted.drafter.reset(prompt_tokens)
-        if not boosted.drafter.candidates(max_tokens=max_tokens, limit=self.candidate_limit):
+        has_initial_candidate = bool(
+            boosted.drafter.candidates(max_tokens=max_tokens, limit=self.candidate_limit)
+        )
+        if not has_initial_candidate and not callable(getattr(self.service, "continue_tokens", None)):
             return self._generate_serial_result(
                 prompt_tokens,
                 max_tokens=max_tokens,
