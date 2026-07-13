@@ -2,11 +2,12 @@
 
 \usepackage[margin=1in]{geometry}
 \usepackage{booktabs}
-\usepackage{hyperref}
 \usepackage{amsmath}
 \usepackage{enumitem}
+\usepackage{float}
 \usepackage{url}
 \usepackage{xcolor}
+\usepackage{hyperref}
 
 \setlength{\emergencystretch}{3em}
 
@@ -25,7 +26,7 @@
 \maketitle
 
 \begin{abstract}
-Autoregressive language model inference is slow in a very ordinary way: for most decoders, one generated token still means one more target-model step. Speculative decoding can reduce that serial work, but many practical variants require a draft model, modified model heads, or serving infrastructure that is awkward for local use. This paper explores a smaller question: when a local task is already grounded in nearby text, can that text itself draft useful continuations? MachBoost indexes prompt and local-context tokens, proposes n-gram continuations, and verifies them with the target model before committing any generated token. On an Apple M1 Max with 32 GB memory, the initial MLX suite reaches a 1.38$\times$ median speedup across 35 runs with token-for-token agreement against serial greedy decoding. A stricter 64-token MLX suite, repeated three times, reaches a 3.00$\times$ aggregate median speedup over 90 rows. A direct Hugging Face comparison on \path{Qwen/Qwen2.5-3B-Instruct} is more mixed but still useful: built-in prompt lookup reaches 2.11$\times$ median speedup, while MachBoost context mode reaches 2.47$\times$ over the same six fixtures. These results are not a universal acceleration claim. They show a package-shaped path for local, grounded workloads where the next tokens are often already nearby.
+Autoregressive decoding remains serial even when a model fits comfortably on a laptop. MachBoost tests a narrow way around that constraint: use tokens from explicit local context as speculative candidates, verify a block with the target model, and return to the runtime's native decoder when no candidate exists. The current implementation combines context-only n-gram lookup, block verification, in-place MLX KV-cache rewind, verifier continuation tokens, and native \texttt{mlx-lm} streaming. We compare it with native cached generation rather than a synchronous Python token loop. On an Apple M1 Max, using \path{mlx-community/Qwen2.5-3B-Instruct-4bit}, a 64-token code-continuation fixture reaches a 2.36$\times$ median paired wall-time speedup over three fresh-nonce repeats. All three accelerated token sequences match the native greedy outputs; the median run accepts 51 context tokens and reduces logical target forwards from 64 to 14. A retrieval answer and an open-ended control have no eligible initial continuation, take the native path, and measure 0.96$\times$ and 1.00$\times$ median paired speedup. These nine runs do not establish universal acceleration. They locate one useful operating region and expose why earlier measurements against stateless or per-token baselines overstated the gain.
 \end{abstract}
 
 \section{Introduction}
@@ -35,19 +36,22 @@ Speculative decoding offers a way around part of this loop. A cheap source guess
 
 The scope is deliberately modest. MachBoost does not try to accelerate every prompt. It tries to accelerate grounded prompts without changing the target model's greedy output. If the local text is unhelpful, the method can be slower; the implementation exposes that fact through measurement and falls back to the serial path.
 
-This paper makes five concrete contributions:
+This paper contributes the following:
 \begin{itemize}[leftmargin=*]
-  \item a local-context drafter that proposes continuations from prompt text, files, and retrieved material;
-  \item verifier-backed generation for MLX and Hugging Face-style runtimes, including a fix for a cache-path divergence observed in MLX;
-  \item a Python API that measures a workload before deciding whether to use the boosted path;
-  \item Apple Silicon evaluations with exact token agreement across the reported MLX and Hugging Face comparison rows;
-  \item a direct comparison against Hugging Face's built-in prompt lookup decoding on a 3B local model.
+  \item a context-only drafter and initial-candidate gate that avoid treating the prompt wrapper itself as external evidence;
+  \item a cache-aware MLX verifier that fuses continuation and draft scoring, rewinds rejected cache entries in place, and resumes native decoding when useful context ends;
+  \item a paired benchmark against native \texttt{mlx-lm} generation with raw rows, run-order alternation, environment provenance, and exact token comparisons;
+  \item negative experiments with a small draft model, an MTP draft path, DFlash, an Apple Neural Engine draft, and lossless weight compression.
 \end{itemize}
 
 \section{Background and Related Work}
 Speculative decoding was introduced as a way to accelerate autoregressive transformer inference without changing outputs by drafting candidate tokens and verifying them in parallel with the target model \cite{leviathan2023speculative}. Speculative sampling independently developed a related draft-and-verify method for sampled decoding and reported 2--2.5$\times$ speedups in a distributed setting \cite{chen2023speculative}. Subsequent work explored architecture-level or self-drafting variants. Medusa adds multiple decoding heads to predict future tokens and verifies candidate trees \cite{cai2024medusa}.
 
 MachBoost is closest to methods that exploit references or prompt overlap rather than an auxiliary draft model. LLMA observes that outputs in retrieval and reference-grounded scenarios often share spans with the input reference, then verifies copied spans to preserve greedy output \cite{yang2023llma}. Prompt Lookup Decoding replaces the draft model with n-gram matching over the prompt \cite{saxena2023promptlookup}; PLD+ extends that idea by using language-model artifacts such as attention or hidden states to rank candidate spans \cite{somasundaram2024pldplus}. Hugging Face Transformers exposes prompt lookup through \texttt{prompt\_lookup\_num\_tokens} in assisted generation \cite{huggingface2026assisted}. MachBoost differs mainly in packaging and operating assumptions: it treats local files and retrieved snippets as ordinary inputs to the accelerator, keeps benchmark data machine-readable, and makes low-overlap prompts a measured fallback case rather than an error.
+
+Results above 2$\times$ elsewhere generally require more than process tuning. ReDrafter trains a recurrent draft conditioned on target hidden state and reports up to 2.3$\times$ on Apple Silicon \cite{zhang2024redrafter}. QuantSpec changes the draft's weight and KV-cache representation and reports speedups up to about 2.5$\times$ in long-context inference \cite{tiwari2025quantspec}. Mirror-SD maps complementary draft and target work across GPU and NPU devices and reports 2.8--5.8$\times$ on server-scale models \cite{bhendawade2025mirror}. At the runtime layer, BaseRT's native Metal kernels report up to 1.35$\times$ over MLX decode rather than a universal 2$\times$ \cite{rathnayaka2026basert}. These are different operating points: trained model changes, heterogeneous execution, or low-level kernels. MachBoost's current context path needs none of them, but only applies when the requested continuation overlaps local text.
+
+The same distinction appears outside text generation. Diffusion workloads can reuse intermediate transformations across denoising steps; EasyCache reports 2.1--3.3$\times$ for several video models \cite{zhou2025easycache}. That mechanism does not transfer directly to autoregressive text decoding. It does, however, support a broader product design in which one package selects a backend-specific accelerator rather than pretending that a single algorithm fits text, image, audio, and video models.
 
 The implementation targets common local inference stacks. Hugging Face Transformers provides the broad model API surface for Python inference \cite{wolf2020transformers}. MLX is an Apple Silicon-oriented array framework and runtime used here for Mac-native evaluation \cite{mlx2023}. Our measurements use a Qwen-family model converted for MLX; Qwen3 is the relevant public model-family report \cite{qwen2025qwen3}.
 
@@ -61,24 +65,24 @@ for each generation step $t$. MachBoost receives a corpus $C$ derived from promp
 This paper stays with greedy decoding. Sampling-compatible speculative decoding is possible in principle, but greedy argmax verification gives a simple correctness check: the accelerated sequence must match the serial baseline token-for-token.
 
 \section{Method}
-The implementation has three moving parts: a drafter, a verifier, and a decision rule for whether to use the drafter on a workload.
+The implementation has a drafter, a verifier, and an escape hatch to native generation. The escape hatch is important: speculative decoding is a conditional optimization, not a replacement decoder.
 
 \subsection{Drafting from Nearby Text}
-The drafter indexes token n-grams from a corpus $C$. At generation time it looks at the current prefix $p = x \Vert \hat{y}$, searches for suffixes of $p$ that occur in $C$, and proposes the tokens that followed the best matching span. Longer suffix matches are preferred, with draft length as a secondary signal. The design is intentionally plain: no learned draft model, no training step, and no hidden state from the target model.
+The drafter indexes token n-grams from a corpus $C$. At generation time it looks at the current prefix $p = x \Vert \hat{y}$, searches for suffixes of $p$ that occur in $C$, and proposes the tokens that followed the best matching span. Longer suffix matches are preferred, with draft length as a secondary signal. Only explicit context is indexed in the reported adaptive mode. An earlier implementation indexed the concatenation of prompt and context; because benchmark prompts already displayed the source passage, that design could draft from the prompt wrapper and blur the boundary between available context and generated history.
+
+Before entering the verifier loop, MachBoost asks whether the generation boundary has a context candidate. If not, it calls native \texttt{mlx-lm} generation immediately. This inexpensive gate catches open-ended prompts and the retrieval fixture in the current suite. It does not predict future candidates that might appear later in a response, so it favors low overhead over maximum recall.
 
 \subsection{Verification Against the Target Model}
-Given a prefix $p$ and draft $d=(d_1,\dots,d_k)$, the verifier checks how many draft tokens are equal to the target model's greedy continuation. For verifier-capable runtimes, this can be done by scoring $p \Vert d$ in a single target call and comparing target argmax tokens at the relevant positions. If the first $a$ draft tokens are accepted, they are committed. If a residual target token is available at the first mismatch, it is emitted to preserve progress. Otherwise the system falls back to a normal target step.
+Given a prefix $p$ and draft $d=(d_1,\dots,d_k)$, the verifier checks how many draft tokens equal the target model's greedy continuation. A verifier-capable runtime scores a block in one target call and compares target argmax tokens at the relevant positions. If the first $a$ draft tokens are accepted, they are committed. On a mismatch, the target's residual token is emitted. When the whole block is accepted, the verifier also returns the next target token already present in the logits. The following round scores that pending token together with the next draft, avoiding a separate target call between accepted blocks.
 
-The invariant is:
+Under deterministic target arithmetic, the intended invariant is:
 \[
   \mathrm{Boost}(M,x,C,T) = \mathrm{Greedy}(M,x,T)
 \]
-for a maximum generation length $T$. In the implementation, every benchmark row records an \texttt{output\_match} flag by comparing boosted and baseline token IDs directly.
+for a maximum generation length $T$. Batched and scalar floating-point paths can still choose different argmax tokens at a near tie, so this is tested rather than assumed. Every benchmark row records an \texttt{output\_match} flag from the native and accelerated token IDs.
 
 \subsection{Keeping the Cache Path Stable}
-One engineering detail turned out to matter more than expected. In MLX, extending a prompt cache token-by-token is not always numerically identical to rebuilding a long prefix in a single call. During testing, a non-trimmable cache could partially accept a draft, rebuild after rejection, and later choose a different argmax than the serial cache path.
-
-MachBoost handles this by verifying drafts on a cloned trial cache when the runtime supports cloning. Fully accepted drafts commit the trial cache. On partial rejection, if the trial cache cannot be trimmed safely, only the accepted tokens are advanced on the live cache. The rejected tail is never allowed to pollute the future prefix state.
+Verification writes candidate entries to the MLX prompt cache. Accepted entries remain useful; rejected entries must not survive. MachBoost trims the rejected suffix in place when the cache type permits it. If safe trimming is unavailable, the service reconstructs the accepted prefix. Once no further context candidate exists, the service hands the live verifier cache to \texttt{mlx\_lm.generate\_step}; the remaining response therefore uses the runtime's optimized asynchronous decoder instead of a Python-level \texttt{argmax}/synchronize loop.
 
 \subsection{Deciding When to Use the Drafter}
 Drafting from local text is sometimes the wrong choice. Open-ended prompts often accept only a few draft tokens, so verification overhead dominates. MachBoost therefore exposes a benchmark step. For a prompt family, it measures:
@@ -89,7 +93,7 @@ Drafting from local text is sometimes the wrong choice. Open-ended prompts often
   \item target-call or forward-call reduction.
 \end{itemize}
 
-The high-level API can then calibrate an accelerator:
+The high-level API can also calibrate an accelerator across representative prompts:
 \begin{verbatim}
 from machboost import Accelerator, GatePolicy
 
@@ -103,7 +107,7 @@ calibration = boost.calibrate(
 text, stats = boost.generate(prompt, max_tokens=128)
 \end{verbatim}
 
-If the measured workload fails the policy, \texttt{generate} uses the serial baseline path. This is not as exciting as always-on acceleration, but it is much safer for a package people may drop into arbitrary local workflows.
+If the measured workload fails the policy, \texttt{generate} uses the native backend path. Calibration and the per-request initial-candidate gate serve different purposes: calibration enables a workload family, while the gate prevents verifier overhead on an individual request with no draft at its boundary.
 
 \section{Implementation}
 MachBoost is implemented as a small Python package with no required runtime dependencies. Optional extras install backend-specific dependencies:
@@ -113,141 +117,81 @@ MachBoost is implemented as a small Python package with no required runtime depe
   \item Ollama HTTP support for benchmarking and capability detection.
 \end{itemize}
 
-The core package defines a \texttt{StepService} protocol with \texttt{next\_token(prefix)} and an optional \texttt{verify(prefix, candidate)} hook. A service with only \texttt{next\_token} can still run through the wrapper, but it cannot skip target work. A service with \texttt{verify} can accept several draft tokens per target call. The high-level \texttt{Accelerator} API loads MLX or Hugging Face models, reads strings, files, or directories as context, and exposes \texttt{benchmark}, \texttt{calibrate}, and \texttt{generate}. The Ollama HTTP adapter is intentionally limited: the public API does not expose token IDs, logits, KV-cache snapshots, or verifier hooks, so it is useful for benchmarking and option management but not for this form of acceleration.
+The core package defines a \texttt{StepService} protocol with \texttt{next\_token(prefix)} and an optional \texttt{verify(prefix, candidate)} hook. A service with only \texttt{next\_token} can use the wrapper but cannot skip target work. A verifier can accept several draft tokens per target call. The high-level \texttt{Accelerator} loads MLX or Hugging Face models, reads strings, files, or directories as context, and exposes \texttt{benchmark}, \texttt{calibrate}, and \texttt{generate}. The Ollama HTTP adapter remains a wrapper: Ollama's public generation API does not expose the target token IDs, logits, mutable KV cache, and block-verification hook this implementation needs. Native integration would require a runner-level change rather than an HTTP option.
 
 \section{Evaluation}
-\subsection{Setup}
-We evaluate on a Mac with Apple M1 Max, 10 CPU cores, 32 GB unified memory, and macOS 26.5.2. The Python environment includes MLX 0.31.2 and \texttt{mlx-lm} 0.31.3. The evaluated model is \path{mlx-community/Qwen3.5-0.8B-MLX-4bit}. The initial suite comes from \path{results/mlx_evidence_suite_20260701.json}; the longer strict-mode suite comes from \path{results/mlx_evidence_v2_strict_c1_20260706.json}.
+\subsection{Machine and Model}
+Measurements were collected on an Apple M1 Max with 10 CPU cores and 32 GB unified memory, running macOS 26.5.2. The environment used Python 3.13.3, MLX 0.31.2, \texttt{mlx-lm} 0.31.3, and MachBoost 0.1.3. No thermal or performance warning was reported immediately before or after the run. The model was \path{mlx-community/Qwen2.5-3B-Instruct-4bit}.
 
-The suite contains seven fixture families with five fresh nonce-bearing repeats each: policy continuation, structured JSON continuation, retrieval-style answering, code completion, repository command quote, creative open-ended generation, and short answer. Each run generates up to 24 tokens. The positive fixtures are designed to have real local-context overlap; the creative and short-answer fixtures are negative controls.
+The benchmark requests 64 greedy tokens for three fixture families: literal Python continuation, retrieval-grounded answering, and open-ended writing. Each family is repeated three times with a fresh nonce. Baseline and accelerated order alternate. Wall time includes prompt processing. The baseline calls \texttt{mlx-lm}'s native streaming generator; it is not MachBoost's \texttt{next\_token} loop. The artifact \path{results/mlx_native_adaptive_qwen25_3b_20260713.json} contains prompts, token previews, raw times, package versions, hardware data, and each run's order.
 
-We also run a stricter 64-token suite with three additional real-artifact fixtures drawn from the repository README, the core Python implementation, and this paper source. That run disables the MLX prompt cache for both baseline and boosted paths, and drafts only from provided context rather than from the full prompt wrapper. It is slower in absolute tokens per second than cache-enabled decoding, but it avoids cache-trajectory drift and gives a cleaner exactness check for longer generations.
-
-Two smaller comparison runs are included as checks rather than as final evidence. The first compares serial Hugging Face generation, Hugging Face prompt lookup, and MachBoost on \path{Qwen/Qwen2.5-3B-Instruct}. The second is a two-fixture smoke run on \path{mlx-community/Qwen3.5-9B-MLX-4bit}. Their artifacts are \path{results/hf_prompt_lookup_compare_qwen25_3b.json} and \path{results/mlx_qwen35_9b_strict_smoke.json}.
-
-\subsection{Overall Results}
-\begin{table}[t]
+\subsection{Native-Baseline Results}
+\begin{table}[H]
 \centering
-\begin{tabular}{lr}
-\toprule
-Metric & Value \\
-\midrule
-Runs & 35 \\
-Output match rate & 100\% \\
-Median baseline speed & 135.02 tok/s \\
-Median boosted speed & 188.13 tok/s \\
-Median speedup & 1.38$\times$ \\
-Mean speedup & 1.32$\times$ \\
-P90 speedup & 1.62$\times$ \\
-Median accepted draft tokens & 23.0 \\
-Median forward reduction & 70.83\% \\
-\bottomrule
-\end{tabular}
-\caption{Overall MLX evidence-suite results. Output match compares token IDs between serial greedy baseline and boosted generation.}
-\label{tab:overall}
-\end{table}
-
-Across the full suite, the boosted path matches the serial baseline in every run. Median throughput increases from 135.02 to 188.13 tokens per second, corresponding to a 1.38$\times$ median speedup. The p90 speedup is 1.62$\times$.
-
-\subsection{Per-Workflow Results}
-\begin{table}[t]
-\centering
+\small
 \begin{tabular}{lrrrrr}
 \toprule
-Fixture & Expectation & Match & Speedup & Base tok/s & Boost tok/s \\
+Fixture/path & Match & Paired speedups & Median & Base tok/s & MB tok/s \\
 \midrule
-Policy quote & Positive & 100\% & 1.62$\times$ & 125.84 & 203.78 \\
-JSON continuation & Positive & 100\% & 1.61$\times$ & 125.55 & 202.66 \\
-Code completion & Positive & 100\% & 1.60$\times$ & 125.13 & 201.84 \\
-Repo quote & Positive & 100\% & 1.38$\times$ & 136.52 & 188.13 \\
-RAG answer & Positive & 100\% & 1.12$\times$ & 135.02 & 151.57 \\
-Creative open-ended & Negative & 100\% & 0.95$\times$ & 157.63 & 148.91 \\
-Short answer & Negative & 100\% & 0.90$\times$ & 156.42 & 140.89 \\
+Code/adaptive & 100\% & 2.51, 2.36, 1.59 & 2.36$\times$ & 77.14 & 127.30 \\
+RAG/native & 100\% & 0.96, 1.00, 0.94 & 0.96$\times$ & 91.18 & 88.47 \\
+Open/native & 100\% & 1.00, 1.01, 0.96 & 1.00$\times$ & 98.56 & 99.46 \\
 \bottomrule
 \end{tabular}
-\caption{Median per-fixture results over five repeats. Positive fixtures contain expected local-context overlap; negative fixtures are included to test gating.}
-\label{tab:fixtures}
+\caption{Three fresh-nonce repeats per fixture. Speedup is paired wall time; the throughput columns are per-column medians and therefore do not necessarily reproduce the median paired ratio. ``MB'' denotes MachBoost.}
+\label{tab:native}
 \end{table}
 
-The per-fixture view is more informative than the aggregate number. Policy, JSON, and code continuation all exceed 1.60$\times$ median speedup. Repository quote is weaker but still useful at 1.38$\times$. Retrieval-style answering improves only 1.12$\times$; the local text helps, but fewer tokens are accepted per verification call. The negative controls are a useful sanity check: they still match the baseline, but they are slower. Their continuations are not mostly recoverable from the provided context, so the extra verifier calls are wasted.
+The code fixture begins at a boundary that occurs in the supplied source. MachBoost accepts 51 of 64 output tokens in every repeat and records 14 logical target forwards instead of 64, a 78.1\% reduction. The slowest accelerated repeat is still 1.59$\times$, which also shows the variance of short local runs. The median paired speedup is 2.36$\times$.
 
-\subsection{Strict 64-Token Run}
-\begin{table}[t]
+The retrieval answer is semantically grounded in the note but its generation boundary does not form an eligible context continuation. It therefore exercises native fallback. So does the open-ended control. Their paired ratios fluctuate around one; RAG's three-run median is 0.96$\times$. This small overhead is measurement noise and wrapper setup, not an acceleration result. Across all nine rows, token IDs match their corresponding native outputs.
+
+An aggregate median over the three fixture types would be close to 1$\times$ and would hide the conditional nature of the method. We report paths separately. For a user-facing system, the useful statistic is coverage together with conditional speedup: how often a request is eligible, and how much the eligible requests improve.
+
+\subsection{Why Earlier Ratios Were Rejected}
+Earlier repository artifacts reported 3--8$\times$ on MLX. Their baseline disabled the prompt cache or performed a synchronized target call for each token. That path ran near 10 tokens/s and was not representative of native \texttt{mlx-lm}, which uses cached asynchronous generation. Those artifacts remain available as implementation diagnostics, but they cannot support a production speed claim. Replacing that baseline was also what exposed a regression in MachBoost's serial tail; switching the tail to native generation restored parity for non-overlap prompts.
+
+A one-repeat Hugging Face artifact likewise found MachBoost context lookup competitive with Transformers prompt lookup, but it predates the current paired harness. It is useful for designing a larger comparison, not for the headline result.
+
+\subsection{Exploratory Alternatives}
+We tested several ways to extend acceleration beyond literal context overlap. Table~\ref{tab:negative} summarizes the local probes. They were not all run under one benchmark protocol, so the numbers are diagnostic rather than comparative.
+
+\begin{table}[H]
 \centering
-\begin{tabular}{lrrr}
+\small
+\begin{tabular}{p{0.27\linewidth}p{0.23\linewidth}p{0.40\linewidth}}
 \toprule
-Fixture & Match & Speedup & Accepted \\
+Path & Local result & Main constraint \\
 \midrule
-Real README continuation & 100\% & 5.68$\times$ & 64 \\
-Real core-code continuation & 100\% & 5.93$\times$ & 64 \\
-Real paper continuation & 100\% & 8.54$\times$ & 64 \\
-JSON continuation & 100\% & 3.79$\times$ & 57 \\
-Code completion & 100\% & 3.72$\times$ & 55 \\
-Policy quote & 100\% & 2.31$\times$ & 41 \\
-RAG answer & 100\% & 1.91$\times$ & 27 \\
-Repo quote & 100\% & 1.78$\times$ & 24 \\
-Creative open-ended & 100\% & 1.09$\times$ & 0 \\
-Short answer & 100\% & 1.01$\times$ & 0 \\
+DFlash, Qwen3.5 9B & 0.66$\times$ at 128; 0.96$\times$ at 512 & M1 lacks the newer accelerator path; draft emulation costs more than accepted work saves. \\
+Qwen2.5 0.5B draft for 3B target & 0.38--0.78$\times$ & Acceptance of roughly 36--58\% did not repay serial draft generation. \\
+Ollama embedded MTP & 12.7--24.3 tok/s versus roughly 40 tok/s baseline & The tested draft depths added overhead on this model and machine. \\
+ANE 0.5B draft & 51.1 decode tok/s & A one-token ANE draft cannot feed a 3B MLX target near 102 tok/s economically; multi-token heads are needed. \\
+Lossless Q4 compression & 1.08--1.15$\times$ ideal entropy bound & The quantized weights are already close to high entropy; decoder cost would reduce the gain further. \\
 \bottomrule
 \end{tabular}
-\caption{Median results for the 64-token strict MLX run over three repeats. Prompt cache is disabled for both baseline and boosted paths, and draft source is limited to context text. Overall median speedup is 3.03$\times$ over 30 runs.}
-\label{tab:strict64}
+\caption{Exploratory paths that did not beat native generation locally. Each result is specific to the tested model, implementation, and M1 Max.}
+\label{tab:negative}
 \end{table}
 
-The 64-token run is useful for a different reason than the first suite. It is not the fastest way to serve MLX models, but it shows that longer grounded spans can be accepted cleanly when the verifier and baseline use the same stateless execution mode. The three real-artifact fixtures are particularly strong: all accept the full 64-token budget and exceed 5.6$\times$ median speedup. In contrast, the two negative controls accept no draft tokens and stay near 1.0$\times$.
-
-\subsection{Comparison with Hugging Face Prompt Lookup}
-\begin{table}[t]
-\centering
-\begin{tabular}{lrrrr}
-\toprule
-Method & Match & Speedup & tok/s & Forwards \\
-\midrule
-HF serial generate & 100\% & 1.00$\times$ & 21.74 & 32.0 \\
-HF prompt lookup 4 & 100\% & 1.83$\times$ & 38.68 & 8.5 \\
-HF prompt lookup 8 & 100\% & 1.86$\times$ & 41.13 & 5.5 \\
-HF prompt lookup 16 & 100\% & 2.11$\times$ & 46.59 & 3.0 \\
-MachBoost prompt & 100\% & 2.14$\times$ & 45.77 & 10.5 \\
-MachBoost context & 100\% & 2.47$\times$ & 51.06 & 10.5 \\
-MachBoost prompt+context & 100\% & 2.26$\times$ & 47.63 & 11.0 \\
-\bottomrule
-\end{tabular}
-\caption{Direct Hugging Face comparison on \texttt{Qwen/Qwen2.5-3B-Instruct}, six fixtures, one repeat, and 32 requested new tokens. Match is token-prefix equality over the requested budget.}
-\label{tab:hflookup}
-\end{table}
-
-This comparison changes the interpretation. Hugging Face prompt lookup is already a strong baseline. With a 16-token lookup budget it reaches a 2.11$\times$ median speedup and reduces median forward calls from 32 to 3. MachBoost context mode is faster on the median fixture mix at 2.47$\times$, but it does not dominate every fixture. Hugging Face prompt lookup is stronger on JSON, RAG, and code in this run; MachBoost context is stronger on the local README, policy, and slightly on core-code continuation. Four of the six Hugging Face prompt-lookup rows emitted extra raw tail tokens after the matching 32-token prefix, so the artifact records both fixed-budget token IDs and raw generated length.
-
-\subsection{Larger-Model Smoke Run}
-\begin{table}[t]
-\centering
-\begin{tabular}{lrrrr}
-\toprule
-Model/fixture & Match & Speedup & Base tok/s & Boost tok/s \\
-\midrule
-Qwen3.5-9B policy & 100\% & 6.99$\times$ & 1.86 & 13.00 \\
-Qwen3.5-9B JSON & 100\% & 8.01$\times$ & 1.69 & 13.51 \\
-\bottomrule
-\end{tabular}
-\caption{Two-row strict MLX smoke run on \texttt{mlx-community/Qwen3.5-9B-MLX-4bit}, 16 tokens. Median speedup is 7.50$\times$ with full draft acceptance.}
-\label{tab:9bsmoke}
-\end{table}
-
-The 9B result is deliberately labeled a smoke run. It is too small to support a broad claim, but it matches the expected scaling behavior: when the draft is accepted, avoiding serial target-model steps matters more as the target model gets slower.
-
-\subsection{Interpretation}
-These results are not evidence for a universal speedup layer. They instead suggest that grounded local workloads are separable from open-ended ones with a small amount of measurement. That distinction matters for developer tools. A repo assistant, config editor, policy search tool, or command helper can benchmark representative prompts once and avoid using the drafter where acceptance is low.
+The failures share a simple accounting problem. A draft only helps when the time removed from target decoding exceeds draft generation, verification, synchronization, and cache repair. A smaller model is not automatically a cheap enough draft. Moving it to another processor is not sufficient either if it predicts one token at a time. The strongest published results solve this with trained multi-token prediction, high acceptance, or concurrent heterogeneous execution rather than with process priority.
 
 \section{Limitations}
-The evidence here is still early. The strongest repeated benchmark uses one small MLX model on one Apple Silicon machine; the longer suite reaches 64 tokens but still uses controlled fixtures rather than broad real applications. The Hugging Face comparison has only one repeat, and the 9B result is only a two-row smoke run. The method still needs repeated 3B/8B/9B evaluations, sampled-decoding tests, and larger real repositories. The drafter is also deliberately simple; unlike PLD+, it does not rank spans with model artifacts. Finally, the cache-enabled MLX path is faster in raw throughput but can diverge on long boundary cases, so the strict suite disables the prompt cache for evidence runs. Ollama over HTTP remains outside the accelerated path unless the runtime exposes a native verifier hook or a patched runner.
+The native-baseline evidence has nine rows, one model, one quantization, one machine, and controlled 64-token prompts. The accelerated fixture is intentionally favorable: the desired code is substantially present in context. It demonstrates the mechanism but does not estimate how often real users encounter an eligible boundary. Longer repository sessions, multiple 3B--9B architectures, prefill-heavy prompts, and energy measurements remain untested under the corrected harness.
 
-There is also a methodological limit. Token equality is a strong check for greedy decoding, but it says little about semantic quality under sampling. For that reason, this paper makes no quality claim. The goal is lower latency when the desired output is the same.
+Only greedy decoding is evaluated. Exact token equality under the tested execution paths does not prove equality for sampling, beam search, or every floating-point near tie. Images, audio, and video are not accelerated by the current package. Their models need modality-specific adapters; applying text n-gram verification to them would be a category error. Ollama is also not accelerated through its public HTTP API.
 
-\section{Future Work}
-Several next steps are straightforward. The evaluation needs repeated larger-model runs, longer generations, and real workspaces. The drafter could use suffix automata, prompt/document segmentation, model-artifact ranking, or retrieval over multiple corpora. The decision rule could also become online: try the drafter for a short prefix, back off when acceptance is low, and re-enable it inside structured regions. Finally, a native Ollama or llama.cpp verifier hook would make the approach available to many more local users.
+Finally, this work does not introduce prompt lookup itself. The engineering contribution is the adaptive package path, MLX cache integration, native fallback, and reproducible baseline correction. A novelty claim beyond that would need broader comparisons with LLMA, Prompt Lookup Decoding, PLD+, and current trained speculative systems.
+
+\section{Next Experiments}
+There are two plausible tracks. The first keeps models unchanged: add an online eligibility predictor, a suffix index that can re-enter speculation after native tokens, and native verifier hooks for MLX and llama.cpp/Ollama. Evaluation should report request coverage, time to first token, decode throughput, peak memory, energy, and exact outputs against each backend's own optimized generator.
+
+The second track accepts model-specific preparation. A multi-token drafter distilled from the target could run on the Apple Neural Engine while target verification runs on the GPU, following the heterogeneous lesson of Mirror-SD. Quantized draft weights and KV state could reduce memory traffic in long contexts. Both ideas exceed the scope of a wrapper and should be treated as separate research prototypes with quality and compatibility tests.
+
+For image and video generation, the package can expose the same routing and evidence interface while using activation or transformation caching such as EasyCache. This would make MachBoost a common control plane for specialized accelerators, not a claim that one decoder optimization applies to every model.
 
 \section{Conclusion}
-MachBoost is a practical experiment in using nearby text as the draft source for speculative decoding. It is not a shortcut for every prompt, and it is not the first prompt-lookup method. On the measured MLX suite, however, it matches serial greedy decoding across all 35 initial runs and reaches a 1.38$\times$ median speedup overall, with 1.60--1.62$\times$ speedups on the strongest grounded tasks. A stricter 64-token MLX run adds 90 exact-match rows across three runs and a 3.00$\times$ aggregate median speedup against stateless greedy decoding. The first direct Hugging Face comparison shows that built-in prompt lookup is strong, while MachBoost's local-context mode remains competitive and slightly faster on the median of the tested fixtures. The package design follows the main lesson from the results: use the drafter when local context predicts the next tokens, and fall back when it does not.
+MachBoost currently clears 2$\times$ in one defensible setting: literal context-backed code continuation on a 3B MLX model, measured against native cached generation. The three paired runs have a 2.36$\times$ median speedup and exact token agreement. Requests without an initial context candidate take the native path and remain near parity. That is narrower than the original ambition, but it is a sound base. The corrected result also makes the next problem precise: increase eligibility without paying for a slow serial draft, then validate the gain against optimized native runtimes across models and modalities.
 
 \bibliographystyle{plain}
 \bibliography{references}
