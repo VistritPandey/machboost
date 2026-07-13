@@ -237,6 +237,21 @@ class BoostedService:
                         on_tokens((fallback_residual,))
                     continue
 
+            continue_tokens = getattr(self.service, "continue_tokens", None)
+            if not candidates and callable(continue_tokens):
+                tail = continue_tokens(
+                    prefix,
+                    max_tokens=remaining,
+                    stop_tokens=stop_set,
+                    on_tokens=on_tokens,
+                )
+                if tail is not None:
+                    tail = tuple(int(token) for token in tail)
+                    generated.extend(tail)
+                    self.drafter.observe(tail)
+                    next_token_calls += len(tail)
+                    break
+
             token = self.service.next_token(prefix)
             next_token_calls += 1
             if token is None:
