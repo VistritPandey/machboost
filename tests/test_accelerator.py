@@ -84,6 +84,52 @@ class FakeChatTokenizer:
         return {"<|im_end|>": 0}.get(token, self.unk_token_id)
 
 
+class FakeStreamingDetokenizer:
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.text = ""
+        self.offset = 0
+
+    def add_token(self, token):
+        self.text += chr(token)
+
+    def finalize(self):
+        return None
+
+    @property
+    def last_segment(self):
+        segment = self.text[self.offset :]
+        self.offset = len(self.text)
+        return segment
+
+
+class FakeStreamingTokenizer:
+    @property
+    def detokenizer(self):
+        return FakeStreamingDetokenizer()
+
+
+class TokenByTokenNativeService(NativeFallbackService):
+    def __init__(self, prompt, completion):
+        super().__init__(prompt, completion)
+        self.tokenizer = FakeStreamingTokenizer()
+        self.decode_calls = 0
+
+    def decode(self, tokens):
+        self.decode_calls += 1
+        return super().decode(tokens)
+
+    def generate_tokens(self, prompt_tokens, *, max_tokens, stop_tokens=None, on_tokens=None):
+        self.native_calls += 1
+        tokens = self.completion[:max_tokens]
+        if on_tokens is not None:
+            for token in tokens:
+                on_tokens((token,))
+        return tokens
+
+
 class AcceleratorTests(unittest.TestCase):
     def test_generate_result_uses_context_drafts(self):
         prompt = "Question: ship policy?\nAnswer: "
@@ -121,6 +167,19 @@ class AcceleratorTests(unittest.TestCase):
         self.assertEqual(result.text, completion)
         self.assertEqual(service.native_calls, 1)
         self.assertEqual(result.stats.accepted_draft_tokens, 0)
+
+    def test_streaming_uses_incremental_detokenizer_instead_of_decode_per_token(self):
+        prompt = "Complete: "
+        completion = "alpha beta"
+        service = TokenByTokenNativeService(prompt, completion)
+        accelerator = Accelerator(service)
+        chunks = []
+
+        result = accelerator.generate_result(prompt, max_tokens=len(completion), on_text=chunks.append)
+
+        self.assertEqual(result.text, completion)
+        self.assertEqual("".join(chunks), completion)
+        self.assertEqual(service.decode_calls, 1)
 
     def test_generate_can_reenter_drafting_after_native_probe(self):
         prompt = "Question: what does the note say?\nAnswer:"
