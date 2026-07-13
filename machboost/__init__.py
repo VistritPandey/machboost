@@ -18,7 +18,7 @@ from .core import (
     RunStats,
     machboost,
 )
-from .client import MachBoostAPIError, MachBoostClient
+from .client import MachBoostAPIError, MachBoostClient, ensure_server
 from .models import ModelAlias, ModelResolution, resolve_model
 from .server import RuntimeManager
 
@@ -42,6 +42,7 @@ __all__ = [
     "RuntimeManager",
     "benchmark",
     "benchmark_cases",
+    "ensure_server",
     "machboost",
     "resolve_model",
     "summarize_results",
