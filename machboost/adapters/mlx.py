@@ -368,7 +368,11 @@ class MLXCausalLMService:
         self.reset_cache()
         try:
             self._cache = self._new_cache()
-            logits = self._logits(prefix, cache=self._cache)
+            if len(prefix) > 1:
+                self._logits(prefix[:-1], cache=self._cache)
+                logits = self._logits(prefix[-1:], cache=self._cache)
+            else:
+                logits = self._logits(prefix, cache=self._cache)
         except (AttributeError, ImportError, TypeError):
             self._cache_supported = False
             self.reset_cache()
