@@ -180,6 +180,7 @@ class BoostedService:
         accepted_draft_spans = 0
         rejected_candidates = 0
         stopped = False
+        probe_remaining = min(self.drafter.ngram, max_tokens) if self.drafter.corpus else 0
 
         while len(generated) < max_tokens and not stopped:
             remaining = max_tokens - len(generated)
@@ -226,6 +227,7 @@ class BoostedService:
                         fallback_residual = residual
 
                 if committed:
+                    probe_remaining = min(self.drafter.ngram, max_tokens - len(generated))
                     continue
 
                 if fallback_residual is not None:
@@ -235,7 +237,20 @@ class BoostedService:
                     self.drafter.observe((fallback_residual,))
                     if on_tokens is not None:
                         on_tokens((fallback_residual,))
+                    probe_remaining = min(self.drafter.ngram, max_tokens - len(generated))
                     continue
+
+            if not candidates and probe_remaining > 0:
+                token = self.service.next_token(prefix)
+                next_token_calls += 1
+                probe_remaining -= 1
+                if token is None or _is_stop_token(token, stop_set):
+                    break
+                generated.append(int(token))
+                self.drafter.observe((int(token),))
+                if on_tokens is not None:
+                    on_tokens((int(token),))
+                continue
 
             continue_tokens = getattr(self.service, "continue_tokens", None)
             if not candidates and callable(continue_tokens):
