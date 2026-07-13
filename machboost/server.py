@@ -408,13 +408,19 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                 self.handle_ollama_generate(payload)
                 return
             if path == "/api/pull":
-                result = self.runtime.pull(str(payload.get("model") or payload.get("name") or ""))
+                model = required_string(payload, "model", aliases=("name",))
+                result = self.runtime.pull(model, revision=payload.get("revision"))
                 self.send_json(result)
                 return
-            if path in {"/api/stop", "/api/delete"}:
+            if path == "/api/stop":
                 model = payload.get("model") or payload.get("name")
                 unloaded = self.runtime.stop(str(model)) if model else self.runtime.stop()
                 self.send_json({"status": "success", "unloaded": unloaded})
+                return
+            if path == "/api/shutdown":
+                unloaded = self.runtime.stop()
+                self.send_json({"status": "success", "unloaded": unloaded})
+                threading.Thread(target=self.server.shutdown, daemon=True).start()
                 return
             if path == "/api/show":
                 model = str(payload.get("model") or payload.get("name") or "")
@@ -674,8 +680,14 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
         return
 
 
-def required_string(payload: dict[str, Any], key: str) -> str:
-    value = str(payload.get(key) or "").strip()
+def required_string(payload: dict[str, Any], key: str, *, aliases: Sequence[str] = ()) -> str:
+    raw = payload.get(key)
+    if raw is None:
+        for alias in aliases:
+            raw = payload.get(alias)
+            if raw is not None:
+                break
+    value = str(raw or "").strip()
     if not value:
         raise ValueError(f"missing required field: {key}")
     return value
