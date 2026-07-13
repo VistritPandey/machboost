@@ -98,7 +98,13 @@ class PythonPackageTest(unittest.TestCase):
         target = (1, 2, 3, 4, 5, 6)
         service = ScriptedVerifierWithNativeTail(target)
 
-        boosted = machboost(service, corpus_tokens=target, ngram=2, max_draft_tokens=8)
+        boosted = machboost(
+            service,
+            corpus_tokens=target,
+            ngram=2,
+            max_draft_tokens=8,
+            reentry_probe_tokens=2,
+        )
         generated, stats = boosted.generate(prompt, max_tokens=len(target))
 
         self.assertEqual(generated, target)
