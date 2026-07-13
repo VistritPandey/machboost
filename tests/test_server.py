@@ -214,6 +214,17 @@ class HTTPServerTests(unittest.TestCase):
         _, _, ps_body = self.request("/api/ps")
         self.assertEqual(json.loads(ps_body)["models"], [])
 
+    def test_shutdown_endpoint_stops_server_and_releases_models(self):
+        self.request(
+            "/api/generate",
+            {"model": "mlx-community/example", "prompt": "hello", "stream": False},
+        )
+        _, _, body = self.request("/api/shutdown", {})
+
+        self.assertEqual(json.loads(body)["unloaded"], 1)
+        self.thread.join(timeout=2.0)
+        self.assertFalse(self.thread.is_alive())
+
 
 if __name__ == "__main__":
     unittest.main()
