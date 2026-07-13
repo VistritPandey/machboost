@@ -4,15 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "machboost"
-version = "0.1.4"
-description = "Exact local-context speculative acceleration for local LLM inference."
+version = "0.2.0"
+description = "Resident local inference server with adaptive context-backed acceleration for MLX and Hugging Face."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
 authors = [
   { name = "Vistrit Pandey", email = "vistrit@blinkfire.com" }
 ]
-keywords = ["llm", "inference", "speculative-decoding", "local-ai", "mlx", "huggingface", "ollama"]
+keywords = ["llm", "inference", "speculative-decoding", "local-ai", "mlx", "huggingface", "ollama", "server"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Intended Audience :: Developers",
