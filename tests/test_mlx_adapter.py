@@ -231,6 +231,33 @@ class MLXAdapterTest(unittest.TestCase):
         self.assertEqual(observed["prompt"], [100, 101, 102])
         self.assertEqual(observed["max_tokens"], 4)
 
+    def test_native_mlx_stream_can_forward_predecoded_text(self):
+        mlx_lm = ModuleType("mlx_lm")
+
+        def stream_generate(model, tokenizer, prompt, *, max_tokens):
+            yield SimpleNamespace(token=1, text="hello ")
+            yield SimpleNamespace(token=2, text="world")
+            yield SimpleNamespace(token=99, text="!")
+
+        mlx_lm.stream_generate = stream_generate
+        service = MLXCausalLMService(object(), object())
+        token_chunks = []
+        text_chunks = []
+
+        with patch.dict("sys.modules", {"mlx_lm": mlx_lm}):
+            generated = service.generate_tokens(
+                (100,),
+                max_tokens=3,
+                stop_tokens=(99,),
+                on_tokens=token_chunks.append,
+                on_text=text_chunks.append,
+            )
+
+        self.assertEqual(generated, (1, 2))
+        self.assertEqual(text_chunks, ["hello ", "world", "!"])
+        self.assertEqual(token_chunks, [])
+        self.assertTrue(service.supports_native_text_streaming)
+
     def test_cached_verify_commits_accepted_candidate(self):
         prompt = (100, 101, 102)
         service = cache_service((1, 2, 3, 4, 5), prompt_len=len(prompt))
