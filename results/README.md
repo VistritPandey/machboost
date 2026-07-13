@@ -4,25 +4,44 @@ This directory stores public benchmark artifacts for the local-context speculati
 
 ## Current Native-Baseline Evidence, July 13 2026
 
-Artifact: `mlx_native_adaptive_qwen25_3b_20260713.json`
+Artifacts:
 
-The current harness compares MachBoost against `mlx-lm` native streaming generation, includes prompt processing in both wall-clock measurements, alternates baseline-first and boosted-first order, records fresh nonces, and preserves every raw row. The artifact also records package versions, hardware, memory, timestamps, and thermal status.
+- `mlx_native_default_qwen25_3b_20260713.json`
+- `mlx_native_reentry_qwen25_3b_20260713.json`
+
+The current harness compares MachBoost against `mlx-lm` native streaming generation, includes prompt processing in both wall-clock measurements, alternates baseline-first and boosted-first order, records fresh nonces, and preserves every raw row. Each artifact also records package versions, hardware, memory, timestamps, and thermal status.
 
 Model: `mlx-community/Qwen2.5-3B-Instruct-4bit`
 
 Hardware: Apple M1 Max, 32 GB unified memory
 
-Generation: greedy, 64 requested tokens, three fresh-nonce repeats per fixture
+Generation: greedy, 64 requested tokens, five fresh-nonce repeats per fixture
 
-| Fixture | Selected Path | Exact Match | Paired Speedups | Median Speedup | Baseline tok/s | MachBoost tok/s |
-|---|---|---:|---:|---:|---:|---:|
-| `code` | adaptive context verifier | 100% | 2.51x, 2.36x, 1.59x | 2.36x | 77.14 | 127.30 |
-| `rag` | native fallback | 100% | 0.96x, 1.00x, 0.94x | 0.96x | 91.18 | 88.47 |
-| `creative_open` | native fallback | 100% | 1.00x, 1.01x, 0.96x | 1.00x | 98.56 | 99.46 |
+### Default profile
 
-The code fixture accepted a median 51 draft tokens and reduced logical target forwards by 78.1%. The implementation fuses the pending verifier token with the next draft block, rewinds the MLX KV cache in place, and resumes native asynchronous MLX decoding when context candidates end.
+Settings: 3-gram context lookup, 32-token drafts, no native-token re-entry.
 
-This is not a universal 2x result. It is a repeated greater-than-2x median for a literal context-backed code continuation. Semantic RAG and open-ended generation use native fallback. Individual runs remain noisy even when both sides execute the same native path.
+| Fixture | Selected Path | Exact Match | Median Speedup | Baseline tok/s | MachBoost tok/s |
+|---|---|---:|---:|---:|---:|
+| `code` | adaptive context verifier | 100% | 1.96x | 87.46 | 167.28 |
+| `rag` | native fallback | 100% | 1.04x | 89.98 | 91.61 |
+| `creative_open` | native fallback | 100% | 1.00x | 99.95 | 98.27 |
+
+The code fixture accepted a median 51 draft tokens and reduced logical target forwards by 76.6%. Its paired speedups were 2.44x, 1.15x, 2.08x, 1.96x, and 1.91x, showing substantial short-run variance.
+
+### Experimental one-token re-entry
+
+Settings: 1-gram context lookup, 32-token drafts, one native seed token before re-entry.
+
+| Fixture | Selected Path | Exact Match | Median Speedup | Baseline tok/s | MachBoost tok/s |
+|---|---|---:|---:|---:|---:|
+| `code` | adaptive context verifier | 100% | 1.62x | 72.54 | 121.38 |
+| `rag` | adaptive context verifier | 100% | 1.58x | 88.92 | 140.09 |
+| `creative_open` | native fallback | 100% | 1.08x | 94.25 | 101.57 |
+
+Re-entry broadens useful coverage: RAG accepts a median 30 draft tokens after one native seed and reduces logical target forwards by 43.8%. A longer 3-token re-entry probe produced one mismatch in a separate 15-row exploratory run, so re-entry is opt-in in 0.1.4.
+
+The current repeated default result is close to, but below, 2x. This is not a universal acceleration result. The implementation fuses verifier continuation with the next draft block, rewinds the MLX KV cache in place, matches native MLX prompt prefill, and resumes native asynchronous decoding when context candidates end.
 
 ## Legacy Diagnostic Artifacts
 
