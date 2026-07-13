@@ -10,6 +10,7 @@ from machboost.core import Token, TokenSeq
 class Verification:
     accepted: int
     residual_token: Optional[Token]
+    bonus_token: Optional[Token] = None
 
 
 class MLXCausalLMService:
@@ -195,7 +196,8 @@ class MLXCausalLMService:
                 break
             accepted += 1
 
-        return Verification(accepted, residual)
+        bonus = self._argmax(self._row(logits, start + accepted)) if accepted == len(candidate_tokens) else None
+        return Verification(accepted, residual, bonus)
 
     def _verification_cached(
         self,
@@ -232,6 +234,7 @@ class MLXCausalLMService:
 
         committed = candidate_tokens[:accepted]
         rejected = len(candidate_tokens) - accepted
+        bonus = predictions[-1] if rejected == 0 else None
         if rejected > 0 and not self._trim_cache(trial_cache, rejected):
             self.reset_cache()
             self._cached_next_logits(prefix_tokens + committed)
@@ -240,7 +243,7 @@ class MLXCausalLMService:
             self._cache_prefix = prefix_tokens + committed
             self._cache_logits = self._row(logits, accepted - 1)
 
-        return Verification(accepted, residual)
+        return Verification(accepted, residual, bonus)
 
     def _logits(self, tokens: Sequence[Token], *, cache=None):
         mx = self._mx()
