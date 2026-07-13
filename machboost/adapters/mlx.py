@@ -103,6 +103,7 @@ class MLXCausalLMService:
         max_tokens: int,
         stop_tokens: Optional[Iterable[Token]] = None,
         on_tokens=None,
+        on_text=None,
     ) -> Tuple[Token, ...]:
         if len(prompt_tokens) == 0 or max_tokens <= 0:
             return ()
@@ -112,6 +113,7 @@ class MLXCausalLMService:
                 max_tokens=max_tokens,
                 stop_tokens=stop_tokens,
                 on_tokens=on_tokens,
+                on_text=on_text,
             )
 
         self.reset_cache()
@@ -181,6 +183,7 @@ class MLXCausalLMService:
         max_tokens: int,
         stop_tokens: Optional[Iterable[Token]],
         on_tokens,
+        on_text,
     ) -> Tuple[Token, ...]:
         try:
             from mlx_lm import stream_generate
@@ -197,13 +200,19 @@ class MLXCausalLMService:
             max_tokens=max_tokens,
         ):
             token = int(response.token)
+            if on_text is not None and response.text:
+                on_text(str(response.text))
             if token in stop_set:
                 break
             generated.append(token)
             self.forward_calls += 1
-            if on_tokens is not None:
+            if on_tokens is not None and on_text is None:
                 on_tokens((token,))
         return tuple(generated)
+
+    @property
+    def supports_native_text_streaming(self) -> bool:
+        return self.tokenizer is not None and self.cache_factory is None
 
     def verify(self, prefix_tokens: TokenSeq, candidate_tokens: TokenSeq) -> Tuple[int, Optional[Token]]:
         result = self.verification(prefix_tokens, candidate_tokens)
