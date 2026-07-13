@@ -42,6 +42,19 @@ class ScriptedService:
         return accepted, residual
 
 
+class NativeFallbackService(ScriptedService):
+    def __init__(self, prompt, completion):
+        super().__init__(prompt, completion)
+        self.native_calls = 0
+
+    def generate_tokens(self, prompt_tokens, *, max_tokens, stop_tokens=None, on_tokens=None):
+        self.native_calls += 1
+        tokens = self.completion[:max_tokens]
+        if on_tokens is not None and tokens:
+            on_tokens(tokens)
+        return tokens
+
+
 class FakeChatTokenizer:
     eos_token_id = 0
     all_special_ids = [0]
@@ -62,7 +75,7 @@ class AcceleratorTests(unittest.TestCase):
         prompt = "Question: ship policy?\nAnswer: "
         completion = "Use the approved rollout checklist."
         service = ScriptedService(prompt, completion)
-        accelerator = Accelerator(service, context_texts=[completion], ngram=2, max_draft_tokens=8)
+        accelerator = Accelerator(service, context_texts=[prompt + completion], ngram=2, max_draft_tokens=8)
 
         result = accelerator.generate_result(prompt, max_tokens=len(completion))
 
@@ -78,16 +91,29 @@ class AcceleratorTests(unittest.TestCase):
         service = ScriptedService(prompt, completion)
         accelerator = Accelerator(service, ngram=2, max_draft_tokens=8)
 
-        text, stats = accelerator.generate(prompt, max_tokens=len(completion), context=completion)
+        text, stats = accelerator.generate(prompt, max_tokens=len(completion), context=prompt + completion)
 
         self.assertEqual(text, completion)
         self.assertGreater(stats.accepted_draft_tokens, 0)
 
+    def test_generate_uses_native_path_without_an_initial_candidate(self):
+        prompt = "Question ending in XYZ!"
+        completion = "A fresh answer"
+        service = NativeFallbackService(prompt, completion)
+        accelerator = Accelerator(service, context_texts=["abcdef"], ngram=4)
+
+        result = accelerator.generate_result(prompt, max_tokens=len(completion))
+
+        self.assertEqual(result.text, completion)
+        self.assertEqual(service.native_calls, 1)
+        self.assertEqual(result.stats.accepted_draft_tokens, 0)
+
     def test_generate_chat_uses_template_and_cleans_role_prefix(self):
         completion = "Assistant: hello there"
-        service = ScriptedService("<user>hi</user><assistant>", completion)
+        rendered_prompt = "<user>hi</user><assistant>"
+        service = ScriptedService(rendered_prompt, completion)
         service.tokenizer = FakeChatTokenizer()
-        accelerator = Accelerator(service, context_texts=[completion], ngram=2, max_draft_tokens=8)
+        accelerator = Accelerator(service, context_texts=[rendered_prompt + completion], ngram=2, max_draft_tokens=8)
         chunks = []
 
         text, stats = accelerator.generate_chat(
