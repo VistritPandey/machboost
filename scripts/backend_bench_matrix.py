@@ -28,7 +28,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from machboost import Accelerator
+from machboost import Accelerator, __version__ as machboost_version
 from machboost.adapters import MLXCausalLMService, OllamaHTTPAdapter
 
 SCHEMA_VERSION = "machboost.backend_bench_matrix.v2"
@@ -681,7 +681,7 @@ def environment_snapshot() -> dict[str, Any]:
         "memory_bytes": command_output("sysctl", "-n", "hw.memsize"),
         "thermal_status": command_output("pmset", "-g", "therm"),
         "packages": {
-            "machboost": package_version("machboost"),
+            "machboost": machboost_version,
             "mlx": package_version("mlx"),
             "mlx_lm": package_version("mlx-lm"),
             "torch": package_version("torch"),
