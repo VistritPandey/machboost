@@ -174,9 +174,10 @@ machboost run Qwen/Qwen2.5-3B-Instruct --backend hf --device mps --max-tokens 12
 machboost run Qwen/Qwen2.5-3B-Instruct --backend hf --dtype float16 --show-stats
 machboost run Qwen/Qwen2.5-3B-Instruct --backend hf --local-files-only
 machboost run mlx-community/Qwen3.5-0.8B-MLX-4bit --backend mlx --strict
+machboost run mlx-community/Qwen2.5-3B-Instruct-4bit --backend mlx --context ./docs --ngram 1 --reentry-probe-tokens 1
 ```
 
-On Apple Silicon, the Hugging Face backend defaults to `--device auto --dtype auto`, which selects MPS with float16 when available. Ollama can still be faster for general chat because it uses optimized quantized runners; MachBoost's native path is mainly for exact local-context acceleration and research/debuggable verifier hooks.
+`--reentry-probe-tokens` is experimental and disabled by default. On Apple Silicon, the Hugging Face backend defaults to `--device auto --dtype auto`, which selects MPS with float16 when available. Ollama can still be faster for general chat because it uses optimized quantized runners; MachBoost's native path is mainly for exact local-context acceleration and research/debuggable verifier hooks.
 
 The package also includes install checks:
 
@@ -231,11 +232,11 @@ Public benchmark artifacts live in [results](results/), with a summary in [resul
 
 | Artifact | Model | Path | Repeats | Exact Match | Median Paired Speedup |
 |---|---|---:|---:|---:|---|
-| `mlx_native_adaptive_qwen25_3b_20260713.json` | `mlx-community/Qwen2.5-3B-Instruct-4bit` | adaptive code continuation | 3 | 100% | 2.36x |
-| `mlx_native_adaptive_qwen25_3b_20260713.json` | same | native RAG fallback | 3 | 100% | 0.96x |
-| `mlx_native_adaptive_qwen25_3b_20260713.json` | same | native open-ended fallback | 3 | 100% | 1.00x |
+| `mlx_native_default_qwen25_3b_20260713.json` | `mlx-community/Qwen2.5-3B-Instruct-4bit` | default code continuation | 5 | 100% | 1.96x |
+| `mlx_native_reentry_qwen25_3b_20260713.json` | same | experimental RAG re-entry | 5 | 100% | 1.58x |
+| `mlx_native_reentry_qwen25_3b_20260713.json` | same | open-ended native fallback | 5 | 100% | 1.08x |
 
-The accelerated code path accepted 51 of 64 tokens in every repeat and reduced logical target forwards from 64 to 14. This is a conditional result, not a universal 2x claim. Older `strict` and 9B artifacts compared against synchronous or cache-disabled baselines and remain available only as diagnostics; they do not establish an improvement over optimized `mlx-lm` or Ollama.
+The default code path accepted a median 51 of 64 tokens and reduced logical target forwards by 76.6%. One-token re-entry broadens coverage to copied RAG answers, accepting a median 30 tokens. The current repeated medians are below 2x and remain workload-specific. Older `strict` and 9B artifacts compared against synchronous or cache-disabled baselines and remain available only as diagnostics; they do not establish an improvement over optimized `mlx-lm` or Ollama.
 
 The research paper source and PDF are included in [paper](paper/). Keeping `paper/` and `results/` in the public repository is intentional: they make the claims auditable. They are not imported by the package at runtime.
 
@@ -247,13 +248,29 @@ Run the paired native-MLX suite:
 python3 scripts/backend_bench_matrix.py \
   --backends mlx \
   --fixtures code,rag,creative_open \
-  --repeat 3 \
+  --repeat 5 \
   --max-new-tokens 64 \
   --max-draft-tokens 32 \
   --ngram 3 \
   --source-mode context \
   --mlx-model mlx-community/Qwen2.5-3B-Instruct-4bit \
-  --output results/local/mlx_native_adaptive.json
+  --output results/local/mlx_native_default.json
+```
+
+Test the opt-in one-token re-entry profile:
+
+```sh
+python3 scripts/backend_bench_matrix.py \
+  --backends mlx \
+  --fixtures code,rag,creative_open \
+  --repeat 5 \
+  --max-new-tokens 64 \
+  --ngram 1 \
+  --max-draft-tokens 32 \
+  --reentry-probe-tokens 1 \
+  --source-mode context \
+  --mlx-model mlx-community/Qwen2.5-3B-Instruct-4bit \
+  --output results/local/mlx_native_reentry.json
 ```
 
 The harness includes prompt processing in both paths, alternates baseline-first and boosted-first ordering, uses fresh nonces, and records environment provenance. For historical comparison with Hugging Face prompt lookup:
