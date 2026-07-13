@@ -1,0 +1,59 @@
+{
+  "schema_version": "machboost.runtime_probe.v1",
+  "captured_at": "2026-07-13",
+  "machine": {
+    "cpu": "Apple M1 Max",
+    "memory_bytes": 34359738368,
+    "os": "macOS 26.5.2",
+    "python": "3.13.3"
+  },
+  "workload": {
+    "model_family": "Qwen2.5 3B Instruct",
+    "max_new_tokens": 64,
+    "temperature": 0,
+    "prompt_template": "Output exactly 200 repetitions of token{nonce} separated by one space. Do not explain and do not stop early."
+  },
+  "measurements": {
+    "mlx_lm": {
+      "version": "0.31.3",
+      "model": "mlx-community/Qwen2.5-3B-Instruct-4bit",
+      "decode_tokens_per_second": [
+        126.765,
+        123.805,
+        127.413,
+        127.863,
+        127.659
+      ],
+      "median_decode_tokens_per_second": 127.413
+    },
+    "ollama": {
+      "version": "0.31.2",
+      "model": "qwen2.5:3b",
+      "decode_tokens_per_second": [
+        94.90916155170547,
+        94.7948727823184,
+        94.49855963523557,
+        94.68197950431025,
+        94.41728308366847
+      ],
+      "median_decode_tokens_per_second": 94.68197950431025
+    },
+    "vllm_mlx": {
+      "version": "0.4.0",
+      "model": "mlx-community/Qwen2.5-3B-Instruct-4bit",
+      "built_in_benchmark": true,
+      "serial_completion_tokens_per_second": 15.8,
+      "five_request_concurrent_completion_tokens_per_second": 93.19
+    }
+  },
+  "comparisons": {
+    "mlx_lm_over_ollama_decode_throughput": 1.345694298609375,
+    "vllm_mlx_concurrent_over_mlx_lm_decode_throughput": 0.7313971800324927
+  },
+  "caveats": [
+    "The MLX and Ollama repositories use different 4-bit formats, so this is a same-family and same-size runtime probe rather than exact-weight equivalence.",
+    "Decode throughput excludes model loading and is not time to first token or end-to-end latency.",
+    "The vllm-mlx built-in benchmark generates its own short prompts and is not directly paired with the MLX/Ollama prompt; it is retained as a backend suitability probe.",
+    "The prompt deliberately forces 64 output tokens. It is not representative of response quality or normal chat content."
+  ]
+}
