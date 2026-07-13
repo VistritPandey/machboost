@@ -229,7 +229,7 @@ class Accelerator:
                 on_tokens=on_tokens,
             )
 
-        corpus_tokens = tuple(prompt_tokens) + run_context_tokens
+        corpus_tokens = run_context_tokens
         boosted = machboost(
             self.service,
             corpus_tokens=corpus_tokens,
