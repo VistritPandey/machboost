@@ -109,6 +109,15 @@ class RuntimeManagerTests(unittest.TestCase):
         self.assertEqual(len(loaded), 2)
         self.assertEqual({config.context_paths for config in loaded}, {("docs",), ("src",)})
 
+    def test_stopping_alias_unloads_mlx_and_hf_variants(self):
+        manager = RuntimeManager(loader=lambda config: FakeAccelerator())
+        manager.get_or_load("qwen2.5:3b", options={"backend": "mlx"})
+        manager.get_or_load("qwen2.5:3b", options={"backend": "hf"})
+
+        self.assertEqual(len(manager.ps()), 2)
+        self.assertEqual(manager.stop("qwen2.5:3b"), 2)
+        self.assertEqual(manager.ps(), [])
+
 
 class HTTPServerTests(unittest.TestCase):
     def setUp(self):
