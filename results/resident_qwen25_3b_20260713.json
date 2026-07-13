@@ -1,0 +1,122 @@
+{
+  "schema_version": "machboost.resident_benchmark.v1",
+  "captured_at": "2026-07-13",
+  "source": {
+    "machboost_version": "0.2.0",
+    "commit_before_artifact": "b54f754"
+  },
+  "machine": {
+    "cpu": "Apple M1 Max",
+    "memory_bytes": 34359738368,
+    "os": "macOS 26.5.2",
+    "python": "3.13.3",
+    "mlx": "0.31.2",
+    "mlx_lm": "0.31.3"
+  },
+  "model": {
+    "alias": "qwen2.5:3b",
+    "resolved": "mlx-community/Qwen2.5-3B-Instruct-4bit",
+    "backend": "mlx"
+  },
+  "lifecycle": {
+    "command": "machboost warm qwen2.5:3b --keep-alive forever",
+    "model_load_seconds": 5.61,
+    "keep_alive_seconds": -1,
+    "note": "The first generation after model load also initializes the Metal execution path."
+  },
+  "forced_64_token_completion": {
+    "prompt_template": "Output exactly 200 repetitions of token{nonce} separated by one space. Do not explain and do not stop early.",
+    "max_new_tokens": 64,
+    "rows": [
+      {
+        "nonce": 20,
+        "total_seconds": 0.973036624,
+        "end_to_end_tokens_per_second": 65.77347493551281,
+        "load_seconds": 0,
+        "accepted_draft_tokens": 0
+      },
+      {
+        "nonce": 21,
+        "total_seconds": 0.662546957,
+        "end_to_end_tokens_per_second": 96.59692694053079,
+        "load_seconds": 0,
+        "accepted_draft_tokens": 0
+      },
+      {
+        "nonce": 22,
+        "total_seconds": 0.650239207,
+        "end_to_end_tokens_per_second": 98.42531688495984,
+        "load_seconds": 0,
+        "accepted_draft_tokens": 0
+      },
+      {
+        "nonce": 23,
+        "total_seconds": 0.656591583,
+        "end_to_end_tokens_per_second": 97.47307406467317,
+        "load_seconds": 0,
+        "accepted_draft_tokens": 0
+      },
+      {
+        "nonce": 24,
+        "total_seconds": 0.653069958,
+        "end_to_end_tokens_per_second": 97.9986894451513,
+        "load_seconds": 0,
+        "accepted_draft_tokens": 0
+      }
+    ],
+    "median_total_seconds": 0.656591583,
+    "median_end_to_end_tokens_per_second": 97.47307406467317
+  },
+  "short_streaming_chat": {
+    "prompt_template": "Say hello in one short sentence. Nonce final-{nonce}.",
+    "max_new_tokens": 32,
+    "rows": [
+      {
+        "nonce": 0,
+        "time_to_first_text_seconds": 0.386,
+        "total_seconds": 0.4473,
+        "generated_tokens": 9
+      },
+      {
+        "nonce": 1,
+        "time_to_first_text_seconds": 0.3003,
+        "total_seconds": 0.361,
+        "generated_tokens": 9
+      },
+      {
+        "nonce": 2,
+        "time_to_first_text_seconds": 0.2955,
+        "total_seconds": 0.3558,
+        "generated_tokens": 9
+      },
+      {
+        "nonce": 3,
+        "time_to_first_text_seconds": 0.2946,
+        "total_seconds": 0.355,
+        "generated_tokens": 9
+      },
+      {
+        "nonce": 4,
+        "time_to_first_text_seconds": 0.2975,
+        "total_seconds": 0.3579,
+        "generated_tokens": 9
+      }
+    ],
+    "median_time_to_first_text_seconds": 0.2975,
+    "median_total_seconds": 0.3579
+  },
+  "historical_ollama_reference": {
+    "artifact": "runtime_probe_qwen25_3b_20260713.json",
+    "model": "qwen2.5:3b",
+    "version": "0.31.2",
+    "median_64_token_total_seconds": 0.883190833,
+    "resident_machboost_wall_time_ratio": 1.3451144605976468
+  },
+  "caveats": [
+    "The MLX and Ollama model repositories use different 4-bit formats, so the historical comparison is same-family and same-size rather than exact-weight equivalence.",
+    "The first warm request includes Metal graph and kernel initialization even though model loading has completed.",
+    "Time to first text is measured at the Python streaming client and includes HTTP, prompt processing, and detokenization.",
+    "The forced completion is a throughput probe and does not evaluate response quality.",
+    "These resident requests used native fallback with zero accepted draft tokens; context-backed acceleration is measured in separate artifacts."
+  ]
+}
