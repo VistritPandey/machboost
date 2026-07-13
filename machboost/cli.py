@@ -345,7 +345,8 @@ def print_human_self_test(data: dict) -> None:
     print(f"output match: {data['output_match']}")
     print(f"accepted draft tokens: {data['accepted_draft_tokens']}")
     print(f"target calls: {data['target_calls']} / baseline {data['baseline_target_calls']}")
-    print(f"estimated speedup: {data['estimated_speedup']:.2f}x")
+    print(f"synthetic target-call reduction: {data['estimated_speedup']:.2f}x")
+    print("note: this is an in-memory correctness check, not a wall-clock benchmark")
 
 
 def print_human_model_list(data: dict) -> None:
