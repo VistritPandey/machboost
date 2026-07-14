@@ -560,14 +560,18 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                 }
             )
 
-        result = self.runtime.chat(
-            model,
-            messages,
-            options=options,
-            keep_alive=payload.get("keep_alive"),
-            context=context,
-            emit=emit,
-        )
+        try:
+            result = self.runtime.chat(
+                model,
+                messages,
+                options=options,
+                keep_alive=payload.get("keep_alive"),
+                context=context,
+                emit=emit,
+            )
+        except Exception as exc:
+            self.write_json_line({"error": str(exc), "done": True})
+            return
         self.write_json_line(
             {
                 "model": model,
@@ -608,15 +612,19 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                 {"model": model, "created_at": utc_timestamp(), "response": text, "done": False}
             )
 
-        result = self.runtime.generate(
-            model,
-            prompt,
-            options=options,
-            keep_alive=payload.get("keep_alive"),
-            context=context,
-            emit=emit,
-            images=normalize_image_list(payload.get("images")),
-        )
+        try:
+            result = self.runtime.generate(
+                model,
+                prompt,
+                options=options,
+                keep_alive=payload.get("keep_alive"),
+                context=context,
+                emit=emit,
+                images=normalize_image_list(payload.get("images")),
+            )
+        except Exception as exc:
+            self.write_json_line({"error": str(exc), "done": True})
+            return
         self.write_json_line(
             {"model": model, "created_at": utc_timestamp(), "response": "", **result.ollama_metrics()}
         )
