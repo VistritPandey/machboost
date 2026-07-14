@@ -26,7 +26,7 @@
 \maketitle
 
 \begin{abstract}
-MachBoost is a local inference package built around a practical observation: repeated work depends on the workload. For text generation, it uses explicit local context to draft token blocks, verifies them with the target model, and returns to native decoding when no candidate exists. For visual question answering, it keeps a model resident and reuses two deterministic products of an unchanged image: projected vision features and the language model's visual-token KV prefix. The two paths share a server and measurement interface but not an acceleration algorithm. We evaluate both on an Apple M1 Max. With \path{mlx-community/Qwen2.5-3B-Instruct-4bit}, context-backed code continuation reaches a 1.96$\times$ median paired speedup over native \texttt{mlx-lm}; copied retrieval answers reach 1.58$\times$ with experimental one-token re-entry. With \path{mlx-community/Qwen2.5-VL-3B-Instruct-4bit}, 12 repeated-image questions fall from a 2.537-second uncached median to 0.150 seconds on the combined cache path. The median paired speedup is 16.66$\times$, and median time-to-first-text improves by 17.95$\times$. Every reported visual answer matches its paired uncached answer and the fixture's expected value. This is not a universal 16.66$\times$ inference result: the gain removes repeated image encoding and visual-prefix prefill, leaves decode throughput unchanged, and does not apply to a first view or changed image.
+MachBoost is a local inference package built around a practical observation: repeated work depends on the workload. For text generation, it uses explicit local context to draft token blocks, verifies them with the target model, and returns to native decoding when no candidate exists. For visual question answering, it keeps a model resident and reuses two deterministic products of an unchanged image: projected vision features and the language model's visual-token KV prefix. The two paths share a server and measurement interface but not an acceleration algorithm. We evaluate both on an Apple M1 Max. With \path{mlx-community/Qwen2.5-3B-Instruct-4bit}, context-backed code continuation reaches a 1.96$\times$ median paired speedup over native \texttt{mlx-lm}; copied retrieval answers reach 1.58$\times$ with experimental one-token re-entry. With \path{mlx-community/Qwen2.5-VL-3B-Instruct-4bit}, 12 repeated-image questions fall from a 2.861-second uncached median to 0.158 seconds on the combined cache path. The median paired speedup is 17.96$\times$, and median time-to-first-text improves by 19.12$\times$. Every reported visual answer matches its paired uncached answer and the fixture's expected value. This is not a universal 17.96$\times$ inference result: the gain removes repeated image encoding and visual-prefix prefill, leaves decode throughput unchanged, and does not apply to a first view or changed image.
 \end{abstract}
 
 \section{Introduction}
@@ -212,17 +212,17 @@ The visual benchmark uses a generated 1024 by 768 image containing a project nam
 \toprule
 Metric & Uncached & Accelerated & Ratio \\
 \midrule
-Median wall time & 2.537 s & 0.150 s & 16.95$\times$ \\
-Median paired wall time & -- & -- & 16.66$\times$ \\
-Median time to first text & 2.533 s & 0.141 s & 17.95$\times$ \\
-Effective prompt throughput & 418.05 tok/s & 13113.31 tok/s & 31.37$\times$ \\
+Median wall time & 2.861 s & 0.158 s & 18.08$\times$ \\
+Median paired wall time & -- & -- & 17.96$\times$ \\
+Median time to first text & 2.849 s & 0.149 s & 19.12$\times$ \\
+Effective prompt throughput & 370.88 tok/s & 12324.47 tok/s & 33.23$\times$ \\
 \bottomrule
 \end{tabular}
 \caption{Twelve uncached and 12 accelerated requests over one unchanged image. Effective prompt throughput divides the full logical prompt length by measured prefill time even when cached tokens are not recomputed.}
 \label{tab:vision}
 \end{table}
 
-The median of per-pair wall-time ratios is 16.66$\times$; individual ratios are retained in the artifact. All 12 accelerated outputs exactly equal their paired uncached outputs, and both modes answer every fixture question correctly. Projected features hit in all recorded accelerated rows. Eleven rows reuse a median 1,018-token visual prefix and range from 12.10$\times$ to 20.09$\times$. The feature-only control reaches 1.59$\times$.
+The median of per-pair wall-time ratios is 17.96$\times$; individual ratios are retained in the artifact. All 12 accelerated outputs exactly equal their paired uncached outputs, and both modes answer every fixture question correctly. Projected features hit in all recorded accelerated rows. Eleven rows reuse a median 1,018-token visual prefix and range from 13.83$\times$ to 19.49$\times$. The feature-only control reaches 1.51$\times$.
 
 The distinction between those rows explains most of the result. Skipping the vision tower alone removes useful work, but the language model still processes the visual token span. Reusing its KV prefix reduces the second stage to the changed question suffix. Generated answers are only two to five tokens long, so time to first text dominates total latency. Generation throughput after the first token is not improved by this mechanism.
 
@@ -271,7 +271,7 @@ The second track accepts model-specific preparation. A multi-token drafter disti
 The immediate visual work is replication: repeat the paired protocol on several VLM families and sizes, replace the generated card with public OCR, chart, document, and scene datasets, sweep image resolution and answer length, and measure memory and concurrency. A direct comparison with MLX-VLM's server should separate MachBoost's Qwen bridge and content identity from upstream feature and prefix caching. Video should be treated separately; useful candidates include frame-feature reuse, temporal change detection, and diffusion activation caches, each with task-level quality checks.
 
 \section{Conclusion}
-MachBoost now has two conditional acceleration paths. On a 3B text model, literal context-backed code continuation reaches a 1.96$\times$ median over five paired runs; one-token re-entry reaches 1.58$\times$ on copied retrieval answers. On a 3B visual model, combining projected-feature reuse with an image-scoped visual KV prefix reaches a 16.66$\times$ median paired speedup for short repeated questions over one unchanged image. Reported outputs remain equal to their paired deterministic baselines. Neither result is universal. Text acceleration depends on continuation overlap; visual acceleration depends on image reuse and primarily removes prefill. The package makes those conditions visible in per-request metrics and keeps the ordinary backend path available when they do not hold.
+MachBoost now has two conditional acceleration paths. On a 3B text model, literal context-backed code continuation reaches a 1.96$\times$ median over five paired runs; one-token re-entry reaches 1.58$\times$ on copied retrieval answers. On a 3B visual model, combining projected-feature reuse with an image-scoped visual KV prefix reaches a 17.96$\times$ median paired speedup for short repeated questions over one unchanged image. Reported outputs remain equal to their paired deterministic baselines. Neither result is universal. Text acceleration depends on continuation overlap; visual acceleration depends on image reuse and primarily removes prefill. The package makes those conditions visible in per-request metrics and keeps the ordinary backend path available when they do not hold.
 
 \bibliographystyle{plain}
 \bibliography{references}
