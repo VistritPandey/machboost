@@ -38,11 +38,15 @@ mlx = [
   "mlx",
   "mlx-lm",
 ]
+vision = [
+  "mlx-vlm>=0.5.0",
+]
 all = [
   "torch",
   "transformers",
   "mlx",
   "mlx-lm",
+  "mlx-vlm>=0.5.0",
 ]
 
 [project.scripts]
