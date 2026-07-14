@@ -105,6 +105,7 @@ def doctor_data() -> dict:
             "transformers": asdict(package_status("transformers")),
             "mlx": asdict(package_status("mlx")),
             "mlx_lm": asdict(package_status("mlx_lm", distribution_name="mlx-lm")),
+            "mlx_vlm": asdict(package_status("mlx_vlm", distribution_name="mlx-vlm")),
         },
     }
 
@@ -160,6 +161,11 @@ def model_list_data(
                 "model": "Qwen/Qwen2.5-3B-Instruct",
                 "command": "machboost run Qwen/Qwen2.5-3B-Instruct --backend hf",
             },
+            {
+                "backend": "mlx-vlm",
+                "model": "mlx-community/Qwen2.5-VL-3B-Instruct-4bit",
+                "command": "machboost run qwen2.5-vl:3b --image ./image.png",
+            },
         ],
     }
 
@@ -194,6 +200,7 @@ def native_backend_status() -> dict:
     transformers = package_status("transformers")
     mlx = package_status("mlx")
     mlx_lm = package_status("mlx_lm", distribution_name="mlx-lm")
+    mlx_vlm = package_status("mlx_vlm", distribution_name="mlx-vlm")
     return {
         "hf": {
             "available": torch.available and transformers.available,
@@ -207,6 +214,13 @@ def native_backend_status() -> dict:
             "packages": {
                 "mlx": asdict(mlx),
                 "mlx_lm": asdict(mlx_lm),
+            },
+        },
+        "mlx-vlm": {
+            "available": mlx.available and mlx_vlm.available,
+            "packages": {
+                "mlx": asdict(mlx),
+                "mlx_vlm": asdict(mlx_vlm),
             },
         },
     }
@@ -266,8 +280,12 @@ def classify_cached_model(model_id: str, model_dir: Path) -> tuple[str, bool, st
     normalized = model_id.lower()
     if "gguf" in normalized:
         return model_backend, False, "GGUF repo; native llama.cpp/GGUF runner is not supported yet"
-    if model_backend == "mlx":
-        return model_backend, has_snapshot(model_dir), "MLX model cache" if has_snapshot(model_dir) else "no snapshot"
+    if model_backend in {"mlx", "mlx-vlm"}:
+        kind = "MLX vision model cache" if model_backend == "mlx-vlm" else "MLX model cache"
+        return model_backend, has_snapshot(model_dir), kind if has_snapshot(model_dir) else "no snapshot"
+
+    if model_backend == "hf-vlm":
+        return model_backend, False, "HF vision cache detected; resident HF-VLM adapter is not available yet"
 
     config = read_cached_config(model_dir)
     if config is None:
@@ -374,7 +392,7 @@ def print_human_model_list(data: dict) -> None:
     if unsupported:
         print("unsupported cached repos:")
         for model in unsupported:
-            print(f"  {model['backend']:<3} {model['name']} ({model['reason']})")
+            print(f"  {model['backend']:<8} {model['name']} ({model['reason']})")
     elif data.get("hidden_unsupported_count", 0):
         print(f"unsupported cached repos: {data['hidden_unsupported_count']} hidden; use --all to show them")
 
@@ -403,7 +421,7 @@ def render_chat_prompt(system: str, turns: Sequence[dict[str, str]]) -> str:
     return "\n".join(lines)
 
 
-def load_native_accelerator(args: argparse.Namespace, *, stream=None) -> Accelerator:
+def load_native_accelerator(args: argparse.Namespace, *, stream=None):
     stream = stream or sys.stderr
     resolution = resolve_model(args.model, args.backend)
     backend = resolution.backend
@@ -437,6 +455,14 @@ def load_native_accelerator(args: argparse.Namespace, *, stream=None) -> Acceler
             torch_dtype=torch_dtype_from_name(args.dtype),
             **common,
         )
+    if backend == "mlx-vlm":
+        from .adapters.mlx_vlm import MLXVLMAccelerator
+
+        return MLXVLMAccelerator.from_pretrained(
+            resolution.model,
+            lazy=args.lazy,
+            vision_cache_size=args.vision_cache_size,
+        )
     raise ValueError(f"unsupported backend: {backend}")
 
 
@@ -454,12 +480,14 @@ def run_native_chat(
     except Exception as exc:
         print(f"machboost run error: {exc}", file=error_stream)
         if args.backend == "auto":
-            print("try passing --backend mlx or --backend hf explicitly", file=error_stream)
+            print("try passing an explicit text or VLM backend", file=error_stream)
         return 2
 
-    turns: list[dict[str, str]] = []
+    turns: list[dict[str, object]] = []
+    active_images = list(args.image or ())
     print(f"machboost run: {args.model}", file=output_stream)
     print("Type /bye, /exit, or /quit to leave. Type /clear to reset chat history.", file=output_stream)
+    print("Use /image PATH, /images, or /clear-images to manage visual inputs.", file=output_stream)
 
     while True:
         try:
@@ -480,10 +508,29 @@ def run_native_chat(
             turns = []
             print("chat history cleared", file=output_stream)
             continue
+        if command.startswith("/image "):
+            image = command.partition(" ")[2].strip()
+            if image:
+                active_images.append(image)
+                print(f"image attached: {image}", file=output_stream)
+            continue
+        if command == "/images":
+            print("\n".join(active_images) if active_images else "no images attached", file=output_stream)
+            continue
+        if command == "/clear-images":
+            active_images = []
+            print("images cleared", file=output_stream)
+            continue
 
         turns.append({"role": "user", "content": user_text})
         messages = [{"role": "system", "content": args.system or DEFAULT_CHAT_SYSTEM}]
         messages.extend(turns)
+        if active_images:
+            if not getattr(accelerator, "supports_vision", False):
+                turns.pop()
+                print("generation error: attached images require a vision model", file=error_stream)
+                return 2
+            messages[-1]["images"] = list(active_images)
         streamed = False
 
         def emit(chunk: str) -> None:
@@ -495,7 +542,13 @@ def run_native_chat(
 
         started = time.perf_counter()
         try:
-            response, stats = accelerator.generate_chat(messages, max_tokens=args.max_tokens, on_text=emit)
+            kwargs = {"max_tokens": args.max_tokens, "on_text": emit}
+            if getattr(accelerator, "supports_vision", False):
+                kwargs.update(
+                    use_vision_cache=not args.no_vision_cache,
+                    temperature=args.temperature,
+                )
+            response, stats = accelerator.generate_chat(messages, **kwargs)
         except KeyboardInterrupt:
             print("", file=output_stream)
             return 130
@@ -512,15 +565,25 @@ def run_native_chat(
             print(response, flush=True, file=output_stream)
         if args.show_stats:
             tokens_per_second = stats.generated_tokens / elapsed_s if elapsed_s > 0 else 0.0
-            print(
-                "stats: "
-                f"elapsed={elapsed_s:.2f}s "
-                f"tokens_per_second={tokens_per_second:.2f} "
-                f"accepted={stats.accepted_draft_tokens} "
-                f"target_calls={stats.target_calls}/{stats.baseline_target_calls} "
-                f"estimated_speedup={stats.estimated_speedup:.2f}x",
-                file=output_stream,
-            )
+            if getattr(stats, "backend", "") == "mlx-vlm":
+                print(
+                    "stats: "
+                    f"elapsed={elapsed_s:.2f}s "
+                    f"tokens_per_second={tokens_per_second:.2f} "
+                    f"prompt_tps={stats.prompt_tokens_per_second:.2f} "
+                    f"vision_cache={'hit' if stats.visual_cache_hit else 'miss' if stats.visual_cache_miss else 'off'}",
+                    file=output_stream,
+                )
+            else:
+                print(
+                    "stats: "
+                    f"elapsed={elapsed_s:.2f}s "
+                    f"tokens_per_second={tokens_per_second:.2f} "
+                    f"accepted={stats.accepted_draft_tokens} "
+                    f"target_calls={stats.target_calls}/{stats.baseline_target_calls} "
+                    f"estimated_speedup={stats.estimated_speedup:.2f}x",
+                    file=output_stream,
+                )
         turns.append({"role": "assistant", "content": response})
 
 
@@ -639,9 +702,13 @@ def native_server_options(args: argparse.Namespace) -> dict:
         "reentry_probe_tokens": args.reentry_probe_tokens,
         "no_boost": args.no_boost,
         "strict": args.strict,
+        "lazy": args.lazy,
         "device": args.device,
         "local_files_only": args.local_files_only,
         "num_predict": args.max_tokens,
+        "temperature": args.temperature,
+        "no_vision_cache": args.no_vision_cache,
+        "vision_cache_size": args.vision_cache_size,
     }
 
 
@@ -675,9 +742,11 @@ def run_resident_chat(
         return 2
 
     turns: list[dict[str, str]] = []
+    active_images = list(args.image or ())
     print(f"machboost run: {args.model}", file=output_stream)
     print(f"server: {client.endpoint} (model stays warm until stop or shutdown)", file=output_stream)
     print("Type /bye, /exit, or /quit to leave. Type /clear to reset chat history.", file=output_stream)
+    print("Use /image PATH, /images, or /clear-images to manage visual inputs.", file=output_stream)
 
     while True:
         try:
@@ -698,6 +767,19 @@ def run_resident_chat(
             turns = []
             print("chat history cleared", file=output_stream)
             continue
+        if command.startswith("/image "):
+            image = command.partition(" ")[2].strip()
+            if image:
+                active_images.append(image)
+                print(f"image attached: {image}", file=output_stream)
+            continue
+        if command == "/images":
+            print("\n".join(active_images) if active_images else "no images attached", file=output_stream)
+            continue
+        if command == "/clear-images":
+            active_images = []
+            print("images cleared", file=output_stream)
+            continue
 
         turns.append({"role": "user", "content": user_text})
         messages = [{"role": "system", "content": args.system or DEFAULT_CHAT_SYSTEM}, *turns]
@@ -705,13 +787,14 @@ def run_resident_chat(
         final_row: dict = {}
         started = time.perf_counter()
         try:
-            rows = client.chat(
-                args.model,
-                messages,
-                options=native_server_options(args),
-                keep_alive=args.keep_alive,
-                stream=True,
-            )
+            request_options = {
+                "options": native_server_options(args),
+                "keep_alive": args.keep_alive,
+                "stream": True,
+            }
+            if active_images:
+                request_options["images"] = active_images
+            rows = client.chat(args.model, messages, **request_options)
             for row in rows:
                 message = row.get("message") or {}
                 chunk = str(message.get("content") or "")
@@ -743,7 +826,19 @@ def run_resident_completion(args: argparse.Namespace, *, output_stream=None, err
         prompt = completion_prompt(args)
         if args.direct:
             accelerator = load_native_accelerator(args, stream=error_stream)
-            text, stats = accelerator.generate(prompt, max_tokens=args.max_tokens, on_text=lambda text: print(text, end="", flush=True, file=output_stream))
+            kwargs = {
+                "max_tokens": args.max_tokens,
+                "on_text": lambda text: print(text, end="", flush=True, file=output_stream),
+            }
+            if args.image and not getattr(accelerator, "supports_vision", False):
+                raise ValueError("attached images require a vision model")
+            if getattr(accelerator, "supports_vision", False):
+                kwargs.update(
+                    images=args.image or None,
+                    use_vision_cache=not args.no_vision_cache,
+                    temperature=args.temperature,
+                )
+            text, stats = accelerator.generate(prompt, **kwargs)
             print("", file=output_stream)
             if args.show_stats:
                 print(f"stats: generated={stats.generated_tokens} accepted={stats.accepted_draft_tokens}", file=output_stream)
@@ -751,13 +846,14 @@ def run_resident_completion(args: argparse.Namespace, *, output_stream=None, err
 
         client = connect_resident(args, error_stream=error_stream)
         started = time.perf_counter()
-        rows = client.generate(
-            args.model,
-            prompt,
-            options=native_server_options(args),
-            keep_alive=args.keep_alive,
-            stream=True,
-        )
+        request_options = {
+            "options": native_server_options(args),
+            "keep_alive": args.keep_alive,
+            "stream": True,
+        }
+        if args.image:
+            request_options["images"] = args.image
+        rows = client.generate(args.model, prompt, **request_options)
         final_row: dict = {}
         for row in rows:
             chunk = str(row.get("response") or "")
@@ -790,13 +886,23 @@ def print_resident_stats(row: dict, elapsed_s: float, *, stream=None) -> None:
     stats = metrics.get("stats") or {}
     generated = int(row.get("eval_count") or stats.get("generated_tokens") or 0)
     rate = generated / elapsed_s if elapsed_s > 0 else 0.0
+    cache_state = ""
+    if int(stats.get("image_count") or 0) > 0:
+        cache_state = (
+            " vision_cache=hit"
+            if stats.get("visual_cache_hit")
+            else " vision_cache=miss"
+            if stats.get("visual_cache_miss")
+            else " vision_cache=off"
+        )
     print(
         "stats: "
         f"elapsed={elapsed_s:.2f}s "
         f"tokens_per_second={rate:.2f} "
         f"accepted={int(stats.get('accepted_draft_tokens') or 0)} "
         f"target_calls={int(stats.get('target_calls') or 0)}/{int(stats.get('baseline_target_calls') or 0)} "
-        f"backend={metrics.get('backend', 'unknown')}",
+        f"backend={metrics.get('backend', 'unknown')}"
+        f"{cache_state}",
         file=stream,
     )
 
@@ -922,7 +1028,12 @@ def build_parser() -> argparse.ArgumentParser:
     self_test.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
 
     model_list = subcommands.add_parser("list", help="List cached native HF/MLX models.")
-    model_list.add_argument("--backend", choices=["all", "mlx", "hf"], default="all", help="Filter by backend.")
+    model_list.add_argument(
+        "--backend",
+        choices=["all", "mlx", "hf", "mlx-vlm", "hf-vlm"],
+        default="all",
+        help="Filter by backend.",
+    )
     model_list.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
     model_list.add_argument("--all", dest="show_all", action="store_true", help="Show unsupported cached repos too.")
     model_list.add_argument(
@@ -987,9 +1098,9 @@ def add_native_run_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--backend",
-        choices=["auto", "mlx", "hf"],
+        choices=["auto", "mlx", "hf", "mlx-vlm", "hf-vlm"],
         default="auto",
-        help="Model backend. Auto chooses MLX for mlx-community models and HF otherwise.",
+        help="Model backend. Auto selects text or vision MLX/HF adapters from the model architecture.",
     )
     parser.add_argument(
         "--context",
@@ -1016,6 +1127,15 @@ def add_native_run_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--device", default="auto", help="HF only: auto, cpu, mps, or cuda. Auto prefers MPS on Mac.")
     parser.add_argument("--dtype", choices=["auto", "float16", "bfloat16", "float32"], default="auto", help="HF only: model dtype. Auto uses float16 on MPS.")
     parser.add_argument("--local-files-only", action="store_true", help="HF only: do not download missing model files.")
+    parser.add_argument(
+        "--image",
+        action="append",
+        default=[],
+        help="Image path, URL, data URL, or base64 payload. Can be repeated.",
+    )
+    parser.add_argument("--temperature", type=float, default=0.0)
+    parser.add_argument("--no-vision-cache", action="store_true", help="Re-run the vision encoder for every request.")
+    parser.add_argument("--vision-cache-size", type=int, default=20, help="Projected vision feature LRU size.")
     parser.add_argument("--direct", action="store_true", help="Load in this process instead of using the resident server.")
     parser.add_argument("--keep-alive", default="forever", help="Resident lifetime, for example forever, 10m, or 1h.")
     add_server_connection_arguments(parser, include_autostart=True)
