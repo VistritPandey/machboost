@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import sys
 import tempfile
 import unittest
 from dataclasses import dataclass
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from unittest.mock import patch
 
 from machboost.adapters.mlx_vlm import MLXVLMAccelerator
@@ -42,8 +43,25 @@ class FakeVisionStream:
 
 
 class FakePromptCacheState:
+    def __init__(self, token_ids=None):
+        self.token_ids = list(token_ids or ())
+
     def find_prefix_length(self, token_ids):
-        return 0
+        for index, (cached, current) in enumerate(zip(self.token_ids, token_ids)):
+            if cached != current:
+                return index
+        return min(len(self.token_ids), len(token_ids))
+
+
+class FakeArray:
+    def __init__(self, values):
+        self.values = list(values)
+
+    def flatten(self):
+        return self
+
+    def tolist(self):
+        return list(self.values)
 
 
 class MLXVLMAcceleratorTests(unittest.TestCase):
@@ -158,6 +176,84 @@ class MLXVLMAcceleratorTests(unittest.TestCase):
         self.assertIs(first, repeated)
         self.assertIsNot(first, different)
         self.assertEqual(len(self.accelerator._prompt_caches), 2)
+
+    def test_qwen_chat_keeps_image_tokens_on_first_user_turn(self):
+        self.accelerator.model.config = {"model_type": "qwen2_5_vl"}
+        self.accelerator._apply_chat_template.__module__ = "mlx_vlm.prompt_utils"
+        formatted = []
+
+        def get_message_json(model_type, content, role, **options):
+            return {"role": role, "content": content, **options}
+
+        def get_chat_template(processor, messages, add_generation_prompt):
+            formatted.extend(messages)
+            return "rendered"
+
+        prompt_utils = SimpleNamespace(
+            get_message_json=get_message_json,
+            get_chat_template=get_chat_template,
+        )
+        messages = [
+            {"role": "system", "content": "Be concise."},
+            {"role": "user", "content": "First question"},
+            {"role": "assistant", "content": "First answer"},
+            {"role": "user", "content": "Follow-up"},
+        ]
+
+        with patch(
+            "machboost.adapters.mlx_vlm.importlib.import_module",
+            return_value=prompt_utils,
+        ):
+            prompt = self.accelerator._format_chat_prompt(messages, image_count=1)
+
+        self.assertEqual(prompt, "rendered")
+        self.assertFalse(formatted[1]["skip_image_token"])
+        self.assertTrue(formatted[3]["skip_image_token"])
+
+    def test_qwen_partial_prefix_drops_untrimmed_attention_mask(self):
+        self.accelerator.model.config = {"model_type": "qwen2_5_vl"}
+        self.accelerator._stream_generate.__module__ = "mlx_vlm.generate"
+        self.accelerator.vision_cache.put([str(self.image)], "cached-features")
+
+        mlx_package = ModuleType("mlx")
+        mlx_package.__path__ = []
+        mlx_core = ModuleType("mlx.core")
+        mlx_core.eval = lambda value: None
+        mlx_package.core = mlx_core
+        mlx_vlm_package = ModuleType("mlx_vlm")
+        mlx_vlm_package.__path__ = []
+        mlx_vlm_utils = ModuleType("mlx_vlm.utils")
+        full_mask = object()
+        mlx_vlm_utils.prepare_inputs = lambda *args, **kwargs: {
+            "input_ids": FakeArray([1, 2, 3]),
+            "pixel_values": object(),
+            "attention_mask": full_mask,
+            "image_grid_thw": object(),
+        }
+        generation = SimpleNamespace(
+            PromptCacheState=lambda: FakePromptCacheState([1, 2])
+        )
+
+        with patch.dict(
+            sys.modules,
+            {
+                "mlx": mlx_package,
+                "mlx.core": mlx_core,
+                "mlx_vlm": mlx_vlm_package,
+                "mlx_vlm.utils": mlx_vlm_utils,
+            },
+        ), patch(
+            "machboost.adapters.mlx_vlm.importlib.import_module",
+            return_value=generation,
+        ):
+            prepared = self.accelerator._prepare_cached_vision(
+                "prompt", [str(self.image)]
+            )
+
+        self.assertIsNotNone(prepared)
+        _, options, prefix_tokens = prepared
+        self.assertEqual(prefix_tokens, 2)
+        self.assertIsNone(options["mask"])
 
     def test_reset_cache_releases_prompt_states(self):
         generation = SimpleNamespace(PromptCacheState=FakePromptCacheState)
