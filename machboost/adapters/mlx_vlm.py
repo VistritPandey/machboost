@@ -82,6 +82,7 @@ class MLXVLMAccelerator:
         self.model_name = model_name
         self.vision_cache = ContentAddressedVisionCache(max_size=vision_cache_size)
         self._prompt_caches: OrderedDict[str, Any] = OrderedDict()
+        self._apc_manager: Any = None
         self.assets = VisualAssetStore(asset_cache_dir)
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="machboost-vlm")
         self._closed = False
@@ -175,7 +176,13 @@ class MLXVLMAccelerator:
     ) -> str:
         model_type = config_value(self.model.config, "model_type", "")
         module_name = str(getattr(self._apply_chat_template, "__module__", ""))
-        qwen_types = {"qwen2_vl", "qwen2_5_vl", "qwen3_vl", "qwen3_5"}
+        qwen_types = {
+            "qwen2_vl",
+            "qwen2_5_vl",
+            "qwen3_vl",
+            "qwen3_5",
+            "qwen3_5_moe",
+        }
         if image_count < 1 or model_type not in qwen_types or not module_name.startswith("mlx_vlm"):
             return self._apply_chat_template(
                 self.processor,
@@ -395,10 +402,22 @@ class MLXVLMAccelerator:
             prefix_tokens = prompt_cache_state.find_prefix_length(token_ids)
             if prefix_tokens >= len(token_ids):
                 prefix_tokens = 0
-        if prefix_tokens and model_type in {"qwen2_vl", "qwen2_5_vl", "qwen3_vl", "qwen3_5"}:
+        if prefix_tokens and model_type in {
+            "qwen2_vl",
+            "qwen2_5_vl",
+            "qwen3_vl",
+            "qwen3_5",
+            "qwen3_5_moe",
+        }:
             # MLX-VLM trims input_ids after priming Qwen mRoPE state but leaves
             # this full-length mask untouched, which breaks accumulated chat turns.
             options["mask"] = None
+        if model_type in {"qwen3_5", "qwen3_5_moe"}:
+            # Qwen3.5 interleaves ordinary KV layers with recurrent ArraysCache
+            # layers. A token-only trim cannot roll the recurrent state backward,
+            # so use MLX-VLM's whole-prefix snapshot path for exact state restore.
+            prompt_cache_state.cache = None
+            options["apc_manager"] = self._get_apc_manager()
         if model_type != "qwen3_vl":
             features = self.vision_cache.get(list(images))
             if features is None:
@@ -410,6 +429,12 @@ class MLXVLMAccelerator:
             options["cached_image_features"] = features
         options["prompt_cache_state"] = prompt_cache_state
         return None, options, prefix_tokens
+
+    def _get_apc_manager(self) -> Any:
+        if self._apc_manager is None:
+            apc = importlib.import_module("mlx_vlm.apc")
+            self._apc_manager = apc.APCManager(num_blocks=256, block_size=16)
+        return self._apc_manager
 
     def _prompt_cache_for(self, images: Sequence[str]) -> Any:
         key = self.vision_cache.key_for(list(images))
@@ -433,7 +458,13 @@ class MLXVLMAccelerator:
         encode_image = getattr(self.model, "encode_image", None)
         if callable(encode_image):
             return encode_image(pixel_values)
-        if model_type not in {"qwen2_vl", "qwen2_5_vl", "qwen3_vl", "qwen3_5"}:
+        if model_type not in {
+            "qwen2_vl",
+            "qwen2_5_vl",
+            "qwen3_vl",
+            "qwen3_5",
+            "qwen3_5_moe",
+        }:
             return None
         vision_tower = getattr(self.model, "vision_tower", None)
         if vision_tower is None:
@@ -447,7 +478,7 @@ class MLXVLMAccelerator:
         if weight is not None:
             pixel_values = pixel_values.astype(weight.dtype)
         features = vision_tower(pixel_values, grid, output_hidden_states=False)
-        if model_type == "qwen3_5" and isinstance(features, tuple):
+        if model_type in {"qwen3_5", "qwen3_5_moe"} and isinstance(features, tuple):
             return features[0]
         return features
 
@@ -459,6 +490,8 @@ class MLXVLMAccelerator:
     def _clear_caches(self) -> None:
         self.vision_cache.clear()
         self._prompt_caches.clear()
+        if self._apc_manager is not None:
+            self._apc_manager.clear()
 
     def close(self) -> None:
         if self._closed:
