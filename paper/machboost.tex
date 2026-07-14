@@ -18,7 +18,7 @@
   urlcolor=blue
 }
 
-\title{MachBoost: Speculative Decoding from Local Context for On-Device LLMs}
+\title{MachBoost: Conditional Acceleration for On-Device Text and Visual Models}
 \author{Vistrit Pandey\\\texttt{vistrit@blinkfire.com}}
 \date{July 2026}
 
@@ -26,15 +26,17 @@
 \maketitle
 
 \begin{abstract}
-Autoregressive decoding remains serial even when a model fits comfortably on a laptop. MachBoost tests a narrow way around that constraint: use tokens from explicit local context as speculative candidates, verify a block with the target model, and return to the runtime's native decoder when no candidate exists. The current implementation combines context-only n-gram lookup, block verification, in-place MLX KV-cache rewind, verifier continuation tokens, native-compatible prompt prefill, and \texttt{mlx-lm} streaming. It also provides a resident local server so repeated chat and completion requests reuse one loaded model. We compare the decoding method with native cached generation rather than a synchronous Python token loop. On an Apple M1 Max, using \path{mlx-community/Qwen2.5-3B-Instruct-4bit}, the default profile reaches a 1.96$\times$ median paired speedup on a 64-token code-continuation fixture over five fresh-nonce repeats. An experimental one-token re-entry profile reaches 1.58$\times$ on copied retrieval answers. All 30 rows across the two profiles match their paired native greedy outputs; open-ended controls stay near the native path. Separately, five warm resident 64-token requests take a 0.657-second median wall time, and short chats reach first text in a 0.298-second median. The results fall short of a universal 2$\times$ accelerator. They identify a conditional operating region and separate algorithmic gains from model residency and serving overhead.
+MachBoost is a local inference package built around a practical observation: repeated work depends on the workload. For text generation, it uses explicit local context to draft token blocks, verifies them with the target model, and returns to native decoding when no candidate exists. For visual question answering, it keeps a model resident and reuses two deterministic products of an unchanged image: projected vision features and the language model's visual-token KV prefix. The two paths share a server and measurement interface but not an acceleration algorithm. We evaluate both on an Apple M1 Max. With \path{mlx-community/Qwen2.5-3B-Instruct-4bit}, context-backed code continuation reaches a 1.96$\times$ median paired speedup over native \texttt{mlx-lm}; copied retrieval answers reach 1.58$\times$ with experimental one-token re-entry. With \path{mlx-community/Qwen2.5-VL-3B-Instruct-4bit}, 12 repeated-image questions fall from a 2.537-second uncached median to 0.150 seconds on the combined cache path. The median paired speedup is 16.66$\times$, and median time-to-first-text improves by 17.95$\times$. Every reported visual answer matches its paired uncached answer and the fixture's expected value. This is not a universal 16.66$\times$ inference result: the gain removes repeated image encoding and visual-prefix prefill, leaves decode throughput unchanged, and does not apply to a first view or changed image.
 \end{abstract}
 
 \section{Introduction}
 Running LLMs on a laptop has become realistic, but it has not made autoregressive decoding disappear. A small model on Apple Silicon may fit in memory and still feel slow because the loop is serial: produce a token, update the prefix, run the model again. That bottleneck is especially visible in developer workflows, where the model often sits inside an editor, command runner, notebook, or local assistant.
 
+Visual assistants add a different cost. One image may expand into roughly a thousand language-model input positions before the answer begins. Asking a second question about an unchanged screenshot, invoice, diagram, or camera frame can repeat both the vision encoder and the long visual-token prefill. Unlike autoregressive decode, that work is deterministic for a fixed model, processor, and image.
+
 Speculative decoding offers a way around part of this loop. A cheap source guesses several future tokens; the target model checks the guess; accepted tokens are emitted without paying for one full target step each. Prior work usually gets the draft from another model, extra heads, or a reference sequence. MachBoost takes the reference idea and applies it to the local machine. If the user is asking about a repo, config, note, policy, or retrieved passage, the likely continuation may already be present in that local text.
 
-The scope is deliberately modest. MachBoost does not try to accelerate every prompt. It tries to accelerate grounded prompts without changing the target model's greedy output. If the local text is unhelpful, the method can be slower; the implementation exposes that fact through measurement and falls back to the backend's native path.
+The scope is deliberately modest. MachBoost does not try to accelerate every prompt or modality with one trick. It accelerates grounded text when a verifier can accept useful drafts, and repeated-image queries when the visual input has not changed. If neither condition holds, the request follows the backend's ordinary path.
 
 This paper contributes the following:
 \begin{itemize}[leftmargin=*]
@@ -42,6 +44,8 @@ This paper contributes the following:
   \item a cache-aware MLX verifier that fuses continuation and draft scoring, rewinds rejected cache entries in place, and resumes native decoding when useful context ends;
   \item a paired benchmark against native \texttt{mlx-lm} generation with raw rows, run-order alternation, environment provenance, and exact token comparisons;
   \item a resident local server with warm model lifecycle, streaming Ollama-compatible and OpenAI-compatible endpoints, and raw completion support for editor integrations;
+  \item an MLX-VLM adapter that combines content-addressed projected-feature reuse with image-scoped visual-prefix state, including a Qwen2.5-VL feature-extraction bridge;
+  \item a paired repeated-image benchmark that records cache-level hits, matching prefix length, first-token latency, raw outputs, and expected-answer checks;
   \item negative experiments with a small draft model, an MTP draft path, DFlash, an Apple Neural Engine draft, and lossless weight compression.
 \end{itemize}
 
@@ -54,7 +58,9 @@ Results above 2$\times$ elsewhere generally require more than process tuning. Re
 
 The same distinction appears outside text generation. Diffusion workloads can reuse intermediate transformations across denoising steps; EasyCache reports 2.1--3.3$\times$ for several video models \cite{zhou2025easycache}. That mechanism does not transfer directly to autoregressive text decoding. It does, however, support a broader product design in which one package selects a backend-specific accelerator rather than pretending that a single algorithm fits text, image, audio, and video models.
 
-The implementation targets common local inference stacks. Hugging Face Transformers provides the broad model API surface for Python inference \cite{wolf2020transformers}. MLX is an Apple Silicon-oriented array framework and runtime used here for Mac-native evaluation \cite{mlx2023}. Our measurements use a Qwen-family model converted for MLX; Qwen3 is the relevant public model-family report \cite{qwen2025qwen3}.
+Attention-state reuse is also established. Prompt Cache stores reusable attention states for prompt modules and reports large first-token latency reductions on long repeated prefixes \cite{gim2023promptcache}. MLX-VLM provides a prompt-state interface, automatic prefix caching, and an LRU for projected vision features \cite{mlxvlm2026}. MachBoost builds on those mechanisms. Its visual adapter uses image content rather than a path string as the cache identity, isolates prompt state by image, and directly invokes the Qwen vision tower when the generic \texttt{encode\_image} hook is absent. The experiment in this paper measures that composition; it is not evidence that feature caching or prefix caching was invented here.
+
+The implementation targets common local inference stacks. Hugging Face Transformers provides the broad model API surface for Python inference \cite{wolf2020transformers}. MLX is an Apple Silicon-oriented array framework and runtime used here for Mac-native evaluation \cite{mlx2023}. Text measurements use a Qwen-family model converted for MLX; Qwen3 is the relevant public model-family report \cite{qwen2025qwen3}. The visual experiment uses Qwen2.5-VL, whose dynamic-resolution vision encoder and document-understanding capabilities are described by Bai et al. \cite{bai2025qwen25vl}.
 
 \section{Problem Setting}
 Let $M$ be a target autoregressive model and let $x$ be the prompt token sequence. Greedy decoding emits
@@ -64,6 +70,12 @@ Let $M$ be a target autoregressive model and let $x$ be the prompt token sequenc
 for each generation step $t$. MachBoost receives a corpus $C$ derived from prompt text, retrieved context, local files, or user-provided strings. The goal is to reduce wall-clock latency while returning the same sequence $y$ that greedy decoding with $M$ would return.
 
 This paper stays with greedy decoding. Sampling-compatible speculative decoding is possible in principle, but greedy argmax verification gives a simple correctness check: the accelerated sequence must match the serial baseline token-for-token.
+
+The visual setting is narrower. Let $I$ be an image and $q_i$ a sequence of questions sent to one resident vision-language model $V$. For repeated queries with identical image bytes, the goal is to reduce the time spent before decoding while preserving
+\[
+  \mathrm{CachedVLM}(V,I,q_i)=\mathrm{NativeVLM}(V,I,q_i)
+\]
+under the same deterministic generation settings. No reuse is permitted across distinct content identities.
 
 \section{Method}
 The implementation has a drafter, a verifier, and an escape hatch to native generation. The escape hatch is important: speculative decoding is a conditional optimization, not a replacement decoder.
@@ -84,6 +96,17 @@ for a maximum generation length $T$. Batched and scalar floating-point paths can
 
 \subsection{Keeping the Cache Path Stable}
 Verification writes candidate entries to the MLX prompt cache. Accepted entries remain useful; rejected entries must not survive. MachBoost trims the rejected suffix in place when the cache type permits it. If safe trimming is unavailable, the service reconstructs the accepted prefix. Prompt initialization follows \texttt{mlx-lm}'s split prefill trajectory, processing the final prompt token separately. Once no further context candidate exists, the service hands the live verifier cache to \texttt{mlx\_lm.generate\_step}; the remaining response therefore uses the runtime's optimized asynchronous decoder instead of a Python-level \texttt{argmax}/synchronize loop.
+
+\subsection{Two-Level Reuse for an Unchanged Image}
+The visual adapter computes a SHA-256 identity from the image contents. Local file metadata memoizes hashing but does not define identity; base64 payloads, data URLs, and in-memory images are hashed directly. The first bounded LRU maps this identity to the projected output of the vision tower,
+\[
+  h(I) \longmapsto E_V(I).
+\]
+On a miss, Qwen2.5-VL's vision tower processes the pixel tensor and image grid. On a hit, the stored features enter the model through its \texttt{cached\_image\_features} argument. This Qwen-specific bridge matters because the tested architecture accepts cached features but does not expose the generic \texttt{encode\_image} method used by MLX-VLM's default feature-cache path.
+
+Feature reuse still leaves roughly 1,000 visual positions for the language model to prefill. MachBoost therefore maintains a second bounded map from $h(I)$ to an MLX-VLM prompt-cache state. When a new question shares a partial token prefix with the prior request for that image, MLX-VLM trims the matching prefix and reuses its KV state. The prompt state is never shared between different image identities. An exact full-prompt match is not trimmed by the upstream partial-prefix path; the benchmark retains one such row as a feature-only control.
+
+Both caches belong to one loaded model instance and are cleared together on reset or unload. This design avoids cross-model tensor reuse and makes image replacement an ordinary cache miss. It does not alter sampling, logits, model parameters, or generated-token decoding.
 
 \subsection{Deciding When to Use the Drafter}
 Drafting from local text is sometimes the wrong choice. Open-ended prompts often accept only a few draft tokens, so verification overhead dominates. MachBoost therefore exposes a benchmark step. For a prompt family, it measures:
@@ -115,18 +138,21 @@ MachBoost is implemented as a small Python package with no required runtime depe
 \begin{itemize}[leftmargin=*]
   \item \texttt{machboost[mlx]} for MLX and \texttt{mlx-lm},
   \item \texttt{machboost[hf]} for PyTorch and Transformers,
+  \item \texttt{machboost[vision]} for MLX-VLM,
   \item Ollama HTTP support for benchmarking and capability detection.
 \end{itemize}
 
 The core package defines a \texttt{StepService} protocol with \texttt{next\_token(prefix)} and an optional \texttt{verify(prefix, candidate)} hook. A service with only \texttt{next\_token} can use the wrapper but cannot skip target work. A verifier can accept several draft tokens per target call. The high-level \texttt{Accelerator} loads MLX or Hugging Face models, reads strings, files, or directories as context, and exposes \texttt{benchmark}, \texttt{calibrate}, and \texttt{generate}.
 
-Version 0.2.0 adds a resident HTTP process. It owns loaded accelerators, serializes requests per model, retains each model indefinitely by default, and supports finite idle lifetimes or explicit unloading. The CLI can start this process automatically, preload a short model alias such as \texttt{qwen2.5:3b}, and issue chat or raw completion requests without reloading weights. The server exposes \texttt{/api/chat}, \texttt{/api/generate}, model lifecycle endpoints, and OpenAI-compatible chat and completion endpoints. Native MLX streaming forwards \texttt{mlx-lm}'s already-detokenized text segments; verified multi-token spans use a stateful streaming detokenizer. This avoids the earlier cost of decoding the entire token prefix once per emitted token.
+Version 0.2.0 added a resident HTTP process. It owns loaded accelerators, serializes requests per model, retains each model indefinitely by default, and supports finite idle lifetimes or explicit unloading. The CLI can start this process automatically, preload a short model alias such as \texttt{qwen2.5:3b}, and issue chat or raw completion requests without reloading weights. The server exposes \texttt{/api/chat}, \texttt{/api/generate}, model lifecycle endpoints, and OpenAI-compatible chat and completion endpoints. Native MLX streaming forwards \texttt{mlx-lm}'s already-detokenized text segments; verified multi-token spans use a stateful streaming detokenizer. This avoids the earlier cost of decoding the entire token prefix once per emitted token.
+
+Version 0.3.0 adds \texttt{qwen2.5-vl:3b}, image arguments in the CLI and Python client, Ollama-style image payloads, and OpenAI-style image content parts. MLX objects are created and used on one dedicated worker thread because MLX arrays and streams are thread-affine. The worker owns model load, image preparation, cache lookup, generation, and cache release.
 
 The Ollama HTTP adapter remains a wrapper: Ollama's public generation API does not expose the target token IDs, logits, mutable KV cache, and block-verification hook this implementation needs. Native integration would require a runner-level change rather than an HTTP option.
 
 \section{Evaluation}
 \subsection{Machine and Model}
-Measurements were collected on an Apple M1 Max with 10 CPU cores and 32 GB unified memory, running macOS 26.5.2. The environment used Python 3.13.3, MLX 0.31.2, and \texttt{mlx-lm} 0.31.3. The paired decoding artifacts used MachBoost 0.1.4; the resident serving artifact used version 0.2.0. No thermal or performance warning was reported immediately before or after the paired run. The model was \path{mlx-community/Qwen2.5-3B-Instruct-4bit}.
+Measurements were collected on an Apple M1 Max with 10 CPU cores and 32 GB unified memory, running macOS 26.5.2. The environment used Python 3.13.3 and MLX 0.31.2. Text experiments used \texttt{mlx-lm} 0.31.3 and \path{mlx-community/Qwen2.5-3B-Instruct-4bit}. The paired decoding artifacts used MachBoost 0.1.4; the resident serving artifact used version 0.2.0. The visual artifact used MachBoost 0.3.0, MLX-VLM 0.5.0, and \path{mlx-community/Qwen2.5-VL-3B-Instruct-4bit}. No thermal or performance warning was reported immediately before or after the paired text run.
 
 The benchmark requests 64 greedy tokens for three fixture families: literal Python continuation, retrieval-grounded answering, and open-ended writing. Each family is repeated five times with a fresh nonce under both default and re-entry profiles. Baseline and accelerated order alternate. Wall time includes prompt processing. The baseline calls \texttt{mlx-lm}'s native streaming generator; it is not MachBoost's \texttt{next\_token} loop. The artifacts \path{results/mlx_native_default_qwen25_3b_20260713.json} and \path{results/mlx_native_reentry_qwen25_3b_20260713.json} contain prompts, token previews, raw times, package versions, hardware data, and each run's order.
 
@@ -176,6 +202,30 @@ Short streaming chat & 5 & 0.298 s & 0.358 s & -- \\
 
 The first forced completion takes 0.973 seconds because the Metal execution path still needs initialization after weight loading; the following four take 0.650--0.663 seconds. These rows accept no context draft tokens. The measurement therefore demonstrates load amortization, corrected streaming, and native fallback rather than a speculative-decoding gain. A same-day Ollama probe records a 0.883-second median for the same forced-token shape, a 1.35$\times$ wall-time ratio relative to the 0.657-second resident run. The two runtimes use different 4-bit model formats and the requests were not interleaved, so this is a backend-suitability observation rather than exact-weight evidence.
 
+\subsection{Repeated-Image Results}
+The visual benchmark uses a generated 1024 by 768 image containing a project name, status, budget, owner, and labeled colored shape. Four short extraction questions are each repeated three times. Every pair sends one request with both visual caches disabled and one request with both enabled; pair order alternates by repetition. Both paths use the same loaded model, greedy decoding, a 16-token limit, and the same image. Before recording, the harness performs one uncached warm-up and one cached prime. Table~\ref{tab:vision} summarizes \path{results/vision_cache_qwen25_3b_20260714.json}.
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{lrrr}
+\toprule
+Metric & Uncached & Accelerated & Ratio \\
+\midrule
+Median wall time & 2.537 s & 0.150 s & 16.95$\times$ \\
+Median paired wall time & -- & -- & 16.66$\times$ \\
+Median time to first text & 2.533 s & 0.141 s & 17.95$\times$ \\
+Effective prompt throughput & 418.05 tok/s & 13113.31 tok/s & 31.37$\times$ \\
+\bottomrule
+\end{tabular}
+\caption{Twelve uncached and 12 accelerated requests over one unchanged image. Effective prompt throughput divides the full logical prompt length by measured prefill time even when cached tokens are not recomputed.}
+\label{tab:vision}
+\end{table}
+
+The median of per-pair wall-time ratios is 16.66$\times$; individual ratios are retained in the artifact. All 12 accelerated outputs exactly equal their paired uncached outputs, and both modes answer every fixture question correctly. Projected features hit in all recorded accelerated rows. Eleven rows reuse a median 1,018-token visual prefix and range from 12.10$\times$ to 20.09$\times$. The feature-only control reaches 1.59$\times$.
+
+The distinction between those rows explains most of the result. Skipping the vision tower alone removes useful work, but the language model still processes the visual token span. Reusing its KV prefix reduces the second stage to the changed question suffix. Generated answers are only two to five tokens long, so time to first text dominates total latency. Generation throughput after the first token is not improved by this mechanism.
+
 \subsection{Why Earlier Ratios Were Rejected}
 Earlier repository artifacts reported 3--8$\times$ on MLX. Their baseline disabled the prompt cache or performed a synchronized target call for each token. That path ran near 10 tokens/s and was not representative of native \texttt{mlx-lm}, which uses cached asynchronous generation. Those artifacts remain available as implementation diagnostics, but they cannot support a production speed claim. Replacing that baseline was also what exposed a regression in MachBoost's serial tail; switching the tail to native generation restored parity for non-overlap prompts.
 
@@ -205,21 +255,23 @@ Lossless Q4 compression & 1.08--1.15$\times$ ideal entropy bound & The quantized
 The failures share a simple accounting problem. A draft only helps when the time removed from target decoding exceeds draft generation, verification, synchronization, and cache repair. A smaller model is not automatically a cheap enough draft. Moving it to another processor is not sufficient either if it predicts one token at a time. The strongest published results solve this with trained multi-token prediction, high acceptance, or concurrent heterogeneous execution rather than with process priority.
 
 \section{Limitations}
-The native-baseline evidence has 30 headline rows, one model, one quantization, one machine, and controlled 64-token prompts. The resident evidence adds ten requests but does not broaden model or hardware coverage. The accelerated code fixture is intentionally favorable: the desired code is substantially present in context. It demonstrates the mechanism but does not estimate how often real users encounter an eligible boundary. Longer repository sessions, multiple 3B--9B architectures, prefill-heavy prompts, concurrent clients, and energy measurements remain untested under the corrected harness.
+The text evidence has 30 headline rows, one model, one quantization, one machine, and controlled 64-token prompts. The resident evidence adds ten requests but does not broaden model or hardware coverage. The accelerated code fixture is intentionally favorable: the desired code is substantially present in context. It demonstrates the mechanism but does not estimate how often real users encounter an eligible boundary. Longer repository sessions, multiple 3B--9B architectures, prefill-heavy prompts, concurrent clients, and energy measurements remain untested under the corrected harness.
 
-Only greedy decoding is evaluated. Exact token equality under the tested execution paths does not prove equality for sampling, beam search, or every floating-point near tie. Images, audio, and video are not accelerated by the current package. Their models need modality-specific adapters; applying text n-gram verification to them would be a category error. Ollama is also not accelerated through its public HTTP API.
+The visual evidence is smaller still: one synthetic image, four extraction questions, three repeats, one 3B architecture, short answers, and one Apple Silicon machine. It excludes model load and starts after an explicit prime. The result says nothing about a first image view, changed images, long-form visual reasoning, image preprocessing policy, real datasets, memory pressure under many cached images, or concurrent sessions. Since decode work is unchanged, the ratio will shrink as answer length grows. Audio and video do not yet have MachBoost adapters.
 
-Finally, this work does not introduce prompt lookup itself. The engineering contribution is the adaptive package path, MLX cache integration, native fallback, and reproducible baseline correction. A novelty claim beyond that would need broader comparisons with LLMA, Prompt Lookup Decoding, PLD+, and current trained speculative systems.
+Only greedy decoding is evaluated. Exact output equality under the tested execution paths does not prove equality for sampling, beam search, or every floating-point near tie. Ollama is also not accelerated through its public HTTP API.
+
+Finally, this work introduces neither prompt lookup nor prompt caching. The contribution is an adaptive package path, MLX cache integration, a Qwen visual-feature bridge, content-scoped cache composition, native fallback, and reproducible baseline correction. A stronger research claim needs broader comparisons with LLMA, Prompt Lookup Decoding, PLD+, MLX-VLM's current server, and production prefix-cache systems.
 
 \section{Next Experiments}
 There are two plausible tracks. The first keeps models unchanged: add an online eligibility predictor, extend bounded re-entry beyond the current one-token experiment, and add native verifier hooks for llama.cpp/Ollama. The resident server makes this testable under long sessions; evaluation should report request coverage, cold and warm time to first token, decode throughput, peak memory, concurrency, energy, and exact outputs against each backend's own optimized generator.
 
 The second track accepts model-specific preparation. A multi-token drafter distilled from the target could run on the Apple Neural Engine while target verification runs on the GPU, following the heterogeneous lesson of Mirror-SD. Quantized draft weights and KV state could reduce memory traffic in long contexts. Both ideas exceed the scope of a wrapper and should be treated as separate research prototypes with quality and compatibility tests.
 
-For image and video generation, the package can expose the same routing and evidence interface while using activation or transformation caching such as EasyCache. This would make MachBoost a common control plane for specialized accelerators, not a claim that one decoder optimization applies to every model.
+The immediate visual work is replication: repeat the paired protocol on several VLM families and sizes, replace the generated card with public OCR, chart, document, and scene datasets, sweep image resolution and answer length, and measure memory and concurrency. A direct comparison with MLX-VLM's server should separate MachBoost's Qwen bridge and content identity from upstream feature and prefix caching. Video should be treated separately; useful candidates include frame-feature reuse, temporal change detection, and diffusion activation caches, each with task-level quality checks.
 
 \section{Conclusion}
-MachBoost does not yet deliver a stable universal 2$\times$ improvement. On a 3B MLX model, literal context-backed code continuation reaches a 1.96$\times$ median over five paired runs; one-token re-entry broadens coverage to copied retrieval answers at 1.58$\times$. All 30 headline rows match native greedy token sequences, while requests with no accepted draft remain near the native path. A resident server now separates model loading from request latency: warm 64-token requests take a 0.657-second median, and short chats reach first text in 0.298 seconds. The corrected evidence makes the next problem precise: increase acceptance without a slow serial draft or a divergent cache trajectory, then validate the result across models, prompts, sessions, and modalities.
+MachBoost now has two conditional acceleration paths. On a 3B text model, literal context-backed code continuation reaches a 1.96$\times$ median over five paired runs; one-token re-entry reaches 1.58$\times$ on copied retrieval answers. On a 3B visual model, combining projected-feature reuse with an image-scoped visual KV prefix reaches a 16.66$\times$ median paired speedup for short repeated questions over one unchanged image. Reported outputs remain equal to their paired deterministic baselines. Neither result is universal. Text acceleration depends on continuation overlap; visual acceleration depends on image reuse and primarily removes prefill. The package makes those conditions visible in per-request metrics and keeps the ordinary backend path available when they do not hold.
 
 \bibliographystyle{plain}
 \bibliography{references}
