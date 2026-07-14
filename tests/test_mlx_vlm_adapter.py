@@ -4,6 +4,8 @@ import tempfile
 import unittest
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from machboost.adapters.mlx_vlm import MLXVLMAccelerator
 
@@ -37,6 +39,11 @@ class FakeVisionStream:
                     vision_cache.put(image, f"features-{self.encoder_calls}")
         yield FakeGenerationRow("blue ")
         yield FakeGenerationRow("square")
+
+
+class FakePromptCacheState:
+    def find_prefix_length(self, token_ids):
+        return 0
 
 
 class MLXVLMAcceleratorTests(unittest.TestCase):
@@ -109,6 +116,8 @@ class MLXVLMAcceleratorTests(unittest.TestCase):
         self.assertEqual(stats.prompt_tokens_per_second, 80.0)
         self.assertEqual(stats.generation_tokens_per_second, 40.0)
         self.assertEqual(stats.image_count, 1)
+        self.assertFalse(stats.prompt_cache_enabled)
+        self.assertEqual(stats.prompt_cache_prefix_tokens, 0)
 
     def test_chat_template_receives_history_and_image_count(self):
         messages = [
@@ -132,6 +141,35 @@ class MLXVLMAcceleratorTests(unittest.TestCase):
         self.accelerator.reset_cache()
 
         self.assertEqual(self.accelerator.cache_info()["size"], 0)
+
+    def test_prompt_cache_is_scoped_to_exact_image_content(self):
+        second_image = self.root / "second.png"
+        second_image.write_bytes(b"\x89PNG\r\n\x1a\ndifferent-image")
+        generation = SimpleNamespace(PromptCacheState=FakePromptCacheState)
+
+        with patch(
+            "machboost.adapters.mlx_vlm.importlib.import_module",
+            return_value=generation,
+        ):
+            first = self.accelerator._prompt_cache_for([str(self.image)])
+            repeated = self.accelerator._prompt_cache_for([str(self.image)])
+            different = self.accelerator._prompt_cache_for([str(second_image)])
+
+        self.assertIs(first, repeated)
+        self.assertIsNot(first, different)
+        self.assertEqual(len(self.accelerator._prompt_caches), 2)
+
+    def test_reset_cache_releases_prompt_states(self):
+        generation = SimpleNamespace(PromptCacheState=FakePromptCacheState)
+        with patch(
+            "machboost.adapters.mlx_vlm.importlib.import_module",
+            return_value=generation,
+        ):
+            self.accelerator._prompt_cache_for([str(self.image)])
+
+        self.accelerator.reset_cache()
+
+        self.assertEqual(len(self.accelerator._prompt_caches), 0)
 
     def test_close_stops_worker_and_rejects_future_generation(self):
         self.accelerator.generate(
