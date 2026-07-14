@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import threading
 import time
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -30,6 +31,8 @@ class VisionRunStats:
     visual_cache_entries: int
     visual_cache_hits_total: int
     visual_cache_misses_total: int
+    prompt_cache_enabled: bool
+    prompt_cache_prefix_tokens: int
     image_count: int
     backend: str = "mlx-vlm"
     accepted_draft_tokens: int = 0
@@ -78,6 +81,7 @@ class MLXVLMAccelerator:
     ) -> None:
         self.model_name = model_name
         self.vision_cache = ContentAddressedVisionCache(max_size=vision_cache_size)
+        self._prompt_caches: OrderedDict[str, Any] = OrderedDict()
         self.assets = VisualAssetStore(asset_cache_dir)
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="machboost-vlm")
         self._closed = False
@@ -234,9 +238,10 @@ class MLXVLMAccelerator:
                 "max_tokens": max_tokens,
                 "temperature": temperature,
             }
+            prompt_cache_prefix_tokens = 0
             prepared = self._prepare_cached_vision(prompt, images) if use_vision_cache else None
             if prepared is not None:
-                stream_image, prepared_options = prepared
+                stream_image, prepared_options, prompt_cache_prefix_tokens = prepared
                 stream_options.update(prepared_options)
             elif use_vision_cache:
                 stream_options["vision_cache"] = self.vision_cache
@@ -273,6 +278,8 @@ class MLXVLMAccelerator:
             visual_cache_entries=cache_after.size,
             visual_cache_hits_total=cache_after.hits,
             visual_cache_misses_total=cache_after.misses,
+            prompt_cache_enabled=bool(use_vision_cache and images),
+            prompt_cache_prefix_tokens=prompt_cache_prefix_tokens,
             image_count=len(images),
         )
         return "".join(parts), stats
@@ -290,7 +297,7 @@ class MLXVLMAccelerator:
         self,
         prompt: str,
         images: Sequence[str],
-    ) -> Optional[tuple[None, dict[str, Any]]]:
+    ) -> Optional[tuple[None, dict[str, Any], int]]:
         module_name = str(getattr(self._stream_generate, "__module__", ""))
         if not images or not module_name.startswith("mlx_vlm"):
             return None
@@ -338,7 +345,26 @@ class MLXVLMAccelerator:
                 if key not in {"input_ids", "pixel_values", "attention_mask"}
             }
         )
-        return None, options
+        prompt_cache_state = self._prompt_cache_for(images)
+        input_ids = inputs.get("input_ids")
+        prefix_tokens = 0
+        if input_ids is not None:
+            prefix_tokens = prompt_cache_state.find_prefix_length(input_ids.flatten().tolist())
+        options["prompt_cache_state"] = prompt_cache_state
+        return None, options, prefix_tokens
+
+    def _prompt_cache_for(self, images: Sequence[str]) -> Any:
+        key = self.vision_cache.key_for(list(images))
+        state = self._prompt_caches.get(key)
+        if state is not None:
+            self._prompt_caches.move_to_end(key)
+            return state
+        generation = importlib.import_module("mlx_vlm.generate")
+        state = generation.PromptCacheState()
+        if len(self._prompt_caches) >= self.vision_cache.max_size:
+            self._prompt_caches.popitem(last=False)
+        self._prompt_caches[key] = state
+        return state
 
     def _encode_vision_features(
         self,
@@ -367,7 +393,11 @@ class MLXVLMAccelerator:
     def reset_cache(self) -> None:
         if self._closed:
             return
-        self._executor.submit(self.vision_cache.clear).result()
+        self._executor.submit(self._clear_caches).result()
+
+    def _clear_caches(self) -> None:
+        self.vision_cache.clear()
+        self._prompt_caches.clear()
 
     def close(self) -> None:
         if self._closed:
