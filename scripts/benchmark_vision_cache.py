@@ -157,6 +157,7 @@ def run_request(
             "num_predict": max_tokens,
             "temperature": 0.0,
             "no_vision_cache": not cache_enabled,
+            "vision_cache_size": 4,
         },
         keep_alive="forever",
         stream=True,
