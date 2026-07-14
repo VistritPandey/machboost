@@ -4,6 +4,7 @@ import json
 import threading
 import unittest
 from dataclasses import dataclass
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from machboost.server import MachBoostHTTPServer, RuntimeManager, parse_keep_alive
@@ -48,6 +49,59 @@ class FakeAccelerator:
         if on_text is not None:
             on_text("completed")
         return "completed", FakeStats(generated_tokens=1)
+
+
+class FakeVisionAccelerator:
+    def __init__(self) -> None:
+        self.chat_calls = []
+        self.generate_calls = []
+        self.cache_hits = 0
+
+    def generate_chat(
+        self,
+        messages,
+        *,
+        max_tokens,
+        context=None,
+        on_text=None,
+        use_vision_cache=True,
+        temperature=0.0,
+    ):
+        self.chat_calls.append((messages, max_tokens, use_vision_cache, temperature))
+        if use_vision_cache and len(self.chat_calls) > 1:
+            self.cache_hits += 1
+        if on_text is not None:
+            on_text("blue square")
+        return "blue square", FakeStats(generated_tokens=2)
+
+    def generate(
+        self,
+        prompt,
+        *,
+        max_tokens,
+        context=None,
+        on_text=None,
+        images=None,
+        use_vision_cache=True,
+        temperature=0.0,
+    ):
+        self.generate_calls.append((prompt, tuple(images or ()), use_vision_cache))
+        if on_text is not None:
+            on_text("visual completion")
+        return "visual completion", FakeStats(generated_tokens=2)
+
+    def reset_cache(self):
+        self.cache_hits = 0
+
+    def cache_info(self):
+        return {
+            "size": 1 if self.chat_calls or self.generate_calls else 0,
+            "max_size": 20,
+            "hits": self.cache_hits,
+            "misses": 1 if self.chat_calls or self.generate_calls else 0,
+            "puts": 1 if self.chat_calls or self.generate_calls else 0,
+            "evictions": 0,
+        }
 
 
 class FakeClock:
@@ -135,7 +189,7 @@ class HTTPServerTests(unittest.TestCase):
         self.thread.join(timeout=2.0)
 
     def _load(self, config):
-        accelerator = FakeAccelerator()
+        accelerator = FakeVisionAccelerator() if config.backend.endswith("-vlm") else FakeAccelerator()
         self.loaded.append((config, accelerator))
         return accelerator
 
@@ -239,6 +293,87 @@ class HTTPServerTests(unittest.TestCase):
         self.assertEqual(json.loads(body)["unloaded"], 1)
         _, _, ps_body = self.request("/api/ps")
         self.assertEqual(json.loads(ps_body)["models"], [])
+
+    def test_ollama_multimodal_chat_routes_to_vision_backend(self):
+        payload = {
+            "model": "qwen2.5-vl:3b",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "What shape is shown?",
+                    "images": ["iVBORw0KGgo="],
+                }
+            ],
+            "stream": False,
+            "options": {"num_predict": 12, "temperature": 0.0},
+        }
+
+        _, _, first_body = self.request("/api/chat", payload)
+        _, _, second_body = self.request("/api/chat", payload)
+        _, _, ps_body = self.request("/api/ps")
+
+        self.assertEqual(json.loads(first_body)["message"]["content"], "blue square")
+        self.assertTrue(json.loads(second_body)["machboost"]["stats"]["generated_tokens"] > 0)
+        config, accelerator = self.loaded[0]
+        self.assertEqual(config.backend, "mlx-vlm")
+        self.assertEqual(accelerator.chat_calls[0][0][0]["images"], ["iVBORw0KGgo="])
+        model = json.loads(ps_body)["models"][0]
+        self.assertEqual(model["capabilities"], ["vision", "chat"])
+        self.assertEqual(model["vision_cache"]["hits"], 1)
+
+    def test_openai_multimodal_content_parts_are_preserved(self):
+        payload = {
+            "model": "qwen2.5-vl:3b",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Read the image."},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="},
+                        },
+                    ],
+                }
+            ],
+            "max_tokens": 8,
+        }
+
+        _, _, body = self.request("/v1/chat/completions", payload)
+
+        response = json.loads(body)
+        self.assertEqual(response["choices"][0]["message"]["content"], "blue square")
+        content = self.loaded[0][1].chat_calls[0][0][0]["content"]
+        self.assertEqual(content[1]["type"], "image_url")
+
+    def test_ollama_generate_forwards_images_and_cache_control(self):
+        _, _, body = self.request(
+            "/api/generate",
+            {
+                "model": "qwen2.5-vl:3b",
+                "prompt": "Describe this.",
+                "images": ["image-one"],
+                "stream": False,
+                "options": {"no_vision_cache": True},
+            },
+        )
+
+        self.assertEqual(json.loads(body)["response"], "visual completion")
+        self.assertEqual(self.loaded[0][1].generate_calls[0], ("Describe this.", ("image-one",), False))
+
+    def test_text_backend_rejects_image_payload(self):
+        with self.assertRaises(HTTPError) as raised:
+            self.request(
+                "/api/chat",
+                {
+                    "model": "mlx-community/example",
+                    "messages": [{"role": "user", "content": "Look", "images": ["image"]}],
+                    "stream": False,
+                },
+            )
+
+        self.assertEqual(raised.exception.code, 400)
+        self.assertIn("vision model", raised.exception.read().decode("utf-8"))
 
     def test_shutdown_endpoint_stops_server_and_releases_models(self):
         self.request(
