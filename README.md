@@ -408,10 +408,11 @@ python3 examples/python/black_box_service_demo.py
 python3 examples/python/accelerator_calibration_demo.py
 python3 examples/python/hf_adapter_demo.py
 python3 examples/python/mlx_adapter_demo.py
+python3 examples/python/vision_client_demo.py --image ./image.png
 python3 examples/python/ollama_adapter_demo.py
 ```
 
-The HF and MLX examples require the matching optional dependencies and locally available models.
+The HF, MLX, and vision examples require the matching optional dependencies and locally available models.
 
 ## Development
 
