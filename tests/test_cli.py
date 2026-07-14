@@ -19,6 +19,7 @@ class CLITests(unittest.TestCase):
         self.assertEqual(data["machboost_version"], __version__)
         self.assertIn("transformers", data["optional_packages"])
         self.assertIn("available", data["optional_packages"]["transformers"])
+        self.assertIn("mlx_vlm", data["optional_packages"])
 
     def test_self_test_uses_verifier_path(self):
         data = self_test_data()
@@ -76,6 +77,11 @@ class CLITests(unittest.TestCase):
                 "thenlper/gte-base",
                 {"architectures": ["BertModel"], "model_type": "bert"},
             )
+            write_cached_model(
+                cache_dir,
+                "mlx-community/Qwen2.5-VL-3B-Instruct-4bit",
+                {"architectures": ["Qwen2_5_VLForConditionalGeneration"], "model_type": "qwen2_5_vl"},
+            )
 
             data = cli.model_list_data(cache_dirs=[str(cache_dir)])
             names = {model["name"] for model in data["models"]}
@@ -83,6 +89,7 @@ class CLITests(unittest.TestCase):
         self.assertEqual(data["schema_version"], "machboost.model_list.v1")
         self.assertIn("Qwen/Qwen2.5-3B-Instruct", names)
         self.assertIn("mlx-community/Qwen3.5-0.8B-MLX-4bit", names)
+        self.assertIn("mlx-community/Qwen2.5-VL-3B-Instruct-4bit", names)
         self.assertNotIn("thenlper/gte-base", names)
         self.assertEqual(data["hidden_unsupported_count"], 1)
         self.assertIn("qwen2.5:3b", {alias["name"] for alias in data["aliases"]})
@@ -281,6 +288,70 @@ class CLITests(unittest.TestCase):
         self.assertEqual(args.backend, "mlx")
         self.assertEqual(args.keep_alive, "forever")
 
+    def test_resident_visual_chat_forwards_images_and_cache_options(self):
+        output = io.StringIO()
+        errors = io.StringIO()
+        prompts = iter(["What is shown?", "/bye"])
+        client = FakeResidentClient()
+
+        with patch.object(cli, "connect_resident", return_value=client):
+            code = cli.run_resident_chat(
+                cli.build_parser().parse_args(
+                    [
+                        "run",
+                        "qwen2.5-vl:3b",
+                        "--image",
+                        "fixture.png",
+                        "--no-vision-cache",
+                        "--vision-cache-size",
+                        "7",
+                        "--show-stats",
+                    ]
+                ),
+                input_func=lambda prompt: next(prompts),
+                output_stream=output,
+                error_stream=errors,
+            )
+
+        self.assertEqual(code, 0)
+        self.assertEqual(client.chat_calls[0][5], ["fixture.png"])
+        self.assertTrue(client.chat_calls[0][2]["no_vision_cache"])
+        self.assertEqual(client.chat_calls[0][2]["vision_cache_size"], 7)
+        self.assertIn("vision_cache=off", output.getvalue())
+
+    def test_visual_chat_can_attach_image_interactively(self):
+        output = io.StringIO()
+        client = FakeResidentClient()
+        prompts = iter(["/image second.png", "Describe both.", "/clear-images", "/bye"])
+
+        with patch.object(cli, "connect_resident", return_value=client):
+            code = cli.run_resident_chat(
+                cli.build_parser().parse_args(
+                    ["run", "qwen2.5-vl:3b", "--image", "first.png"]
+                ),
+                input_func=lambda prompt: next(prompts),
+                output_stream=output,
+            )
+
+        self.assertEqual(code, 0)
+        self.assertEqual(client.chat_calls[0][5], ["first.png", "second.png"])
+        self.assertIn("images cleared", output.getvalue())
+
+    def test_visual_completion_forwards_image(self):
+        output = io.StringIO()
+        client = FakeResidentClient()
+
+        with patch.object(cli, "connect_resident", return_value=client):
+            code = cli.run_resident_completion(
+                cli.build_parser().parse_args(
+                    ["complete", "qwen2.5-vl:3b", "Describe this.", "--image", "fixture.png"]
+                ),
+                output_stream=output,
+            )
+
+        self.assertEqual(code, 0)
+        self.assertEqual(client.generate_calls[0][5], ["fixture.png"])
+
 
 class FakePullStatus:
     status = "success"
@@ -335,8 +406,21 @@ class FakeResidentClient:
     def is_healthy(self):
         return True
 
-    def chat(self, model, messages, *, options, keep_alive, stream):
-        self.chat_calls.append((model, messages, options, keep_alive, stream))
+    def chat(self, model, messages, *, options, keep_alive, stream, images=None):
+        self.chat_calls.append((model, messages, options, keep_alive, stream, images))
+        backend = "mlx-vlm" if images else "mlx"
+        stats = {
+            "generated_tokens": 2,
+            "accepted_draft_tokens": 1,
+            "target_calls": 1,
+            "baseline_target_calls": 2,
+        }
+        if images:
+            stats.update(
+                image_count=len(images),
+                visual_cache_hit=False,
+                visual_cache_miss=not options.get("no_vision_cache", False),
+            )
         return iter(
             [
                 {"message": {"content": "resident "}, "done": False},
@@ -346,20 +430,15 @@ class FakeResidentClient:
                     "done": True,
                     "eval_count": 2,
                     "machboost": {
-                        "backend": "mlx",
-                        "stats": {
-                            "generated_tokens": 2,
-                            "accepted_draft_tokens": 1,
-                            "target_calls": 1,
-                            "baseline_target_calls": 2,
-                        },
+                        "backend": backend,
+                        "stats": stats,
                     },
                 },
             ]
         )
 
-    def generate(self, model, prompt, *, options, keep_alive, stream):
-        self.generate_calls.append((model, prompt, options, keep_alive, stream))
+    def generate(self, model, prompt, *, options, keep_alive, stream, images=None):
+        self.generate_calls.append((model, prompt, options, keep_alive, stream, images))
         return iter(
             [
                 {"response": "completion", "done": False},
