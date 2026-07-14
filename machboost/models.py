@@ -103,6 +103,42 @@ MODEL_ALIASES = {
             "Qwen/Qwen2.5-VL-3B-Instruct",
             "vision",
         ),
+        ModelAlias(
+            "qwen3-vl:2b",
+            "mlx-community/Qwen3-VL-2B-Instruct-4bit",
+            "Qwen/Qwen3-VL-2B-Instruct",
+            "vision",
+        ),
+        ModelAlias(
+            "qwen3-vl:4b",
+            "mlx-community/Qwen3-VL-4B-Instruct-4bit",
+            "Qwen/Qwen3-VL-4B-Instruct",
+            "vision",
+        ),
+        ModelAlias(
+            "qwen3-vl:8b",
+            "mlx-community/Qwen3-VL-8B-Instruct-4bit",
+            "Qwen/Qwen3-VL-8B-Instruct",
+            "vision",
+        ),
+        ModelAlias(
+            "qwen3.5:0.8b",
+            "mlx-community/Qwen3.5-0.8B-MLX-4bit",
+            "Qwen/Qwen3.5-0.8B",
+            "vision",
+        ),
+        ModelAlias(
+            "qwen3.5:4b",
+            "mlx-community/Qwen3.5-4B-MLX-4bit",
+            "Qwen/Qwen3.5-4B",
+            "vision",
+        ),
+        ModelAlias(
+            "qwen3.5:9b",
+            "mlx-community/Qwen3.5-9B-MLX-4bit",
+            "Qwen/Qwen3.5-9B",
+            "vision",
+        ),
     )
 }
 
