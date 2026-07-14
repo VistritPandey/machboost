@@ -97,8 +97,14 @@ def main() -> None:
                 pair[mode] = row
                 rows.append(row)
             exact = pair["baseline"]["output"] == pair["cached"]["output"]
+            pair_speedup = (
+                pair["baseline"]["client_total_seconds"]
+                / pair["cached"]["client_total_seconds"]
+            )
             pair["baseline"]["paired_output_equal"] = exact
             pair["cached"]["paired_output_equal"] = exact
+            pair["baseline"]["paired_total_speedup"] = pair_speedup
+            pair["cached"]["paired_total_speedup"] = pair_speedup
 
     summary = summarize(rows)
     output = args.output or Path(
@@ -181,6 +187,8 @@ def run_request(
         "visual_cache_hit": bool(stats.get("visual_cache_hit")),
         "visual_cache_miss": bool(stats.get("visual_cache_miss")),
         "visual_cache_entries": int(stats.get("visual_cache_entries") or 0),
+        "prompt_cache_enabled": bool(stats.get("prompt_cache_enabled")),
+        "prompt_cache_prefix_tokens": int(stats.get("prompt_cache_prefix_tokens") or 0),
     }
 
 
@@ -196,6 +204,9 @@ def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "baseline_median_total_seconds": baseline_total,
         "cached_median_total_seconds": cached_total,
         "median_total_speedup": baseline_total / cached_total,
+        "median_paired_total_speedup": statistics.median(
+            row["paired_total_speedup"] for row in cached
+        ),
         "baseline_median_ttft_seconds": baseline_ttft,
         "cached_median_ttft_seconds": cached_ttft,
         "median_ttft_speedup": baseline_ttft / cached_ttft,
@@ -209,6 +220,13 @@ def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "baseline_expected_match_rate": sum(row["expected_match"] for row in baseline) / len(baseline),
         "cached_expected_match_rate": sum(row["expected_match"] for row in cached) / len(cached),
         "cached_hit_rate": sum(row["visual_cache_hit"] for row in cached) / len(cached),
+        "cached_prompt_prefix_hit_rate": sum(
+            row["prompt_cache_prefix_tokens"] > 0 for row in cached
+        )
+        / len(cached),
+        "cached_median_prompt_prefix_tokens": statistics.median(
+            row["prompt_cache_prefix_tokens"] for row in cached
+        ),
     }
 
 
