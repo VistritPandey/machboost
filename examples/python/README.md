@@ -27,6 +27,19 @@ python3 examples/python/resident_client_demo.py \
 
 The resident client demo starts the local MachBoost server when needed, preloads the selected model, streams the response, and leaves the model in memory for the next request. Pass one or more `--context PATH` arguments to enable local-context drafting. Use `machboost ps`, `machboost stop MODEL`, and `machboost shutdown` to manage the runtime.
 
+Repeated-image visual chat:
+
+```sh
+pip install -e ".[vision]"
+python3 examples/python/vision_client_demo.py --image ./invoice.png
+python3 examples/python/vision_client_demo.py \
+  --image ./dashboard.png \
+  "Return only the current status." \
+  "Return only the displayed total."
+```
+
+The visual client sends separate deterministic questions over one image and prints the resident backend's feature-cache hit, matching visual-prefix token count, and request latency. The second and later questions are the intended accelerated path.
+
 ```sh
 pip install -e ".[hf]"
 python3 examples/python/hf_adapter_demo.py
