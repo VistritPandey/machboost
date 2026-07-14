@@ -5,14 +5,14 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "machboost"
 version = "0.3.0"
-description = "Resident local inference server with adaptive context-backed acceleration for MLX and Hugging Face."
+description = "Resident local inference server with conditional text and repeated-image acceleration."
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [
   { name = "Vistrit Pandey", email = "vistrit@blinkfire.com" }
 ]
-keywords = ["llm", "inference", "speculative-decoding", "local-ai", "mlx", "huggingface", "ollama", "server"]
+keywords = ["llm", "vlm", "inference", "speculative-decoding", "local-ai", "mlx", "huggingface", "ollama", "server"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Intended Audience :: Developers",
@@ -20,7 +20,6 @@ classifiers = [
   "Operating System :: MacOS",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3 :: Only",
-  "Programming Language :: Python :: 3.9",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
