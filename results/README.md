@@ -1,6 +1,39 @@
 # MachBoost Evidence Runs
 
-This directory stores public benchmark artifacts for the local-context speculative decoding prototype.
+This directory stores public benchmark artifacts for MachBoost text and visual acceleration paths.
+
+## Repeated-Image VLM Evidence, July 14 2026
+
+Artifact: `vision_cache_qwen25_3b_20260714.json`
+
+Model: `mlx-community/Qwen2.5-VL-3B-Instruct-4bit`
+
+Hardware: Apple M1 Max, 32 GB unified memory
+
+Workload: four deterministic extraction questions over one generated 1024 by 768 image, repeated three times. Each pair compares an uncached request with a request using content-addressed projected-image features and image-scoped prompt state. Pair order alternates. Generation is greedy, both modes use the same resident model instance, and model load is excluded from request latency.
+
+| Metric | Uncached | Accelerated | Ratio |
+|---|---:|---:|---:|
+| Median wall time | 2.537s | 0.150s | 16.95x ratio of medians |
+| Median paired wall time | n/a | n/a | 16.66x median pair ratio |
+| Median time to first text | 2.533s | 0.141s | 17.95x |
+| Median effective prompt throughput | 418.05 tok/s | 13,113.31 tok/s | 31.37x |
+
+All 12 accelerated outputs exactly match their paired uncached outputs. Both modes answer all fixture questions correctly. The projected-feature cache hits in all 12 recorded accelerated rows. The partial visual-prefix cache hits in 11 rows, reusing a median 1,018 prefix tokens. Those 11 rows range from 12.10x to 20.09x paired wall-time speedup.
+
+The first accelerated pair repeats the exact cache-priming prompt. MLX-VLM does not trim a complete prompt match through its partial-prefix path, so that row reuses projected image features only and reaches 1.59x. It is retained in the aggregate rather than discarded.
+
+Reproduce the run with:
+
+```sh
+python3 -m scripts.benchmark_vision_cache \
+  --model qwen2.5-vl:3b \
+  --repeats 3 \
+  --max-tokens 16 \
+  --output results/local/vision_cache_qwen25_3b.json
+```
+
+This experiment measures warm repeated-image question answering on one machine, model, image, and short-answer workload. It does not measure first-view acceleration, changed images, long-form decode speed, other VLM architectures, video, or concurrent clients. The prompt-throughput value is effective throughput: MLX-VLM reports the full logical prompt length while the accelerated request computes only the unmatched suffix.
 
 ## Current Native-Baseline Evidence, July 13 2026
 
