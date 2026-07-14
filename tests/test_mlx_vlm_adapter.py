@@ -62,6 +62,7 @@ class MLXVLMAcceleratorTests(unittest.TestCase):
         )
 
     def tearDown(self):
+        self.accelerator.close()
         self.directory.cleanup()
 
     def test_repeated_image_skips_second_encoder_call(self):
@@ -131,6 +132,18 @@ class MLXVLMAcceleratorTests(unittest.TestCase):
         self.accelerator.reset_cache()
 
         self.assertEqual(self.accelerator.cache_info()["size"], 0)
+
+    def test_close_stops_worker_and_rejects_future_generation(self):
+        self.accelerator.generate(
+            "Describe the image.", images=[str(self.image)], max_tokens=8
+        )
+
+        self.accelerator.close()
+
+        with self.assertRaisesRegex(RuntimeError, "closed"):
+            self.accelerator.generate(
+                "Describe the image.", images=[str(self.image)], max_tokens=8
+            )
 
 
 if __name__ == "__main__":
