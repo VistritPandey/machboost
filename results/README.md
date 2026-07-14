@@ -14,14 +14,14 @@ Workload: four deterministic extraction questions over one generated 1024 by 768
 
 | Metric | Uncached | Accelerated | Ratio |
 |---|---:|---:|---:|
-| Median wall time | 2.861s | 0.158s | 18.08x ratio of medians |
-| Median paired wall time | n/a | n/a | 17.96x median pair ratio |
-| Median time to first text | 2.849s | 0.149s | 19.12x |
-| Median effective prompt throughput | 370.88 tok/s | 12,324.47 tok/s | 33.23x |
+| Median wall time | 2.818s | 0.152s | 18.58x ratio of medians |
+| Median paired wall time | n/a | n/a | 18.33x median pair ratio |
+| Median time to first text | 2.807s | 0.144s | 19.45x |
+| Median effective prompt throughput | 379.43 tok/s | 12,928.44 tok/s | 34.07x |
 
-All 12 accelerated outputs exactly match their paired uncached outputs. Both modes answer all fixture questions correctly. The projected-feature cache hits in all 12 recorded accelerated rows. The partial visual-prefix cache hits in 11 rows, reusing a median 1,018 prefix tokens. Those 11 rows range from 13.83x to 19.49x paired wall-time speedup.
+All 12 accelerated outputs exactly match their paired uncached outputs. Both modes answer all fixture questions correctly. The projected-feature cache hits in all 12 recorded accelerated rows. The partial visual-prefix cache hits in 11 rows, reusing a median 1,018 prefix tokens. Those 11 rows range from 13.32x to 21.36x paired wall-time speedup.
 
-The first accelerated pair repeats the exact cache-priming prompt. MLX-VLM does not trim a complete prompt match through its partial-prefix path, so that row reuses projected image features only and reaches 1.51x. It is retained in the aggregate rather than discarded.
+The first accelerated pair repeats the exact cache-priming prompt. MLX-VLM does not trim a complete prompt match through its partial-prefix path, so that row reuses projected image features only and reaches 1.33x. It is retained in the aggregate rather than discarded.
 
 Reproduce the run with:
 
