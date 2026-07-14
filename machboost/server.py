@@ -57,12 +57,14 @@ class ModelConfig:
     device: str = "auto"
     local_files_only: bool = False
     cache_enabled: bool = True
+    lazy: bool = False
+    vision_cache_size: int = 20
 
 
 @dataclass
 class LoadedModel:
     config: ModelConfig
-    accelerator: Accelerator
+    accelerator: Any
     loaded_at: float
     last_used_at: float
     keep_alive: float
@@ -81,7 +83,7 @@ class LoadedModel:
     def to_dict(self, now: Optional[float] = None) -> dict[str, Any]:
         now = time.monotonic() if now is None else now
         expires_at = self.expires_at
-        return {
+        result = {
             "name": self.config.model,
             "model": self.config.model,
             "backend": self.config.backend,
@@ -94,6 +96,11 @@ class LoadedModel:
             "context_paths": list(self.config.context_paths),
             "boost_enabled": self.config.boost_enabled,
         }
+        cache_info = getattr(self.accelerator, "cache_info", None)
+        if callable(cache_info):
+            result["vision_cache"] = cache_info()
+        result["capabilities"] = ["vision", "chat"] if self.config.backend.endswith("-vlm") else ["chat", "completion"]
+        return result
 
 
 @dataclass(frozen=True)
@@ -171,7 +178,7 @@ class RuntimeManager:
     def chat(
         self,
         model: str,
-        messages: Sequence[dict[str, str]],
+        messages: Sequence[dict[str, Any]],
         *,
         options: Optional[dict[str, Any]] = None,
         keep_alive: Any = None,
@@ -183,12 +190,24 @@ class RuntimeManager:
         max_tokens = int(options.get("num_predict", options.get("max_tokens", 128)))
         started = self.clock()
         with entry.lock:
-            text, stats = entry.accelerator.generate_chat(
-                messages,
-                max_tokens=max_tokens,
-                context=context,
-                on_text=emit,
-            )
+            if entry.config.backend.endswith("-vlm"):
+                text, stats = entry.accelerator.generate_chat(
+                    messages,
+                    max_tokens=max_tokens,
+                    context=context,
+                    on_text=emit,
+                    use_vision_cache=not bool(options.get("no_vision_cache", False)),
+                    temperature=float(options.get("temperature", 0.0)),
+                )
+            else:
+                if messages_have_images(messages):
+                    raise ValueError("image inputs require a vision model and VLM backend")
+                text, stats = entry.accelerator.generate_chat(
+                    messages,
+                    max_tokens=max_tokens,
+                    context=context,
+                    on_text=emit,
+                )
             entry.requests += 1
             entry.last_used_at = self.clock()
         return GenerationResult(
@@ -209,18 +228,32 @@ class RuntimeManager:
         keep_alive: Any = None,
         context: Optional[Iterable[str] | str] = None,
         emit: Optional[Callable[[str], None]] = None,
+        images: Optional[Sequence[str]] = None,
     ) -> GenerationResult:
         options = dict(options or {})
         entry, load_duration = self.get_or_load(model, options=options, keep_alive=keep_alive)
         max_tokens = int(options.get("num_predict", options.get("max_tokens", 128)))
         started = self.clock()
         with entry.lock:
-            text, stats = entry.accelerator.generate(
-                prompt,
-                max_tokens=max_tokens,
-                context=context,
-                on_text=emit,
-            )
+            if entry.config.backend.endswith("-vlm"):
+                text, stats = entry.accelerator.generate(
+                    prompt,
+                    max_tokens=max_tokens,
+                    context=context,
+                    on_text=emit,
+                    images=images,
+                    use_vision_cache=not bool(options.get("no_vision_cache", False)),
+                    temperature=float(options.get("temperature", 0.0)),
+                )
+            else:
+                if images:
+                    raise ValueError("image inputs require a vision model and VLM backend")
+                text, stats = entry.accelerator.generate(
+                    prompt,
+                    max_tokens=max_tokens,
+                    context=context,
+                    on_text=emit,
+                )
             entry.requests += 1
             entry.last_used_at = self.clock()
         return GenerationResult(
@@ -302,6 +335,8 @@ def model_config(model: str, options: dict[str, Any]) -> ModelConfig:
         device=str(options.get("device", "auto")),
         local_files_only=bool(options.get("local_files_only", False)),
         cache_enabled=not bool(options.get("strict", False)),
+        lazy=bool(options.get("lazy", False)),
+        vision_cache_size=max(1, int(options.get("vision_cache_size", 20))),
     )
 
 
@@ -324,11 +359,25 @@ def load_accelerator(config: ModelConfig) -> Accelerator:
             local_files_only=config.local_files_only,
             **common,
         )
+    if config.backend == "mlx-vlm":
+        from .adapters.mlx_vlm import MLXVLMAccelerator
+
+        return MLXVLMAccelerator.from_pretrained(
+            config.model,
+            lazy=config.lazy,
+            vision_cache_size=config.vision_cache_size,
+        )
+    if config.backend == "hf-vlm":
+        raise ImportError(
+            "The HF-VLM resident adapter is not available yet; use an mlx-community VLM with `--backend mlx-vlm`."
+        )
     raise ValueError(f"unsupported backend: {config.backend}")
 
 
-def release_accelerator(accelerator: Accelerator) -> None:
-    reset_cache = getattr(getattr(accelerator, "service", None), "reset_cache", None)
+def release_accelerator(accelerator: Any) -> None:
+    reset_cache = getattr(accelerator, "reset_cache", None)
+    if not callable(reset_cache):
+        reset_cache = getattr(getattr(accelerator, "service", None), "reset_cache", None)
     if callable(reset_cache):
         reset_cache()
     del accelerator
@@ -536,6 +585,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                 options=options,
                 keep_alive=payload.get("keep_alive"),
                 context=context,
+                images=normalize_image_list(payload.get("images")),
             )
             self.send_json(
                 {
@@ -561,6 +611,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
             keep_alive=payload.get("keep_alive"),
             context=context,
             emit=emit,
+            images=normalize_image_list(payload.get("images")),
         )
         self.write_json_line(
             {"model": model, "created_at": utc_timestamp(), "response": "", **result.ollama_metrics()}
@@ -621,7 +672,13 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
         options = openai_options(payload)
         request_id = f"cmpl-{uuid.uuid4().hex}"
         if not bool(payload.get("stream", False)):
-            result = self.runtime.generate(model, prompt, options=options, context=payload.get("context"))
+            result = self.runtime.generate(
+                model,
+                prompt,
+                options=options,
+                context=payload.get("context"),
+                images=normalize_image_list(payload.get("images")),
+            )
             self.send_json(
                 {
                     "id": request_id,
@@ -648,7 +705,14 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                 }
             )
 
-        result = self.runtime.generate(model, prompt, options=options, context=payload.get("context"), emit=emit)
+        result = self.runtime.generate(
+            model,
+            prompt,
+            options=options,
+            context=payload.get("context"),
+            emit=emit,
+            images=normalize_image_list(payload.get("images")),
+        )
         self.write_sse(
             {
                 "id": request_id,
@@ -723,15 +787,42 @@ def required_string(payload: dict[str, Any], key: str, *, aliases: Sequence[str]
     return value
 
 
-def normalize_messages(messages: Iterable[dict[str, Any]]) -> list[dict[str, str]]:
-    normalized = []
+def normalize_messages(messages: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
     for message in messages:
         role = str(message.get("role") or "user")
         content = message.get("content")
-        if not isinstance(content, str):
-            raise ValueError("MachBoost v0.2 text endpoints require string message content")
-        normalized.append({"role": role, "content": content})
+        if not isinstance(content, (str, list)):
+            raise ValueError("message content must be text or a multimodal parts list")
+        normalized_message: dict[str, Any] = {"role": role, "content": content}
+        if "images" in message:
+            normalized_message["images"] = normalize_image_list(message.get("images"))
+        normalized.append(normalized_message)
     return normalized
+
+
+def normalize_image_list(images: Any) -> list[str]:
+    if images is None:
+        return []
+    if isinstance(images, (str, bytes)):
+        images = (images,)
+    if not isinstance(images, (list, tuple)):
+        raise ValueError("images must be a string or list")
+    return [image.decode("ascii") if isinstance(image, bytes) else str(image) for image in images]
+
+
+def messages_have_images(messages: Sequence[dict[str, Any]]) -> bool:
+    for message in messages:
+        if message.get("images"):
+            return True
+        content = message.get("content")
+        if isinstance(content, list) and any(
+            isinstance(part, dict)
+            and str(part.get("type") or "") in {"image_url", "input_image", "image"}
+            for part in content
+        ):
+            return True
+    return False
 
 
 def openai_options(payload: dict[str, Any]) -> dict[str, Any]:
@@ -742,8 +833,9 @@ def openai_options(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def usage_from_result(result: GenerationResult) -> dict[str, int]:
+    prompt = int(result.stats.get("prompt_tokens", 0))
     completion = int(result.stats.get("generated_tokens", 0))
-    return {"prompt_tokens": 0, "completion_tokens": completion, "total_tokens": completion}
+    return {"prompt_tokens": prompt, "completion_tokens": completion, "total_tokens": prompt + completion}
 
 
 def utc_timestamp() -> str:
