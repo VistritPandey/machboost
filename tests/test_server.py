@@ -4,6 +4,7 @@ import json
 import threading
 import unittest
 from dataclasses import dataclass
+from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
@@ -316,9 +317,10 @@ class HTTPServerTests(unittest.TestCase):
             "options": {"num_predict": 12, "temperature": 0.0},
         }
 
-        _, _, first_body = self.request("/api/chat", payload)
-        _, _, second_body = self.request("/api/chat", payload)
-        _, _, ps_body = self.request("/api/ps")
+        with patch("machboost.models.native_mlx_vlm_available", return_value=True):
+            _, _, first_body = self.request("/api/chat", payload)
+            _, _, second_body = self.request("/api/chat", payload)
+            _, _, ps_body = self.request("/api/ps")
 
         self.assertEqual(json.loads(first_body)["message"]["content"], "blue square")
         self.assertTrue(json.loads(second_body)["machboost"]["stats"]["generated_tokens"] > 0)
