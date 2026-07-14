@@ -151,12 +151,7 @@ class MLXVLMAccelerator:
     ) -> tuple[str, VisionRunStats]:
         normalized, image_sources = normalize_multimodal_messages(messages)
         images = self.assets.materialize_all(image_sources)
-        prompt = self._apply_chat_template(
-            self.processor,
-            self.model.config,
-            normalized,
-            num_images=len(images),
-        )
+        prompt = self._format_chat_prompt(normalized, image_count=len(images))
         return self._generate(
             prompt,
             images=images,
@@ -164,6 +159,50 @@ class MLXVLMAccelerator:
             on_text=on_text,
             use_vision_cache=use_vision_cache,
             temperature=temperature,
+        )
+
+    def _format_chat_prompt(
+        self,
+        messages: Sequence[dict[str, str]],
+        *,
+        image_count: int,
+    ) -> str:
+        model_type = config_value(self.model.config, "model_type", "")
+        module_name = str(getattr(self._apply_chat_template, "__module__", ""))
+        qwen_types = {"qwen2_vl", "qwen2_5_vl", "qwen3_vl", "qwen3_5"}
+        if image_count < 1 or model_type not in qwen_types or not module_name.startswith("mlx_vlm"):
+            return self._apply_chat_template(
+                self.processor,
+                self.model.config,
+                messages,
+                num_images=image_count,
+            )
+
+        prompt_utils = importlib.import_module("mlx_vlm.prompt_utils")
+        image_owner = next(
+            (
+                index
+                for index, message in enumerate(messages)
+                if message.get("role") not in {"system", "assistant", "tool"}
+            ),
+            len(messages) - 1,
+        )
+        formatted = []
+        for index, message in enumerate(messages):
+            role = str(message.get("role") or "user")
+            formatted.append(
+                prompt_utils.get_message_json(
+                    model_type,
+                    str(message.get("content") or ""),
+                    role,
+                    skip_image_token=index != image_owner,
+                    num_images=image_count,
+                )
+            )
+        return prompt_utils.get_chat_template(
+            self.processor,
+            formatted,
+            add_generation_prompt=True,
         )
 
     def generate(
@@ -355,6 +394,10 @@ class MLXVLMAccelerator:
             prefix_tokens = prompt_cache_state.find_prefix_length(token_ids)
             if prefix_tokens >= len(token_ids):
                 prefix_tokens = 0
+        if prefix_tokens and model_type in {"qwen2_vl", "qwen2_5_vl", "qwen3_vl", "qwen3_5"}:
+            # MLX-VLM trims input_ids after priming Qwen mRoPE state but leaves
+            # this full-length mask untouched, which breaks accumulated chat turns.
+            options["mask"] = None
         options["prompt_cache_state"] = prompt_cache_state
         return None, options, prefix_tokens
 
