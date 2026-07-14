@@ -93,6 +93,10 @@ class ClientTests(unittest.TestCase):
         with self.assertRaisesRegex(MachBoostAPIError, "missing required field"):
             self.client.post("/api/chat", {"messages": []})
 
+    def test_health_treats_connection_reset_as_not_running(self):
+        with patch("machboost.client.urlopen", side_effect=ConnectionResetError("reset")):
+            self.assertFalse(self.client.is_healthy())
+
     def test_chat_attaches_images_to_last_user_message(self):
         messages = [
             {"role": "user", "content": "First"},
