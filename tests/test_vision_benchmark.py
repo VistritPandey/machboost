@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import tempfile
 import unittest
 from pathlib import Path
@@ -54,6 +55,9 @@ class VisionBenchmarkTests(unittest.TestCase):
         self.assertEqual(summary["cached_prompt_prefix_hit_rate"], 1.0)
         self.assertEqual(summary["cached_median_prompt_prefix_tokens"], 900)
 
+    @unittest.skipUnless(
+        importlib.util.find_spec("PIL"), "Pillow is an optional vision dependency"
+    )
     def test_generated_fixture_is_a_nonempty_png(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "fixture.png"
