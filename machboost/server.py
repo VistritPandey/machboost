@@ -375,11 +375,15 @@ def load_accelerator(config: ModelConfig) -> Accelerator:
 
 
 def release_accelerator(accelerator: Any) -> None:
-    reset_cache = getattr(accelerator, "reset_cache", None)
-    if not callable(reset_cache):
-        reset_cache = getattr(getattr(accelerator, "service", None), "reset_cache", None)
-    if callable(reset_cache):
-        reset_cache()
+    close = getattr(accelerator, "close", None)
+    if callable(close):
+        close()
+    else:
+        reset_cache = getattr(accelerator, "reset_cache", None)
+        if not callable(reset_cache):
+            reset_cache = getattr(getattr(accelerator, "service", None), "reset_cache", None)
+        if callable(reset_cache):
+            reset_cache()
     del accelerator
     gc.collect()
     try:
