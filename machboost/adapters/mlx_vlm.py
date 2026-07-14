@@ -148,10 +148,15 @@ class MLXVLMAccelerator:
         on_text: Optional[Callable[[str], None]] = None,
         use_vision_cache: bool = True,
         temperature: float = 0.0,
+        enable_thinking: bool = False,
     ) -> tuple[str, VisionRunStats]:
         normalized, image_sources = normalize_multimodal_messages(messages)
         images = self.assets.materialize_all(image_sources)
-        prompt = self._format_chat_prompt(normalized, image_count=len(images))
+        prompt = self._format_chat_prompt(
+            normalized,
+            image_count=len(images),
+            enable_thinking=enable_thinking,
+        )
         return self._generate(
             prompt,
             images=images,
@@ -166,6 +171,7 @@ class MLXVLMAccelerator:
         messages: Sequence[dict[str, str]],
         *,
         image_count: int,
+        enable_thinking: bool = False,
     ) -> str:
         model_type = config_value(self.model.config, "model_type", "")
         module_name = str(getattr(self._apply_chat_template, "__module__", ""))
@@ -176,6 +182,7 @@ class MLXVLMAccelerator:
                 self.model.config,
                 messages,
                 num_images=image_count,
+                enable_thinking=enable_thinking,
             )
 
         prompt_utils = importlib.import_module("mlx_vlm.prompt_utils")
@@ -203,6 +210,7 @@ class MLXVLMAccelerator:
             self.processor,
             formatted,
             add_generation_prompt=True,
+            enable_thinking=enable_thinking,
         )
 
     def generate(
@@ -215,6 +223,7 @@ class MLXVLMAccelerator:
         images: Optional[Sequence[str]] = None,
         use_vision_cache: bool = True,
         temperature: float = 0.0,
+        enable_thinking: bool = False,
     ) -> tuple[str, VisionRunStats]:
         materialized = self.assets.materialize_all(images or ())
         templated = self._apply_chat_template(
@@ -222,6 +231,7 @@ class MLXVLMAccelerator:
             self.model.config,
             prompt,
             num_images=len(materialized),
+            enable_thinking=enable_thinking,
         )
         return self._generate(
             templated,
@@ -365,19 +375,10 @@ class MLXVLMAccelerator:
         if pixel_values is None:
             return None
 
-        features = self.vision_cache.get(list(images))
-        if features is None:
-            features = self._encode_vision_features(pixel_values, inputs, model_type)
-            if features is None:
-                return None
-            mx.eval(features)
-            self.vision_cache.put(list(images), features)
-
         options = {
             "input_ids": inputs.get("input_ids"),
             "pixel_values": pixel_values,
             "mask": inputs.get("attention_mask"),
-            "cached_image_features": features,
         }
         options.update(
             {
@@ -398,6 +399,15 @@ class MLXVLMAccelerator:
             # MLX-VLM trims input_ids after priming Qwen mRoPE state but leaves
             # this full-length mask untouched, which breaks accumulated chat turns.
             options["mask"] = None
+        if model_type != "qwen3_vl":
+            features = self.vision_cache.get(list(images))
+            if features is None:
+                features = self._encode_vision_features(pixel_values, inputs, model_type)
+                if features is None:
+                    return None
+                mx.eval(features)
+                self.vision_cache.put(list(images), features)
+            options["cached_image_features"] = features
         options["prompt_cache_state"] = prompt_cache_state
         return None, options, prefix_tokens
 
@@ -436,7 +446,10 @@ class MLXVLMAccelerator:
         weight = getattr(projection, "weight", None)
         if weight is not None:
             pixel_values = pixel_values.astype(weight.dtype)
-        return vision_tower(pixel_values, grid, output_hidden_states=False)
+        features = vision_tower(pixel_values, grid, output_hidden_states=False)
+        if model_type == "qwen3_5" and isinstance(features, tuple):
+            return features[0]
+        return features
 
     def reset_cache(self) -> None:
         if self._closed:
