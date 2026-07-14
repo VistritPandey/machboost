@@ -104,6 +104,11 @@ class FakeVisionAccelerator:
         }
 
 
+class FailingAccelerator(FakeAccelerator):
+    def generate(self, prompt, *, max_tokens, context=None, on_text=None):
+        raise RuntimeError("intentional streaming failure")
+
+
 class FakeClock:
     def __init__(self) -> None:
         self.value = 100.0
@@ -189,7 +194,10 @@ class HTTPServerTests(unittest.TestCase):
         self.thread.join(timeout=2.0)
 
     def _load(self, config):
-        accelerator = FakeVisionAccelerator() if config.backend.endswith("-vlm") else FakeAccelerator()
+        if config.model.endswith("failing"):
+            accelerator = FailingAccelerator()
+        else:
+            accelerator = FakeVisionAccelerator() if config.backend.endswith("-vlm") else FakeAccelerator()
         self.loaded.append((config, accelerator))
         return accelerator
 
@@ -374,6 +382,20 @@ class HTTPServerTests(unittest.TestCase):
 
         self.assertEqual(raised.exception.code, 400)
         self.assertIn("vision model", raised.exception.read().decode("utf-8"))
+
+    def test_streaming_failure_is_returned_as_ndjson_error(self):
+        _, _, body = self.request(
+            "/api/generate",
+            {
+                "model": "mlx-community/failing",
+                "prompt": "fail",
+                "stream": True,
+            },
+        )
+
+        row = json.loads(body)
+        self.assertEqual(row["error"], "intentional streaming failure")
+        self.assertTrue(row["done"])
 
     def test_shutdown_endpoint_stops_server_and_releases_models(self):
         self.request(
