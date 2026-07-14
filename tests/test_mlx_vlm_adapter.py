@@ -149,6 +149,19 @@ class MLXVLMAcceleratorTests(unittest.TestCase):
         prompt, options = self.templates[0]
         self.assertEqual(prompt[2]["content"], "Follow-up")
         self.assertEqual(options["num_images"], 1)
+        self.assertFalse(options["enable_thinking"])
+
+    def test_chat_template_can_enable_thinking(self):
+        message = {"role": "user", "content": "Reason about this."}
+
+        self.accelerator.generate_chat(
+            [message],
+            max_tokens=8,
+            enable_thinking=True,
+        )
+
+        _, options = self.templates[0]
+        self.assertTrue(options["enable_thinking"])
 
     def test_reset_cache_releases_projected_features(self):
         self.accelerator.generate(
@@ -185,8 +198,11 @@ class MLXVLMAcceleratorTests(unittest.TestCase):
         def get_message_json(model_type, content, role, **options):
             return {"role": role, "content": content, **options}
 
-        def get_chat_template(processor, messages, add_generation_prompt):
+        template_options = {}
+
+        def get_chat_template(processor, messages, add_generation_prompt, **options):
             formatted.extend(messages)
+            template_options.update(options)
             return "rendered"
 
         prompt_utils = SimpleNamespace(
@@ -209,6 +225,66 @@ class MLXVLMAcceleratorTests(unittest.TestCase):
         self.assertEqual(prompt, "rendered")
         self.assertFalse(formatted[1]["skip_image_token"])
         self.assertTrue(formatted[3]["skip_image_token"])
+        self.assertFalse(template_options["enable_thinking"])
+
+    def test_qwen35_uses_projected_tensor_from_vision_tuple(self):
+        expected = object()
+
+        def vision_tower(pixel_values, grid, output_hidden_states):
+            return expected, [object()]
+
+        self.accelerator.model.vision_tower = vision_tower
+
+        features = self.accelerator._encode_vision_features(
+            object(),
+            {"image_grid_thw": object()},
+            "qwen3_5",
+        )
+
+        self.assertIs(features, expected)
+
+    def test_qwen3vl_skips_incomplete_projected_feature_cache(self):
+        self.accelerator.model.config = {"model_type": "qwen3_vl"}
+        self.accelerator._stream_generate.__module__ = "mlx_vlm.generate"
+
+        mlx_package = ModuleType("mlx")
+        mlx_package.__path__ = []
+        mlx_core = ModuleType("mlx.core")
+        mlx_core.eval = lambda value: None
+        mlx_package.core = mlx_core
+        mlx_vlm_package = ModuleType("mlx_vlm")
+        mlx_vlm_package.__path__ = []
+        mlx_vlm_utils = ModuleType("mlx_vlm.utils")
+        pixel_values = object()
+        mlx_vlm_utils.prepare_inputs = lambda *args, **kwargs: {
+            "input_ids": FakeArray([1, 2, 3]),
+            "pixel_values": pixel_values,
+            "attention_mask": object(),
+            "image_grid_thw": object(),
+        }
+        generation = SimpleNamespace(PromptCacheState=FakePromptCacheState)
+
+        with patch.dict(
+            sys.modules,
+            {
+                "mlx": mlx_package,
+                "mlx.core": mlx_core,
+                "mlx_vlm": mlx_vlm_package,
+                "mlx_vlm.utils": mlx_vlm_utils,
+            },
+        ), patch(
+            "machboost.adapters.mlx_vlm.importlib.import_module",
+            return_value=generation,
+        ):
+            prepared = self.accelerator._prepare_cached_vision(
+                "prompt", [str(self.image)]
+            )
+
+        self.assertIsNotNone(prepared)
+        _, options, _ = prepared
+        self.assertIs(options["pixel_values"], pixel_values)
+        self.assertNotIn("cached_image_features", options)
+        self.assertEqual(self.accelerator.cache_info()["size"], 0)
 
     def test_qwen_partial_prefix_drops_untrimmed_attention_mask(self):
         self.accelerator.model.config = {"model_type": "qwen2_5_vl"}
