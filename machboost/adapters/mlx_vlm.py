@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import importlib
+import threading
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -41,6 +43,7 @@ class MLXVLMAccelerator:
     """Resident MLX-VLM runner with content-addressed projected-feature reuse."""
 
     supports_vision = True
+    _generation_lock = threading.RLock()
 
     def __init__(
         self,
@@ -161,31 +164,33 @@ class MLXVLMAccelerator:
         use_vision_cache: bool,
         temperature: float,
     ) -> tuple[str, VisionRunStats]:
-        cache_before = self.vision_cache.info()
-        started = time.perf_counter()
-        first_text_at: Optional[float] = None
-        parts: list[str] = []
-        last: Any = None
-        rows = self._stream_generate(
-            self.model,
-            self.processor,
-            prompt,
-            image=list(images) or None,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            vision_cache=self.vision_cache if use_vision_cache else None,
-        )
-        for row in rows:
-            last = row
-            text = str(getattr(row, "text", "") or "")
-            if not text:
-                continue
-            if first_text_at is None:
-                first_text_at = time.perf_counter()
-            parts.append(text)
-            if on_text is not None:
-                on_text(text)
-        finished = time.perf_counter()
+        with self._generation_lock:
+            self._bind_thread_local_stream()
+            cache_before = self.vision_cache.info()
+            started = time.perf_counter()
+            first_text_at: Optional[float] = None
+            parts: list[str] = []
+            last: Any = None
+            rows = self._stream_generate(
+                self.model,
+                self.processor,
+                prompt,
+                image=list(images) or None,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                vision_cache=self.vision_cache if use_vision_cache else None,
+            )
+            for row in rows:
+                last = row
+                text = str(getattr(row, "text", "") or "")
+                if not text:
+                    continue
+                if first_text_at is None:
+                    first_text_at = time.perf_counter()
+                parts.append(text)
+                if on_text is not None:
+                    on_text(text)
+            finished = time.perf_counter()
         cache_after = self.vision_cache.info()
         stats = VisionRunStats(
             generated_tokens=int(getattr(last, "generation_tokens", 0) or 0),
@@ -204,6 +209,15 @@ class MLXVLMAccelerator:
             image_count=len(images),
         )
         return "".join(parts), stats
+
+    def _bind_thread_local_stream(self) -> None:
+        module_name = str(getattr(self._stream_generate, "__module__", ""))
+        if not module_name.startswith("mlx_vlm"):
+            return
+        import mlx.core as mx
+
+        generation = importlib.import_module("mlx_vlm.generate")
+        generation.generation_stream = mx.new_thread_local_stream(mx.default_device())
 
     def reset_cache(self) -> None:
         self.vision_cache.clear()
