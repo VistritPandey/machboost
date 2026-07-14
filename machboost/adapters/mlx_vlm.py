@@ -238,11 +238,13 @@ class MLXVLMAccelerator:
                 "max_tokens": max_tokens,
                 "temperature": temperature,
             }
+            prompt_cache_enabled = False
             prompt_cache_prefix_tokens = 0
             prepared = self._prepare_cached_vision(prompt, images) if use_vision_cache else None
             if prepared is not None:
                 stream_image, prepared_options, prompt_cache_prefix_tokens = prepared
                 stream_options.update(prepared_options)
+                prompt_cache_enabled = True
             elif use_vision_cache:
                 stream_options["vision_cache"] = self.vision_cache
             rows = self._stream_generate(
@@ -278,7 +280,7 @@ class MLXVLMAccelerator:
             visual_cache_entries=cache_after.size,
             visual_cache_hits_total=cache_after.hits,
             visual_cache_misses_total=cache_after.misses,
-            prompt_cache_enabled=bool(use_vision_cache and images),
+            prompt_cache_enabled=prompt_cache_enabled,
             prompt_cache_prefix_tokens=prompt_cache_prefix_tokens,
             image_count=len(images),
         )
@@ -349,7 +351,10 @@ class MLXVLMAccelerator:
         input_ids = inputs.get("input_ids")
         prefix_tokens = 0
         if input_ids is not None:
-            prefix_tokens = prompt_cache_state.find_prefix_length(input_ids.flatten().tolist())
+            token_ids = input_ids.flatten().tolist()
+            prefix_tokens = prompt_cache_state.find_prefix_length(token_ids)
+            if prefix_tokens >= len(token_ids):
+                prefix_tokens = 0
         options["prompt_cache_state"] = prompt_cache_state
         return None, options, prefix_tokens
 
