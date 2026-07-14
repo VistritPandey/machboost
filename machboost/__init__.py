@@ -19,8 +19,10 @@ from .core import (
     machboost,
 )
 from .client import MachBoostAPIError, MachBoostClient, ensure_server
+from .adapters.mlx_vlm import MLXVLMAccelerator, VisionRunStats
 from .models import ModelAlias, ModelResolution, resolve_model
 from .server import RuntimeManager
+from .vision import ContentAddressedVisionCache, VisualAssetStore, VisionCacheInfo
 
 __all__ = [
     "Accelerator",
@@ -30,16 +32,21 @@ __all__ = [
     "BoostedService",
     "CalibrationResult",
     "Candidate",
+    "ContentAddressedVisionCache",
     "CorpusDrafter",
     "GateDecision",
     "GatePolicy",
     "MachBoost",
     "MachBoostAPIError",
     "MachBoostClient",
+    "MLXVLMAccelerator",
     "ModelAlias",
     "ModelResolution",
     "RunStats",
     "RuntimeManager",
+    "VisualAssetStore",
+    "VisionCacheInfo",
+    "VisionRunStats",
     "benchmark",
     "benchmark_cases",
     "ensure_server",
