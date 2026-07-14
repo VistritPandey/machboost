@@ -91,6 +91,18 @@ MODEL_ALIASES = {
             "mlx-community/Qwen3-8B-4bit",
             "Qwen/Qwen3-8B",
         ),
+        ModelAlias(
+            "qwen2-vl:2b",
+            "mlx-community/Qwen2-VL-2B-Instruct-4bit",
+            "Qwen/Qwen2-VL-2B-Instruct",
+            "vision",
+        ),
+        ModelAlias(
+            "qwen2.5-vl:3b",
+            "mlx-community/Qwen2.5-VL-3B-Instruct-4bit",
+            "Qwen/Qwen2.5-VL-3B-Instruct",
+            "vision",
+        ),
     )
 }
 
@@ -102,6 +114,10 @@ def native_mlx_available() -> bool:
         and importlib.util.find_spec("mlx") is not None
         and importlib.util.find_spec("mlx_lm") is not None
     )
+
+
+def native_mlx_vlm_available() -> bool:
+    return native_mlx_available() and importlib.util.find_spec("mlx_vlm") is not None
 
 
 def resolve_model(model: str, backend: str = "auto") -> ModelResolution:
@@ -116,9 +132,21 @@ def resolve_model(model: str, backend: str = "auto") -> ModelResolution:
         return ModelResolution(requested=requested, model=str(path) if path.exists() else requested, backend=selected)
 
     selected = backend
-    if selected == "auto":
-        selected = "mlx" if native_mlx_available() and alias.mlx else "hf"
-    resolved = alias.mlx if selected == "mlx" else alias.hf
+    if alias.capability == "vision":
+        if selected == "auto":
+            selected = "mlx-vlm" if native_mlx_vlm_available() and alias.mlx else "hf-vlm"
+        elif selected == "mlx":
+            selected = "mlx-vlm"
+        elif selected == "hf":
+            selected = "hf-vlm"
+        if selected not in {"mlx-vlm", "hf-vlm"}:
+            raise ValueError(f"vision model alias {requested!r} requires an MLX-VLM or HF-VLM backend")
+    else:
+        if selected == "auto":
+            selected = "mlx" if native_mlx_available() and alias.mlx else "hf"
+        if selected not in {"mlx", "hf"}:
+            raise ValueError(f"text model alias {requested!r} requires an MLX or HF backend")
+    resolved = alias.mlx if selected.startswith("mlx") else alias.hf
     if not resolved:
         raise ValueError(f"model alias {requested!r} is not available for backend {selected!r}")
     return ModelResolution(requested=requested, model=resolved, backend=selected, alias=alias.name)
@@ -128,9 +156,17 @@ def select_backend_for_repo(model: str, backend: str = "auto") -> str:
     if backend != "auto":
         return backend
     normalized = model.lower()
+    if looks_like_vision_model(normalized):
+        return "mlx-vlm" if normalized.startswith("mlx-community/") else "hf-vlm"
     if normalized.startswith("mlx-community/") or "mlx" in normalized:
         return "mlx"
     return "hf"
+
+
+def looks_like_vision_model(model: str) -> bool:
+    normalized = model.lower()
+    markers = ("-vl-", "-vl:", "vision", "llava", "pixtral", "florence", "moondream")
+    return any(marker in normalized for marker in markers)
 
 
 def alias_rows() -> list[dict]:
