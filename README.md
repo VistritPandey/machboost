@@ -3,9 +3,9 @@
 [![CI](https://github.com/VistritPandey/machboost/actions/workflows/ci.yml/badge.svg)](https://github.com/VistritPandey/machboost/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-MachBoost is an experimental resident local-inference server and Python package for MLX and Hugging Face models. It provides an Ollama-like model workflow, keeps models warm between requests, streams chat and code completions, and can apply exact local-context speculative acceleration when retrieved documents or source files predict the model's continuation.
+MachBoost is an experimental resident local-inference server and Python package for MLX, MLX-VLM, and Hugging Face models. It provides an Ollama-like model workflow, keeps models warm between requests, streams text and visual chat, and applies backend-specific acceleration when a request contains reusable work.
 
-It drafts candidate tokens from nearby text such as prompts, retrieved chunks, repo files, policies, configs, and docs. A backend verifier then accepts only the tokens that match the target model's greedy continuation. When the local context predicts the next tokens well, MachBoost can reduce target-model calls without changing the generated token sequence.
+For text, it drafts candidate tokens from nearby prompts, retrieved chunks, repo files, policies, configs, and docs, then verifies them with the target model. For repeated-image VLM requests, it reuses content-addressed projected vision features and an image-scoped visual-token KV prefix. Neither path changes model weights.
 
 MachBoost is local-first and alpha-stage. It does not upload telemetry, mutate global runtime settings, change model weights, or claim universal speedups. Ordinary open-ended chat follows the backend's native generation path; context-backed verification is enabled only when a candidate exists.
 
@@ -26,6 +26,7 @@ Install optional backends as needed:
 ```sh
 pip install -e ".[mlx]"
 pip install -e ".[hf]"
+pip install -e ".[vision]"
 pip install -e ".[all]"
 ```
 
@@ -33,6 +34,7 @@ After publishing this repository on GitHub, users can install directly from GitH
 
 ```sh
 pip install "machboost[mlx] @ git+https://github.com/VistritPandey/machboost.git"
+pip install "machboost[vision] @ git+https://github.com/VistritPandey/machboost.git"
 ```
 
 Update an existing install:
@@ -85,6 +87,34 @@ curl http://127.0.0.1:11435/api/chat -d '{
   "stream": false
 }'
 ```
+
+### Visual Chat
+
+Install the vision extra and run a supported MLX-VLM model with a local image:
+
+```sh
+pip install -e ".[vision]"
+machboost pull qwen2.5-vl:3b
+machboost run qwen2.5-vl:3b --image ./invoice.png --show-stats
+```
+
+The interactive session keeps the model and attached image warm. Use `/image PATH` to attach another image, `/images` to inspect attachments, and `/clear-images` to remove them. The same path is available to Python applications:
+
+```python
+from machboost import MachBoostClient, ensure_server
+
+client, _ = ensure_server()
+response = client.chat(
+    "qwen2.5-vl:3b",
+    [{"role": "user", "content": "Return only the invoice total."}],
+    images=["./invoice.png"],
+    options={"temperature": 0.0, "num_predict": 32},
+    stream=False,
+)
+print(response["message"]["content"])
+```
+
+Image reuse is content-addressed: changing the file bytes creates a new cache identity. Set `--no-vision-cache` or `options={"no_vision_cache": True}` for an uncached control. This optimization targets repeated questions over the same image; the first image request still performs normal vision encoding and prefill.
 
 Use the high-level `Accelerator` when you want MachBoost to load a model and build the draft corpus from strings, files, or directories. Calibrate before enabling the boosted path for a workflow:
 
@@ -187,6 +217,7 @@ MachBoost is most useful when the model is likely to continue with text already 
 - policy or documentation copying
 - RAG answers that quote retrieved context
 - repeated logs, templates, checklists, and structured artifacts
+- repeated extraction, QA, or agent turns over the same image
 
 It is usually neutral or slower for open-ended creative writing, one-word answers, and prompts where the next tokens are not recoverable from local context. The package exposes benchmark and calibration APIs so applications can turn the boosted path on only when it helps.
 
@@ -200,6 +231,7 @@ machboost list --json
 machboost pull qwen2.5:3b
 machboost warm qwen2.5:3b
 machboost run qwen2.5:3b
+machboost run qwen2.5-vl:3b --image ./image.png
 machboost chat qwen2.5:3b
 machboost complete qwen2.5-coder:3b "def parse_config(text):"
 machboost ps
@@ -283,6 +315,7 @@ The Go CLI is useful for local systems experiments. The Python package is the pr
 | Backend | Status | Notes |
 |---|---|---|
 | MLX / `mlx-lm` | native adapter | Best Mac-first path. Strict evidence mode can disable prompt cache for clean exactness checks. |
+| MLX-VLM | native visual adapter | Reuses image features and image-scoped visual-token prefixes for repeated questions over unchanged images. |
 | Hugging Face Transformers | native adapter | Useful for research and broad model coverage. |
 | MachBoost resident server | native control plane | Keeps MLX/HF models warm and exposes Ollama/OpenAI-compatible streaming APIs. |
 | Custom Python service | native if verifier exists | Implement `next_token`, `verify`, `encode`, and `decode` as needed. |
@@ -297,10 +330,13 @@ Public benchmark artifacts live in [results](results/), with a summary in [resul
 | `mlx_native_default_qwen25_3b_20260713.json` | `mlx-community/Qwen2.5-3B-Instruct-4bit` | default code continuation | 5 | 100% | 1.96x |
 | `mlx_native_reentry_qwen25_3b_20260713.json` | same | experimental RAG re-entry | 5 | 100% | 1.58x |
 | `mlx_native_reentry_qwen25_3b_20260713.json` | same | open-ended native fallback | 5 | 100% | 1.08x |
+| `vision_cache_qwen25_3b_20260714.json` | `mlx-community/Qwen2.5-VL-3B-Instruct-4bit` | repeated questions over one image | 12 | 100% | 16.66x |
 
 Resident-server latency is tracked separately in `resident_qwen25_3b_20260713.json`. On the same M1 Max, five warm forced 64-token requests reached a 0.657-second median wall time and 97.5 end-to-end tok/s. Five short streaming chats reached a 0.298-second median time to first text and 0.358-second median total latency. These requests used native fallback with zero accepted draft tokens, so they measure warm serving rather than the context speculation algorithm.
 
 The default code path accepted a median 51 of 64 tokens and reduced logical target forwards by 76.6%. One-token re-entry broadens coverage to copied RAG answers, accepting a median 30 tokens. The current repeated medians are below 2x and remain workload-specific. Older `strict` and 9B artifacts compared against synchronous or cache-disabled baselines and remain available only as diagnostics; they do not establish an improvement over optimized `mlx-lm` or Ollama.
+
+The visual artifact compares 12 uncached requests with 12 accelerated requests on the same resident Qwen2.5-VL 3B model. Median paired wall time fell from a 2.54-second uncached median to 0.150 seconds on the accelerated path; median paired speedup was 16.66x and median TTFT speedup was 17.95x. All paired outputs and expected fixture answers matched. Eleven of 12 accelerated rows reused a 1,018-token visual prefix. The remaining row deliberately repeated the priming prompt, so it only reused projected image features and reached 1.59x. These are warm repeated-image results on one machine and model, not a claim about first-view latency, decode throughput, changed images, or arbitrary visual workloads.
 
 The research paper source and PDF are included in [paper](paper/). Keeping `paper/` and `results/` in the public repository is intentional: they make the claims auditable. They are not imported by the package at runtime.
 
@@ -351,6 +387,16 @@ python3 scripts/hf_prompt_lookup_compare.py \
 ```
 
 Use `results/local/` for new local runs; it is ignored by git.
+
+Run the repeated-image VLM benchmark:
+
+```sh
+python3 -m scripts.benchmark_vision_cache \
+  --model qwen2.5-vl:3b \
+  --repeats 3 \
+  --max-tokens 16 \
+  --output results/local/vision_cache_qwen25_3b.json
+```
 
 ## Examples
 
