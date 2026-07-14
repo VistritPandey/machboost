@@ -81,16 +81,26 @@ class MachBoostClient:
     def chat(
         self,
         model: str,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, Any]],
         *,
         options: Optional[dict[str, Any]] = None,
         context: Optional[list[str] | str] = None,
+        images: Optional[list[str] | str] = None,
         keep_alive: Any = None,
         stream: bool = True,
     ) -> Iterator[dict[str, Any]] | dict[str, Any]:
+        chat_messages = [dict(message) for message in messages]
+        if images is not None:
+            if not chat_messages:
+                raise ValueError("images require at least one chat message")
+            target = next(
+                (message for message in reversed(chat_messages) if message.get("role") == "user"),
+                chat_messages[-1],
+            )
+            target["images"] = images
         payload: dict[str, Any] = {
             "model": model,
-            "messages": messages,
+            "messages": chat_messages,
             "options": dict(options or {}),
             "stream": bool(stream),
         }
@@ -109,6 +119,7 @@ class MachBoostClient:
         *,
         options: Optional[dict[str, Any]] = None,
         context: Optional[list[str] | str] = None,
+        images: Optional[list[str] | str] = None,
         keep_alive: Any = None,
         stream: bool = True,
     ) -> Iterator[dict[str, Any]] | dict[str, Any]:
@@ -120,6 +131,8 @@ class MachBoostClient:
         }
         if context is not None:
             payload["context"] = context
+        if images is not None:
+            payload["images"] = images
         if keep_alive is not None:
             payload["keep_alive"] = keep_alive
         if stream:
