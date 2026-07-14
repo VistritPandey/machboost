@@ -1,0 +1,137 @@
+from __future__ import annotations
+
+import tempfile
+import unittest
+from dataclasses import dataclass
+from pathlib import Path
+
+from machboost.adapters.mlx_vlm import MLXVLMAccelerator
+
+
+@dataclass
+class FakeGenerationRow:
+    text: str
+    generation_tokens: int = 4
+    prompt_tokens: int = 20
+    prompt_tps: float = 80.0
+    generation_tps: float = 40.0
+    peak_memory: float = 1.5
+
+
+class FakeModel:
+    config = {"model_type": "fake_vlm"}
+
+
+class FakeVisionStream:
+    def __init__(self) -> None:
+        self.calls = []
+        self.encoder_calls = 0
+
+    def __call__(self, model, processor, prompt, *, image=None, vision_cache=None, **kwargs):
+        self.calls.append({"prompt": prompt, "image": image, "kwargs": kwargs})
+        if image is not None:
+            features = vision_cache.get(image) if vision_cache is not None else None
+            if features is None:
+                self.encoder_calls += 1
+                if vision_cache is not None:
+                    vision_cache.put(image, f"features-{self.encoder_calls}")
+        yield FakeGenerationRow("blue ")
+        yield FakeGenerationRow("square")
+
+
+class MLXVLMAcceleratorTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.root = Path(self.directory.name)
+        self.image = self.root / "fixture.png"
+        self.image.write_bytes(b"\x89PNG\r\n\x1a\nvision-fixture")
+        self.stream = FakeVisionStream()
+        self.templates = []
+
+        def template(processor, config, prompt, **kwargs):
+            self.templates.append((prompt, kwargs))
+            return "templated prompt"
+
+        self.accelerator = MLXVLMAccelerator(
+            FakeModel(),
+            object(),
+            model_name="fake-vlm",
+            asset_cache_dir=self.root / "assets",
+            stream_generate_fn=self.stream,
+            apply_chat_template_fn=template,
+        )
+
+    def tearDown(self):
+        self.directory.cleanup()
+
+    def test_repeated_image_skips_second_encoder_call(self):
+        message = {"role": "user", "content": "What shape?", "images": [str(self.image)]}
+
+        first_text, first_stats = self.accelerator.generate_chat([message], max_tokens=8)
+        second_text, second_stats = self.accelerator.generate_chat([message], max_tokens=8)
+
+        self.assertEqual(first_text, "blue square")
+        self.assertEqual(second_text, first_text)
+        self.assertEqual(self.stream.encoder_calls, 1)
+        self.assertTrue(first_stats.visual_cache_miss)
+        self.assertFalse(first_stats.visual_cache_hit)
+        self.assertTrue(second_stats.visual_cache_hit)
+        self.assertFalse(second_stats.visual_cache_miss)
+        self.assertEqual(second_stats.visual_cache_entries, 1)
+
+    def test_disabled_cache_runs_encoder_for_each_request(self):
+        message = {"role": "user", "content": "What shape?", "images": [str(self.image)]}
+
+        _, first = self.accelerator.generate_chat([message], max_tokens=8, use_vision_cache=False)
+        _, second = self.accelerator.generate_chat([message], max_tokens=8, use_vision_cache=False)
+
+        self.assertEqual(self.stream.encoder_calls, 2)
+        self.assertFalse(first.visual_cache_hit)
+        self.assertFalse(first.visual_cache_miss)
+        self.assertFalse(second.visual_cache_hit)
+        self.assertEqual(self.accelerator.cache_info()["size"], 0)
+
+    def test_streams_text_and_reports_backend_metrics(self):
+        emitted = []
+        text, stats = self.accelerator.generate(
+            "Describe the image.",
+            images=[str(self.image)],
+            max_tokens=8,
+            on_text=emitted.append,
+        )
+
+        self.assertEqual(text, "blue square")
+        self.assertEqual(emitted, ["blue ", "square"])
+        self.assertEqual(stats.backend, "mlx-vlm")
+        self.assertEqual(stats.generated_tokens, 4)
+        self.assertEqual(stats.prompt_tokens, 20)
+        self.assertEqual(stats.prompt_tokens_per_second, 80.0)
+        self.assertEqual(stats.generation_tokens_per_second, 40.0)
+        self.assertEqual(stats.image_count, 1)
+
+    def test_chat_template_receives_history_and_image_count(self):
+        messages = [
+            {"role": "user", "content": "First question"},
+            {"role": "assistant", "content": "First answer"},
+            {"role": "user", "content": "Follow-up", "images": [str(self.image)]},
+        ]
+
+        self.accelerator.generate_chat(messages, max_tokens=8)
+
+        prompt, options = self.templates[0]
+        self.assertEqual(prompt[2]["content"], "Follow-up")
+        self.assertEqual(options["num_images"], 1)
+
+    def test_reset_cache_releases_projected_features(self):
+        self.accelerator.generate(
+            "Describe the image.", images=[str(self.image)], max_tokens=8
+        )
+        self.assertEqual(self.accelerator.cache_info()["size"], 1)
+
+        self.accelerator.reset_cache()
+
+        self.assertEqual(self.accelerator.cache_info()["size"], 0)
+
+
+if __name__ == "__main__":
+    unittest.main()
