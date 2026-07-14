@@ -1,12 +1,14 @@
 # MachBoost Acceleration Layer
 
-MachBoost is an exact local-context speculative acceleration layer. It drafts candidate tokens from nearby text and asks the target runtime to verify those tokens before committing them.
+MachBoost is a backend-aware local inference acceleration layer. Text generation can draft candidate tokens from nearby context and ask the target runtime to verify them before committing them. Visual question answering can reuse deterministic work derived from an unchanged image.
 
 The central question is:
 
 > Can local context safely draft tokens that the target model would have generated anyway?
 
 If yes, MachBoost can reduce target-model work. If no, the package falls back to normal generation and records why.
+
+For visual workloads, the corresponding question is whether the exact image bytes and visual prompt prefix have already been processed by the same resident model instance. Version 0.3 implements this path for MLX-VLM.
 
 ## Non-Goals
 
@@ -31,6 +33,7 @@ Current package adapters:
 
 - Hugging Face Transformers
 - MLX / `mlx-lm`
+- MLX-VLM
 - custom Python services that implement `next_token` and `verify`
 
 Future native targets:
@@ -40,7 +43,7 @@ Future native targets:
 
 ### Resident Runtime
 
-MachBoost 0.2 adds a long-running control plane around the native adapters. It:
+MachBoost 0.2 added a long-running control plane around the native adapters. Version 0.3 extends it to visual models. It:
 
 - loads each model once and retains it in unified memory
 - streams generated text without re-decoding the entire prefix per token
@@ -50,6 +53,17 @@ MachBoost 0.2 adds a long-running control plane around the native adapters. It:
 - supports explicit preload, inspection, stop, and shutdown operations
 
 Resident serving removes repeated model-loading costs and makes MachBoost usable by editors, chat clients, scripts, and internal assistants. It is an operational latency improvement; it is separate from speculative token acceleration and should be measured separately.
+
+### Repeated-Image Acceleration
+
+The MLX-VLM adapter maintains two bounded, per-model caches:
+
+1. A content-addressed LRU stores projected vision features. This skips the vision tower when the same image bytes are submitted again.
+2. An image-scoped prompt state stores the language-model KV prefix associated with the visual token span. A later question over the same image can skip the matching visual-token prefill and process only the changed text suffix.
+
+Local file identities are derived from image content, with file metadata used only to avoid unnecessary rehashing. Data URLs and in-memory images are also hashed by content. A changed image therefore receives a different feature entry and prompt state. Cache entries remain local to one resident model process and are discarded on model unload, explicit cache reset, or server shutdown.
+
+This path does not improve first-view latency. It benefits repeated extraction, QA, and agent turns over unchanged visual inputs. It also does not increase decode tokens per second after prefill; its primary effect is lower time to first token.
 
 ### Wrapper / Policy Mode
 
@@ -83,6 +97,21 @@ Candidate Drafter -> Runtime Verifier -> accepted prefix -> output
         |              |
         v              v
 Results Recorder <----+
+```
+
+The visual path is independent of the text drafter:
+
+```text
+Image bytes + question
+        |
+        v
+Content key ---> projected-feature LRU ---> vision tower on miss
+        |
+        v
+Image-scoped KV state ---> visual-prefix prefill on miss
+        |
+        v
+Native MLX-VLM decoder ---> streamed output + cache metrics
 ```
 
 ## Core Interfaces
@@ -183,6 +212,20 @@ for event in client.chat(
     print((event.get("message") or {}).get("content", ""), end="", flush=True)
 ```
 
+For visual input, attach image paths to the request and use a VLM alias:
+
+```python
+client.load("qwen2.5-vl:3b", keep_alive="forever")
+
+response = client.chat(
+    "qwen2.5-vl:3b",
+    [{"role": "user", "content": "Return only the invoice total."}],
+    images=["./invoice.png"],
+    options={"temperature": 0.0, "num_predict": 32},
+    stream=False,
+)
+```
+
 ### Custom Service
 
 ```python
@@ -207,6 +250,7 @@ machboost list
 machboost pull qwen2.5:3b
 machboost warm qwen2.5:3b --keep-alive forever
 machboost run qwen2.5:3b --context ./docs --show-stats
+machboost run qwen2.5-vl:3b --image ./image.png --show-stats
 machboost complete qwen2.5-coder:3b --file ./prompt.txt
 machboost ps
 machboost stop qwen2.5:3b
@@ -243,11 +287,27 @@ go run ./cmd/machboost bench command -- sleep 1
 |---|---:|---:|---|
 | Hugging Face | yes | yes | native adapter, streaming server, and benchmarks exist |
 | MLX / `mlx-lm` | yes | yes | native adapter, fast text streaming, and strict evidence mode exist |
+| MLX-VLM | yes | repeated-image feature and prefix reuse | image chat, streaming, and paired benchmark exist |
 | Custom Python service | caller-owned | yes, if verifier exists | supported through `machboost(...)` |
 | External Ollama HTTP | already resident | no | compatibility wrapper and benchmarks only |
 | llama.cpp | planned | possible | needs verifier/KV hooks or patch |
 
-Protocol compatibility does not imply full feature parity. Version 0.2 does not yet provide Ollama model creation/copy/deletion, embeddings, or multimodal requests.
+Protocol compatibility does not imply full feature parity. Version 0.3 does not yet provide Ollama model creation/copy/deletion or embeddings. Image input is supported for Ollama-style chat/generate requests and OpenAI-style content parts when the selected backend is MLX-VLM.
+
+## Visual Evidence
+
+The artifact `results/vision_cache_qwen25_3b_20260714.json` contains 12 uncached and 12 accelerated requests to one resident `mlx-community/Qwen2.5-VL-3B-Instruct-4bit` instance on an Apple M1 Max. Four deterministic questions were repeated three times over a generated 1024 by 768 image. Request order alternated within each pair.
+
+- Uncached median wall time: 2.537 seconds.
+- Accelerated median wall time: 0.150 seconds.
+- Median paired wall-time speedup: 16.66x.
+- Median time-to-first-token speedup: 17.95x.
+- Paired output equality: 100%.
+- Expected-answer accuracy in both modes: 100%.
+- Projected-feature cache hit rate: 100% after the unrecorded prime.
+- Partial visual-prefix hit rate: 91.7%, with a median 1,018 matching tokens.
+
+The one accelerated row without a partial prefix hit reused projected image features only and reached 1.59x. The other 11 rows reused both cache levels and ranged from 12.10x to 20.09x. The run excludes model load from request latency and does not establish performance on changed images, first-view requests, longer answers, other VLM architectures, or video.
 
 ## Milestones
 
@@ -294,13 +354,22 @@ Next targets:
 
 ### P4: Multimodal Runtime
 
-Next product target after text-runtime hardening:
+Status: initial image path done for 0.3.
 
-- image and video request schemas
-- multimodal model capability discovery
-- image preprocessing and prompt-cache reuse
-- time-to-first-token and end-to-end visual-task benchmarks
-- exact input/output comparisons where deterministic evaluation is possible
+- image request schemas for the CLI, Python client, and local HTTP APIs
+- multimodal model alias and capability discovery
+- content-addressed projected-feature reuse
+- image-scoped visual-prefix KV reuse
+- paired time-to-first-token and end-to-end Qwen2.5-VL benchmark
+- exact output and fixture-answer comparisons under greedy decoding
+
+Remaining work:
+
+- broader VLM architecture and model-size coverage
+- concurrent-session cache isolation and load testing
+- configurable image resizing and preprocessing policies
+- video input, frame sampling, and temporal feature reuse
+- real image datasets and task-level quality metrics
 
 ## Product Principle
 
