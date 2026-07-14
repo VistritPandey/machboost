@@ -286,6 +286,61 @@ class MLXVLMAcceleratorTests(unittest.TestCase):
         self.assertNotIn("cached_image_features", options)
         self.assertEqual(self.accelerator.cache_info()["size"], 0)
 
+    def test_qwen35_uses_whole_state_checkpoint_for_prefix_reuse(self):
+        self.accelerator.model.config = {"model_type": "qwen3_5"}
+        self.accelerator._stream_generate.__module__ = "mlx_vlm.generate"
+        self.accelerator.vision_cache.put([str(self.image)], "cached-features")
+
+        mlx_package = ModuleType("mlx")
+        mlx_package.__path__ = []
+        mlx_core = ModuleType("mlx.core")
+        mlx_core.eval = lambda value: None
+        mlx_package.core = mlx_core
+        mlx_vlm_package = ModuleType("mlx_vlm")
+        mlx_vlm_package.__path__ = []
+        mlx_vlm_utils = ModuleType("mlx_vlm.utils")
+        mlx_vlm_utils.prepare_inputs = lambda *args, **kwargs: {
+            "input_ids": FakeArray([1, 2, 3]),
+            "pixel_values": object(),
+            "attention_mask": object(),
+            "image_grid_thw": object(),
+        }
+
+        def make_state():
+            state = FakePromptCacheState([1, 2])
+            state.cache = object()
+            return state
+
+        generation = SimpleNamespace(PromptCacheState=make_state)
+        apc_manager = object()
+
+        with patch.dict(
+            sys.modules,
+            {
+                "mlx": mlx_package,
+                "mlx.core": mlx_core,
+                "mlx_vlm": mlx_vlm_package,
+                "mlx_vlm.utils": mlx_vlm_utils,
+            },
+        ), patch(
+            "machboost.adapters.mlx_vlm.importlib.import_module",
+            return_value=generation,
+        ), patch.object(
+            self.accelerator,
+            "_get_apc_manager",
+            return_value=apc_manager,
+        ):
+            prepared = self.accelerator._prepare_cached_vision(
+                "prompt", [str(self.image)]
+            )
+
+        self.assertIsNotNone(prepared)
+        _, options, prefix_tokens = prepared
+        self.assertEqual(prefix_tokens, 2)
+        self.assertIs(options["apc_manager"], apc_manager)
+        self.assertIsNone(options["prompt_cache_state"].cache)
+        self.assertEqual(options["cached_image_features"], "cached-features")
+
     def test_qwen_partial_prefix_drops_untrimmed_attention_mask(self):
         self.accelerator.model.config = {"model_type": "qwen2_5_vl"}
         self.accelerator._stream_generate.__module__ = "mlx_vlm.generate"
