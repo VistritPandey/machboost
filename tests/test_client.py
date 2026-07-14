@@ -93,6 +93,41 @@ class ClientTests(unittest.TestCase):
         with self.assertRaisesRegex(MachBoostAPIError, "missing required field"):
             self.client.post("/api/chat", {"messages": []})
 
+    def test_chat_attaches_images_to_last_user_message(self):
+        messages = [
+            {"role": "user", "content": "First"},
+            {"role": "assistant", "content": "Answer"},
+            {"role": "user", "content": "What is shown?"},
+        ]
+        with patch.object(self.client, "post", return_value={"done": True}) as post:
+            response = self.client.chat(
+                "qwen2.5-vl:3b",
+                messages,
+                images=["image-a", "image-b"],
+                stream=False,
+            )
+
+        self.assertTrue(response["done"])
+        payload = post.call_args.args[1]
+        self.assertEqual(payload["messages"][2]["images"], ["image-a", "image-b"])
+        self.assertNotIn("images", messages[2])
+
+    def test_generate_forwards_images(self):
+        with patch.object(self.client, "post", return_value={"done": True}) as post:
+            self.client.generate(
+                "qwen2.5-vl:3b",
+                "Describe this.",
+                images="image-a",
+                stream=False,
+            )
+
+        payload = post.call_args.args[1]
+        self.assertEqual(payload["images"], "image-a")
+
+    def test_chat_rejects_images_without_messages(self):
+        with self.assertRaisesRegex(ValueError, "at least one"):
+            self.client.chat("qwen2.5-vl:3b", [], images=["image-a"], stream=False)
+
 
 class BootstrapTests(unittest.TestCase):
     def test_ensure_server_starts_local_daemon_and_writes_pid(self):
