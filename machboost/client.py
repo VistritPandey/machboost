@@ -155,7 +155,7 @@ class MachBoostClient:
         )
         try:
             response = urlopen(request, timeout=self.timeout)
-        except (HTTPError, URLError, TimeoutError) as exc:
+        except (HTTPError, URLError, TimeoutError, OSError) as exc:
             raise api_error(exc) from exc
         with response:
             for raw_line in response:
@@ -186,7 +186,7 @@ class MachBoostClient:
         try:
             with urlopen(request, timeout=self.timeout) as response:
                 raw = response.read().decode("utf-8")
-        except (HTTPError, URLError, TimeoutError) as exc:
+        except (HTTPError, URLError, TimeoutError, OSError) as exc:
             raise api_error(exc) from exc
         try:
             value = json.loads(raw)
