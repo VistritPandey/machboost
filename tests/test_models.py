@@ -86,6 +86,23 @@ class ModelCatalogTests(unittest.TestCase):
             },
         )
 
+    def test_sub_10b_qwen_vision_aliases_use_mlx_vlm(self):
+        expected = {
+            "qwen3-vl:2b": "mlx-community/Qwen3-VL-2B-Instruct-4bit",
+            "qwen3-vl:4b": "mlx-community/Qwen3-VL-4B-Instruct-4bit",
+            "qwen3-vl:8b": "mlx-community/Qwen3-VL-8B-Instruct-4bit",
+            "qwen3.5:0.8b": "mlx-community/Qwen3.5-0.8B-MLX-4bit",
+            "qwen3.5:4b": "mlx-community/Qwen3.5-4B-MLX-4bit",
+            "qwen3.5:9b": "mlx-community/Qwen3.5-9B-MLX-4bit",
+        }
+
+        with patch("machboost.models.native_mlx_vlm_available", return_value=True):
+            for alias, model in expected.items():
+                with self.subTest(alias=alias):
+                    resolution = resolve_model(alias)
+                    self.assertEqual(resolution.backend, "mlx-vlm")
+                    self.assertEqual(resolution.model, model)
+
 
 if __name__ == "__main__":
     unittest.main()
