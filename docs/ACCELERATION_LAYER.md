@@ -298,16 +298,16 @@ Protocol compatibility does not imply full feature parity. Version 0.3 does not 
 
 The artifact `results/vision_cache_qwen25_3b_20260714.json` contains 12 uncached and 12 accelerated requests to one resident `mlx-community/Qwen2.5-VL-3B-Instruct-4bit` instance on an Apple M1 Max. Four deterministic questions were repeated three times over a generated 1024 by 768 image. Request order alternated within each pair.
 
-- Uncached median wall time: 2.537 seconds.
-- Accelerated median wall time: 0.150 seconds.
-- Median paired wall-time speedup: 16.66x.
-- Median time-to-first-token speedup: 17.95x.
+- Uncached median wall time: 2.861 seconds.
+- Accelerated median wall time: 0.158 seconds.
+- Median paired wall-time speedup: 17.96x.
+- Median time-to-first-token speedup: 19.12x.
 - Paired output equality: 100%.
 - Expected-answer accuracy in both modes: 100%.
 - Projected-feature cache hit rate: 100% after the unrecorded prime.
 - Partial visual-prefix hit rate: 91.7%, with a median 1,018 matching tokens.
 
-The one accelerated row without a partial prefix hit reused projected image features only and reached 1.59x. The other 11 rows reused both cache levels and ranged from 12.10x to 20.09x. The run excludes model load from request latency and does not establish performance on changed images, first-view requests, longer answers, other VLM architectures, or video.
+The one accelerated row without a partial prefix hit reused projected image features only and reached 1.51x. The other 11 rows reused both cache levels and ranged from 13.83x to 19.49x. The run excludes model load from request latency and does not establish performance on changed images, first-view requests, longer answers, other VLM architectures, or video.
 
 ## Milestones
 
