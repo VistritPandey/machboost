@@ -24,8 +24,10 @@ class VisionBenchmarkTests(unittest.TestCase):
                         "client_ttft_seconds": 2.5 + repeat,
                         "prompt_tokens_per_second": 100.0,
                         "paired_output_equal": True,
+                        "paired_total_speedup": 3.0,
                         "expected_match": True,
                         "visual_cache_hit": False,
+                        "prompt_cache_prefix_tokens": 0,
                     },
                     {
                         "mode": "cached",
@@ -33,8 +35,10 @@ class VisionBenchmarkTests(unittest.TestCase):
                         "client_ttft_seconds": 0.5 + repeat,
                         "prompt_tokens_per_second": 400.0,
                         "paired_output_equal": True,
+                        "paired_total_speedup": 3.0,
                         "expected_match": True,
                         "visual_cache_hit": True,
+                        "prompt_cache_prefix_tokens": 900,
                     },
                 ]
             )
@@ -43,9 +47,12 @@ class VisionBenchmarkTests(unittest.TestCase):
 
         self.assertEqual(summary["rows_per_mode"], 2)
         self.assertGreater(summary["median_total_speedup"], 2.0)
+        self.assertEqual(summary["median_paired_total_speedup"], 3.0)
         self.assertGreaterEqual(summary["median_ttft_speedup"], 3.0)
         self.assertEqual(summary["paired_output_equal_rate"], 1.0)
         self.assertEqual(summary["cached_hit_rate"], 1.0)
+        self.assertEqual(summary["cached_prompt_prefix_hit_rate"], 1.0)
+        self.assertEqual(summary["cached_median_prompt_prefix_tokens"], 900)
 
     def test_generated_fixture_is_a_nonempty_png(self):
         with tempfile.TemporaryDirectory() as directory:
