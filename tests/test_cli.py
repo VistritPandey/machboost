@@ -305,6 +305,10 @@ class CLITests(unittest.TestCase):
                         "--no-vision-cache",
                         "--vision-cache-size",
                         "7",
+                        "--cold-vision",
+                        "adaptive",
+                        "--vision-max-edge",
+                        "512",
                         "--show-stats",
                     ]
                 ),
@@ -317,7 +321,10 @@ class CLITests(unittest.TestCase):
         self.assertEqual(client.chat_calls[0][5], ["fixture.png"])
         self.assertTrue(client.chat_calls[0][2]["no_vision_cache"])
         self.assertEqual(client.chat_calls[0][2]["vision_cache_size"], 7)
+        self.assertEqual(client.chat_calls[0][2]["cold_vision"], "adaptive")
+        self.assertEqual(client.chat_calls[0][2]["vision_max_edge"], 512)
         self.assertIn("vision_cache=off", output.getvalue())
+        self.assertIn("cold_vision=adaptive:512px", output.getvalue())
 
     def test_visual_chat_can_attach_image_interactively(self):
         output = io.StringIO()
@@ -421,6 +428,12 @@ class FakeResidentClient:
                 visual_cache_hit=False,
                 visual_cache_miss=not options.get("no_vision_cache", False),
             )
+            if options.get("cold_vision") != "off":
+                stats["cold_vision"] = {
+                    "enabled": True,
+                    "mode": options["cold_vision"],
+                    "target_max_edge": options.get("vision_max_edge") or 512,
+                }
         return iter(
             [
                 {"message": {"content": "resident "}, "done": False},
