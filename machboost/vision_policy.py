@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Optional, Sequence
@@ -7,6 +8,7 @@ from typing import Any, Optional, Sequence
 
 _STRUCTURED_DETAIL_TERMS = (
     "bar graph",
+    "bar",
     "chart",
     "difference",
     "graph",
@@ -18,6 +20,21 @@ _STRUCTURED_DETAIL_TERMS = (
     "sum of",
     "table",
     "value",
+)
+
+_PRECISION_DETAIL_TERMS = (
+    "axis",
+    "credit",
+    "far left",
+    "far right",
+    "farthest",
+    "fine print",
+    "legend",
+    "line",
+    "peak",
+    "photographer",
+    "serial number",
+    "tiny",
 )
 
 _TEXT_DETAIL_TERMS = (
@@ -154,9 +171,11 @@ def _disabled_decision(mode: str, reason: str) -> ColdVisionDecision:
 
 def _question_class(prompt: str) -> str:
     normalized = " ".join(str(prompt).lower().split())
-    if any(term in normalized for term in _STRUCTURED_DETAIL_TERMS):
+    if _contains_term(normalized, _STRUCTURED_DETAIL_TERMS):
         return "structured-detail"
-    if any(term in normalized for term in _TEXT_DETAIL_TERMS):
+    if _contains_term(normalized, _PRECISION_DETAIL_TERMS):
+        return "precision-detail"
+    if _contains_term(normalized, _TEXT_DETAIL_TERMS):
         return "text-detail"
     return "general"
 
@@ -168,15 +187,23 @@ def _adaptive_target(
     edge_density: float,
 ) -> tuple[int, str]:
     simple_layout = entropy < 0.32 and edge_density < 0.14
-    if simple_layout and question_class != "structured-detail":
+    if simple_layout and question_class not in {"structured-detail", "precision-detail"}:
         return 336, "simple low-entropy layout permits a compact visual pass"
-    if question_class == "structured-detail":
-        return 672, "structured visual reasoning retains a larger detail budget"
+    if question_class in {"structured-detail", "precision-detail"}:
+        return 672, "precision-sensitive visual reasoning retains a larger detail budget"
     if question_class == "text-detail":
         return 512, "text-oriented question uses a medium visual detail budget"
     if entropy >= 0.75:
         return 512, "high-entropy image uses a medium visual detail budget"
     return 448, "general first-view request uses a balanced visual detail budget"
+
+
+def _contains_term(normalized: str, terms: Sequence[str]) -> bool:
+    for term in terms:
+        escaped = re.escape(term).replace(r"\ ", r"\s+")
+        if re.search(rf"(?<!\w){escaped}(?!\w)", normalized) is not None:
+            return True
+    return False
 
 
 def _inspect_image(path: str) -> ImageDetail:
