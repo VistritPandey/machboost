@@ -57,6 +57,7 @@ class FakeVisionAccelerator:
         self.chat_calls = []
         self.generate_calls = []
         self.cold_vision_calls = []
+        self.vision_token_calls = []
         self.cache_hits = 0
 
     def generate_chat(
@@ -70,9 +71,12 @@ class FakeVisionAccelerator:
         temperature=0.0,
         cold_vision_mode="off",
         cold_vision_max_edge=None,
+        vision_token_mode="off",
+        vision_token_ratio=0.35,
     ):
         self.chat_calls.append((messages, max_tokens, use_vision_cache, temperature))
         self.cold_vision_calls.append((cold_vision_mode, cold_vision_max_edge))
+        self.vision_token_calls.append((vision_token_mode, vision_token_ratio))
         if use_vision_cache and len(self.chat_calls) > 1:
             self.cache_hits += 1
         if on_text is not None:
@@ -91,9 +95,12 @@ class FakeVisionAccelerator:
         temperature=0.0,
         cold_vision_mode="off",
         cold_vision_max_edge=None,
+        vision_token_mode="off",
+        vision_token_ratio=0.35,
     ):
         self.generate_calls.append((prompt, tuple(images or ()), use_vision_cache))
         self.cold_vision_calls.append((cold_vision_mode, cold_vision_max_edge))
+        self.vision_token_calls.append((vision_token_mode, vision_token_ratio))
         if on_text is not None:
             on_text("visual completion")
         return "visual completion", FakeStats(generated_tokens=2)
@@ -394,6 +401,26 @@ class HTTPServerTests(unittest.TestCase):
         )
 
         self.assertEqual(self.loaded[0][1].cold_vision_calls[0], ("adaptive", 512))
+
+    def test_ollama_generate_forwards_post_fusion_vision_options(self):
+        self.request(
+            "/api/generate",
+            {
+                "model": "qwen3-vl:8b",
+                "prompt": "Read the label.",
+                "images": ["image-one"],
+                "stream": False,
+                "options": {
+                    "vision_tokens": "adaptive",
+                    "vision_token_ratio": 0.35,
+                },
+            },
+        )
+
+        self.assertEqual(
+            self.loaded[0][1].vision_token_calls[0],
+            ("adaptive", 0.35),
+        )
 
     def test_text_backend_rejects_image_payload(self):
         with self.assertRaises(HTTPError) as raised:
