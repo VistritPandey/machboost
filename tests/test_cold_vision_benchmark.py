@@ -55,6 +55,10 @@ class ColdVisionBenchmarkTests(unittest.TestCase):
                         "enabled": True,
                         "target_max_edge": 512 if index else 672,
                     },
+                    "post_fusion_vision": {
+                        "enabled": True,
+                        "actual_visual_retention_ratio": 0.35,
+                    },
                 }
             )
 
@@ -72,6 +76,8 @@ class ColdVisionBenchmarkTests(unittest.TestCase):
         self.assertEqual(summary["cache_hit_count"], 0)
         self.assertEqual(summary["verification_fallback_rate"], 0.0)
         self.assertEqual(summary["first_pass_expected_match_rate"], 1.0)
+        self.assertEqual(summary["post_fusion_enabled_rate"], 1.0)
+        self.assertEqual(summary["median_actual_visual_retention_ratio"], 0.35)
         self.assertEqual(summary["datasets"]["chartqa"]["pairs"], 1)
 
     def test_confidence_gate_replays_uncertain_first_pass(self) -> None:
