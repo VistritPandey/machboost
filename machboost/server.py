@@ -200,6 +200,8 @@ class RuntimeManager:
                     temperature=float(options.get("temperature", 0.0)),
                     cold_vision_mode=str(options.get("cold_vision", "off")),
                     cold_vision_max_edge=_optional_int(options.get("vision_max_edge")),
+                    vision_token_mode=str(options.get("vision_tokens", "off")),
+                    vision_token_ratio=float(options.get("vision_token_ratio", 0.35)),
                 )
             else:
                 if messages_have_images(messages):
@@ -248,6 +250,8 @@ class RuntimeManager:
                     temperature=float(options.get("temperature", 0.0)),
                     cold_vision_mode=str(options.get("cold_vision", "off")),
                     cold_vision_max_edge=_optional_int(options.get("vision_max_edge")),
+                    vision_token_mode=str(options.get("vision_tokens", "off")),
+                    vision_token_ratio=float(options.get("vision_token_ratio", 0.35)),
                 )
             else:
                 if images:
