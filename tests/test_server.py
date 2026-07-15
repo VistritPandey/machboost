@@ -56,6 +56,7 @@ class FakeVisionAccelerator:
     def __init__(self) -> None:
         self.chat_calls = []
         self.generate_calls = []
+        self.cold_vision_calls = []
         self.cache_hits = 0
 
     def generate_chat(
@@ -67,8 +68,11 @@ class FakeVisionAccelerator:
         on_text=None,
         use_vision_cache=True,
         temperature=0.0,
+        cold_vision_mode="off",
+        cold_vision_max_edge=None,
     ):
         self.chat_calls.append((messages, max_tokens, use_vision_cache, temperature))
+        self.cold_vision_calls.append((cold_vision_mode, cold_vision_max_edge))
         if use_vision_cache and len(self.chat_calls) > 1:
             self.cache_hits += 1
         if on_text is not None:
@@ -85,8 +89,11 @@ class FakeVisionAccelerator:
         images=None,
         use_vision_cache=True,
         temperature=0.0,
+        cold_vision_mode="off",
+        cold_vision_max_edge=None,
     ):
         self.generate_calls.append((prompt, tuple(images or ()), use_vision_cache))
+        self.cold_vision_calls.append((cold_vision_mode, cold_vision_max_edge))
         if on_text is not None:
             on_text("visual completion")
         return "visual completion", FakeStats(generated_tokens=2)
@@ -370,6 +377,23 @@ class HTTPServerTests(unittest.TestCase):
 
         self.assertEqual(json.loads(body)["response"], "visual completion")
         self.assertEqual(self.loaded[0][1].generate_calls[0], ("Describe this.", ("image-one",), False))
+
+    def test_ollama_generate_forwards_cold_vision_options(self):
+        self.request(
+            "/api/generate",
+            {
+                "model": "qwen2.5-vl:3b",
+                "prompt": "Read the label.",
+                "images": ["image-one"],
+                "stream": False,
+                "options": {
+                    "cold_vision": "adaptive",
+                    "vision_max_edge": 512,
+                },
+            },
+        )
+
+        self.assertEqual(self.loaded[0][1].cold_vision_calls[0], ("adaptive", 512))
 
     def test_text_backend_rejects_image_payload(self):
         with self.assertRaises(HTTPError) as raised:
