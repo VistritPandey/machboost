@@ -20,6 +20,16 @@ class FakeGenerationRow:
     prompt_tps: float = 80.0
     generation_tps: float = 40.0
     peak_memory: float = 1.5
+    token: int | None = None
+    logprobs: object | None = None
+
+
+class FakeScalar:
+    def __init__(self, value: float) -> None:
+        self.value = value
+
+    def item(self) -> float:
+        return self.value
 
 
 class FakeModel:
@@ -139,6 +149,33 @@ class MLXVLMAcceleratorTests(unittest.TestCase):
         self.assertEqual(stats.prompt_cache_prefix_tokens, 0)
         self.assertEqual(stats.cold_vision["mode"], "off")
         self.assertFalse(stats.cold_vision["enabled"])
+        self.assertIsNone(stats.mean_token_logprob)
+        self.assertIsNone(stats.minimum_token_logprob)
+
+    def test_reports_selected_token_logprob_without_counting_final_row_twice(self):
+        def confidence_stream(model, processor, prompt, **kwargs):
+            first = [FakeScalar(-9.0), FakeScalar(-0.2)]
+            second = [FakeScalar(-0.7), FakeScalar(-8.0)]
+            yield FakeGenerationRow("A", generation_tokens=1, token=1, logprobs=first)
+            yield FakeGenerationRow("B", generation_tokens=2, token=0, logprobs=second)
+            yield FakeGenerationRow("", generation_tokens=2, token=0, logprobs=second)
+
+        accelerator = MLXVLMAccelerator(
+            FakeModel(),
+            object(),
+            model_name="fake-vlm",
+            asset_cache_dir=self.root / "confidence-assets",
+            stream_generate_fn=confidence_stream,
+            apply_chat_template_fn=lambda *args, **kwargs: "templated prompt",
+        )
+        try:
+            text, stats = accelerator.generate("test", max_tokens=2)
+        finally:
+            accelerator.close()
+
+        self.assertEqual(text, "AB")
+        self.assertAlmostEqual(stats.mean_token_logprob, -0.45)
+        self.assertAlmostEqual(stats.minimum_token_logprob, -0.7)
 
     def test_cold_vision_resize_reaches_native_stream_and_stats(self):
         decision = ColdVisionDecision(
