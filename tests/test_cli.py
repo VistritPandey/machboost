@@ -344,6 +344,35 @@ class CLITests(unittest.TestCase):
         self.assertEqual(client.chat_calls[0][5], ["first.png", "second.png"])
         self.assertIn("images cleared", output.getvalue())
 
+    def test_resident_visual_chat_forwards_post_fusion_options(self):
+        output = io.StringIO()
+        prompts = iter(["Read this.", "/bye"])
+        client = FakeResidentClient()
+
+        with patch.object(cli, "connect_resident", return_value=client):
+            code = cli.run_resident_chat(
+                cli.build_parser().parse_args(
+                    [
+                        "run",
+                        "qwen3-vl:8b",
+                        "--image",
+                        "fixture.png",
+                        "--vision-tokens",
+                        "adaptive",
+                        "--vision-token-ratio",
+                        "0.35",
+                        "--show-stats",
+                    ]
+                ),
+                input_func=lambda prompt: next(prompts),
+                output_stream=output,
+            )
+
+        self.assertEqual(code, 0)
+        self.assertEqual(client.chat_calls[0][2]["vision_tokens"], "adaptive")
+        self.assertEqual(client.chat_calls[0][2]["vision_token_ratio"], 0.35)
+        self.assertIn("vision_tokens=adaptive:35%", output.getvalue())
+
     def test_visual_completion_forwards_image(self):
         output = io.StringIO()
         client = FakeResidentClient()
@@ -433,6 +462,14 @@ class FakeResidentClient:
                     "enabled": True,
                     "mode": options["cold_vision"],
                     "target_max_edge": options.get("vision_max_edge") or 512,
+                }
+            if options.get("vision_tokens") != "off":
+                stats["post_fusion_vision"] = {
+                    "enabled": True,
+                    "mode": options["vision_tokens"],
+                    "actual_visual_retention_ratio": options.get(
+                        "vision_token_ratio", 0.35
+                    ),
                 }
         return iter(
             [
