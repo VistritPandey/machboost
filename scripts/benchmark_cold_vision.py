@@ -45,6 +45,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--samples-per-dataset", type=int, default=10)
     parser.add_argument("--cold-mode", choices=["adaptive", "fast", "balanced", "quality"], default="adaptive")
     parser.add_argument("--vision-max-edge", type=int)
+    parser.add_argument(
+        "--confidence-threshold",
+        type=float,
+        help="Replay uncertain accelerated answers at full resolution below this mean token log-probability.",
+    )
     parser.add_argument("--max-tokens", type=int, default=16)
     parser.add_argument("--endpoint")
     parser.add_argument("--timeout", type=float, default=1800.0)
@@ -117,6 +122,15 @@ def main() -> None:
                 max_tokens=args.max_tokens,
                 vision_max_edge=None if mode == "baseline" else args.vision_max_edge,
             )
+            if mode == "accelerated" and args.confidence_threshold is not None:
+                row = verify_uncertain_request(
+                    client,
+                    args.model,
+                    sample,
+                    first_pass=row,
+                    confidence_threshold=args.confidence_threshold,
+                    max_tokens=args.max_tokens,
+                )
             pair[mode] = row
             rows.append(row)
 
@@ -150,6 +164,7 @@ def main() -> None:
         "max_tokens": args.max_tokens,
         "cold_mode": args.cold_mode,
         "vision_max_edge": args.vision_max_edge,
+        "confidence_threshold": args.confidence_threshold,
         "server_started": server_started,
         "load_duration_seconds": loaded["load_duration_seconds"],
         "warmup_policy": "one held-out unique image per dataset and mode; warm-up rows excluded",
@@ -303,6 +318,67 @@ def run_request(
     }
 
 
+def verify_uncertain_request(
+    client: MachBoostClient,
+    model: str,
+    sample: Sample,
+    *,
+    first_pass: dict[str, Any],
+    confidence_threshold: float,
+    max_tokens: int,
+) -> dict[str, Any]:
+    confidence = first_pass.get("mean_token_logprob")
+    should_fallback = confidence is None or float(confidence) < confidence_threshold
+    verification = {
+        "enabled": True,
+        "confidence_threshold": confidence_threshold,
+        "fallback": should_fallback,
+        "first_pass_output": first_pass["output"],
+        "first_pass_expected_match": first_pass["expected_match"],
+        "first_pass_total_seconds": first_pass["client_total_seconds"],
+        "first_pass_ttft_seconds": first_pass["client_ttft_seconds"],
+        "first_pass_mean_token_logprob": confidence,
+        "first_pass_minimum_token_logprob": first_pass.get("minimum_token_logprob"),
+    }
+    if not should_fallback:
+        return {**first_pass, "verification": verification}
+
+    fallback = run_request(
+        client,
+        model,
+        sample,
+        mode="fallback",
+        cold_mode="off",
+        max_tokens=max_tokens,
+        vision_max_edge=None,
+    )
+    verification.update(
+        {
+            "fallback_output": fallback["output"],
+            "fallback_expected_match": fallback["expected_match"],
+            "fallback_total_seconds": fallback["client_total_seconds"],
+            "fallback_ttft_seconds": fallback["client_ttft_seconds"],
+        }
+    )
+    return {
+        **fallback,
+        "mode": "accelerated",
+        "client_total_seconds": (
+            first_pass["client_total_seconds"] + fallback["client_total_seconds"]
+        ),
+        "client_ttft_seconds": (
+            first_pass["client_total_seconds"] + fallback["client_ttft_seconds"]
+        ),
+        "server_total_seconds": (
+            first_pass["server_total_seconds"] + fallback["server_total_seconds"]
+        ),
+        "generated_tokens": first_pass["generated_tokens"] + fallback["generated_tokens"],
+        "prompt_tokens": first_pass["prompt_tokens"] + fallback["prompt_tokens"],
+        "cold_vision": first_pass["cold_vision"],
+        "verification": verification,
+    }
+
+
 def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
     baseline = [row for row in rows if row["mode"] == "baseline"]
     accelerated = [row for row in rows if row["mode"] == "accelerated"]
@@ -315,6 +391,7 @@ def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
     baseline_tokens = statistics.median(row["prompt_tokens"] for row in baseline)
     accelerated_tokens = statistics.median(row["prompt_tokens"] for row in accelerated)
     decisions = [row.get("cold_vision") or {} for row in accelerated]
+    verifications = [row.get("verification") or {} for row in accelerated]
     return {
         "pairs": len(accelerated),
         "unique_images": len({row["image_digest"] for row in accelerated}),
@@ -348,6 +425,13 @@ def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
         ),
         "cache_hit_count": sum(
             row["visual_cache_hit"] or row["prompt_cache_prefix_tokens"] > 0 for row in rows
+        ),
+        "verification_fallback_rate": _rate(
+            verification.get("fallback", False) for verification in verifications
+        ),
+        "first_pass_expected_match_rate": _rate(
+            verification.get("first_pass_expected_match", row["expected_match"])
+            for row, verification in zip(accelerated, verifications)
         ),
         "datasets": {
             dataset: _dataset_summary(rows, dataset)
