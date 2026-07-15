@@ -216,6 +216,44 @@ class MLXVLMAcceleratorTests(unittest.TestCase):
         self.assertTrue(stats.cold_vision["enabled"])
         self.assertEqual(stats.cold_vision["target_max_edge"], 512)
 
+    def test_post_fusion_mode_disables_request_cache_and_reports_stats(self):
+        post_fusion = SimpleNamespace(
+            mode="adaptive",
+            info=lambda: {
+                "mode": "adaptive",
+                "enabled": True,
+                "requested_retention_ratio": 0.35,
+                "prune_after_layer": 3,
+                "original_sequence_tokens": 700,
+                "retained_sequence_tokens": 300,
+                "original_visual_tokens": 640,
+                "retained_visual_tokens": 224,
+                "actual_visual_retention_ratio": 0.35,
+            },
+        )
+
+        with patch(
+            "machboost.adapters.mlx_vlm.configure_post_fusion_vision",
+            return_value=post_fusion,
+        ) as configure:
+            _, stats = self.accelerator.generate(
+                "Read the image.",
+                images=[str(self.image)],
+                max_tokens=8,
+                vision_token_mode="adaptive",
+                vision_token_ratio=0.35,
+            )
+
+        configure.assert_called_once_with(
+            self.accelerator.model,
+            mode="adaptive",
+            retain_ratio=0.35,
+        )
+        self.assertFalse(stats.visual_cache_enabled)
+        self.assertFalse(stats.prompt_cache_enabled)
+        self.assertEqual(stats.post_fusion_vision["retained_visual_tokens"], 224)
+        self.assertNotIn("vision_cache", self.stream.calls[-1]["kwargs"])
+
     def test_chat_template_receives_history_and_image_count(self):
         messages = [
             {"role": "user", "content": "First question"},
