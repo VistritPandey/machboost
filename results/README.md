@@ -2,6 +2,36 @@
 
 This directory stores public benchmark artifacts for MachBoost text and visual acceleration paths.
 
+## Cross-Model Qwen Vision Matrix, July 14-15 2026
+
+Aggregate artifact: `vision_cache_qwen_matrix_20260714.json`
+
+Raw artifacts: `vision_cache_qwen3vl_{2b,4b,8b}_20260714.json` and `vision_cache_qwen35_{08b,4b,9b}_20260714.json`
+
+All six runs use the same Apple M1 Max, generated 1024 by 768 image, four extraction prompts, three repeats, 16-token limit, greedy decoding, and one resident MLX-VLM instance at a time. Each pair compares visual caching disabled with MachBoost enabled. Pair order alternates by repeat; model download and load are excluded from request timings.
+
+| Variant | Official total | Cache path | Baseline median | Accelerated median | Paired median | TTFT ratio | Exact output | Task accuracy |
+|---|---:|---|---:|---:|---:|---:|---:|---:|
+| Qwen3-VL 2B | 2B | visual prompt state | 1.524s | 0.132s | 11.41x | 12.23x | 100% | 100% |
+| Qwen3-VL 4B | 4B | visual prompt state | 2.743s | 0.214s | 12.73x | 13.32x | 100% | 100% |
+| Qwen3-VL 8B | 9B | visual prompt state | 5.152s | 0.307s | 16.69x | 17.30x | 100% | 100% |
+| Qwen3.5 0.8B | 0.9B | projected features + hybrid checkpoint | 0.656s | 0.125s | 5.14x | 5.48x | 75% | 100% |
+| Qwen3.5 4B | 5B | projected features + hybrid checkpoint | 3.199s | 0.203s | 14.29x | 16.43x | 100% | 100% |
+| Qwen3.5 9B | 10B | projected features + hybrid checkpoint | 5.572s | 0.311s | 17.44x | 18.82x | 100% | 100% |
+
+Across 72 pairs, the median of the six model-level paired medians is 13.51x. Both modes answer every fixture correctly. Literal equality is 95.83%; the three mismatches are all Qwen3.5 0.8B returning the same `BLUE SQUARE` answer with or without a semicolon inside a JSON fence.
+
+Qwen3-VL does not use projected-feature caching in these runs. Its vision tower returns deep-stack tensors that the current cached-feature interface cannot preserve, so MachBoost keeps the safe full prompt-state path. The three Qwen3-VL rows without a reusable prefix have a 0.99x median. The other 33 Qwen3-VL rows and all 36 Qwen3.5 rows reuse a 776-token visual prefix. Qwen3.5 uses a whole-state checkpoint because its language model interleaves ordinary KV layers with recurrent linear-attention state; trimming only K/V changed answers in a rejected smoke run.
+
+Qwen3.6 is not measured under this matrix's small-model constraint. The official collection currently contains 27B (28B total) and 35B-A3B (36B total, 3B active) variants. Quantized file size and active MoE parameters do not make either model a sub-10B total-parameter model.
+
+Recreate the aggregate after running the six per-model benchmarks:
+
+```sh
+python3 scripts/summarize_vision_matrix.py results/local/vision_cache_*.json \
+  --output results/local/vision_cache_matrix.json
+```
+
 ## Repeated-Image VLM Evidence, July 14 2026
 
 Artifact: `vision_cache_qwen25_3b_20260714.json`
