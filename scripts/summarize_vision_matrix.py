@@ -180,7 +180,7 @@ def summarize_model(artifact: dict[str, Any]) -> dict[str, Any]:
         "median_reusable_prefix_speedup": statistics.median(
             row["paired_total_speedup"] for row in reusable
         ),
-        "median_no_prefix_speedup": statistics.median(
+        "median_no_prefix_speedup": optional_median(
             row["paired_total_speedup"] for row in no_prefix
         ),
         "baseline_expected_match_rate": summary["baseline_expected_match_rate"],
@@ -195,6 +195,11 @@ def summarize_model(artifact: dict[str, Any]) -> dict[str, Any]:
 def rate(rows: list[dict[str, Any]], mode: str, key: str) -> float:
     selected = [row for row in rows if row["mode"] == mode]
     return sum(bool(row[key]) for row in selected) / len(selected)
+
+
+def optional_median(values: Any) -> float | None:
+    collected = list(values)
+    return statistics.median(collected) if collected else None
 
 
 def size_key(label: str) -> float:
