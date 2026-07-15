@@ -73,6 +73,23 @@ class ColdVisionPolicyTests(unittest.TestCase):
         self.assertEqual(decision.target_max_edge, 672)
         self.assertEqual(decision.question_class, "structured-detail")
 
+    def test_precision_terms_keep_detail_without_substring_collisions(self) -> None:
+        photographer = choose_cold_vision(
+            "Who was the photographer?",
+            [str(self.simple)],
+            mode="adaptive",
+        )
+        biography = choose_cold_vision(
+            "Summarize the biography.",
+            [str(self.simple)],
+            mode="adaptive",
+        )
+
+        self.assertEqual(photographer.question_class, "precision-detail")
+        self.assertEqual(photographer.target_max_edge, 672)
+        self.assertEqual(biography.question_class, "general")
+        self.assertEqual(biography.target_max_edge, 336)
+
     def test_policy_never_upscales_small_images(self) -> None:
         decision = choose_cold_vision(
             "Read the label.",
