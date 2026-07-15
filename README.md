@@ -3,7 +3,7 @@
 [![CI](https://github.com/VistritPandey/machboost/actions/workflows/ci.yml/badge.svg)](https://github.com/VistritPandey/machboost/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-MachBoost is an experimental resident local-inference server and Python package for MLX, MLX-VLM, and Hugging Face models. It provides an Ollama-like model workflow, keeps models warm between requests, streams text and visual chat, and applies backend-specific acceleration when a request contains reusable work.
+MachBoost is an experimental resident local-inference server and Python package for MLX, MLX-VLM, and Hugging Face models. It provides an Ollama-like model workflow, keeps models warm between requests, streams text and visual chat, and applies backend-specific acceleration when a request contains reusable work. An opt-in Qwen3-VL path also reduces first-view visual prefill by compressing visual hidden states after the model's early fusion layers.
 
 For text, it drafts candidate tokens from nearby prompts, retrieved chunks, repo files, policies, configs, and docs, then verifies them with the target model. For repeated-image VLM requests, it uses architecture-aware caches: Qwen2.5-VL and Qwen3.5 can reuse projected vision features, while Qwen3-VL conservatively reuses only complete visual prompt state. Qwen3.5's hybrid recurrent/attention state is restored from whole-prefix checkpoints rather than an unsafe KV-only trim. None of these paths changes model weights.
 
@@ -118,6 +118,22 @@ print(response["message"]["content"])
 
 Image reuse is content-addressed: changing the file bytes creates a new cache identity. Set `--no-vision-cache` or `options={"no_vision_cache": True}` for an uncached control. This optimization targets repeated questions over the same image; the first image request still performs normal vision encoding and prefill. Cache capabilities are model-specific, and MachBoost disables projected-feature reuse when a model requires additional visual tensors that cannot be cached safely.
 
+### Experimental First-View Acceleration
+
+Qwen3-VL can opt into adaptive post-fusion visual-token compression for a new image and question:
+
+```sh
+machboost run qwen3-vl:8b \
+  --image ./document.png \
+  --vision-tokens adaptive \
+  --vision-token-ratio 0.35 \
+  --show-stats
+```
+
+The image still passes through the full-resolution vision encoder. Qwen3-VL then processes every visual token through its three early language layers and required deep-stack injections. MachBoost groups the resulting visual states spatially, preserves the highest-variance groups, merges the rest with query-weighted pooling, and sends the shorter sequence through the remaining language layers. The request bypasses visual and prompt caches, so the reported gain is independent of prior images or prompts.
+
+This path is approximate and disabled by default. It currently supports batch-one Qwen3-VL requests only, cannot be combined with `--cold-vision`, and can change wording or answers. On a 10-image TextVQA pilot with Qwen3-VL 8B, 35% visual retention produced a 1.67x aggregate wall-time speedup and 1.70x median paired speedup. Baseline and compressed paths each matched the dataset answer on 8 of 10 questions; normalized outputs were equal on 7 of 10. A 30% follow-up retained the same task score but was slower, so 35% remains the measured profile rather than assuming that more pruning is always better.
+
 Use the high-level `Accelerator` when you want MachBoost to load a model and build the draft corpus from strings, files, or directories. Calibrate before enabling the boosted path for a workflow:
 
 ```python
@@ -220,6 +236,7 @@ MachBoost is most useful when the model is likely to continue with text already 
 - RAG answers that quote retrieved context
 - repeated logs, templates, checklists, and structured artifacts
 - repeated extraction, QA, or agent turns over the same image
+- short Qwen3-VL first-view requests where visual prefill dominates and approximate token merging is acceptable
 
 It is usually neutral or slower for open-ended creative writing, one-word answers, and prompts where the next tokens are not recoverable from local context. The package exposes benchmark and calibration APIs so applications can turn the boosted path on only when it helps.
 
@@ -271,6 +288,7 @@ machboost run Qwen/Qwen2.5-3B-Instruct --backend hf --dtype float16 --show-stats
 machboost run Qwen/Qwen2.5-3B-Instruct --backend hf --local-files-only
 machboost run mlx-community/Qwen3.5-0.8B-MLX-4bit --backend mlx --strict
 machboost run mlx-community/Qwen2.5-3B-Instruct-4bit --backend mlx --context ./docs --ngram 1 --reentry-probe-tokens 1
+machboost run qwen3-vl:8b --image ./document.png --vision-tokens adaptive --vision-token-ratio 0.35 --show-stats
 ```
 
 `--reentry-probe-tokens` is experimental and disabled by default. `--direct` restores the one-process behavior for debugging. On Apple Silicon, a short alias prefers the MLX 4-bit model; explicit Hugging Face models default to `--device auto --dtype auto`, which selects MPS with float16 when available.
@@ -317,7 +335,7 @@ The Go CLI is useful for local systems experiments. The Python package is the pr
 | Backend | Status | Notes |
 |---|---|---|
 | MLX / `mlx-lm` | native adapter | Best Mac-first path. Strict evidence mode can disable prompt cache for clean exactness checks. |
-| MLX-VLM | native visual adapter | Uses model-safe projected-feature and/or full visual-prefix reuse for repeated questions over unchanged images. |
+| MLX-VLM | native visual adapter | Uses model-safe cache reuse for unchanged images and opt-in post-fusion compression for uncached Qwen3-VL requests. |
 | Hugging Face Transformers | native adapter | Useful for research and broad model coverage. |
 | MachBoost resident server | native control plane | Keeps MLX/HF models warm and exposes Ollama/OpenAI-compatible streaming APIs. |
 | Custom Python service | native if verifier exists | Implement `next_token`, `verify`, `encode`, and `decode` as needed. |
@@ -339,6 +357,7 @@ Public benchmark artifacts live in [results](results/), with a summary in [resul
 | `vision_cache_qwen35_08b_20260714.json` | `mlx-community/Qwen3.5-0.8B-MLX-4bit` | same | 12 | 75% | 5.14x |
 | `vision_cache_qwen35_4b_20260714.json` | `mlx-community/Qwen3.5-4B-MLX-4bit` | same | 12 | 100% | 14.29x |
 | `vision_cache_qwen35_9b_20260714.json` | `mlx-community/Qwen3.5-9B-MLX-4bit` | same | 12 | 100% | 17.44x |
+| `cold_vision_qwen3vl_8b_postfusion_20260715.json` | `mlx-community/Qwen3-VL-8B-Instruct-4bit` | unique-image TextVQA, 35% visual retention | 10 | 70% normalized output equality; 80%/80% task match | 1.70x |
 
 Resident-server latency is tracked separately in `resident_qwen25_3b_20260713.json`. On the same M1 Max, five warm forced 64-token requests reached a 0.657-second median wall time and 97.5 end-to-end tok/s. Five short streaming chats reached a 0.298-second median time to first text and 0.358-second median total latency. These requests used native fallback with zero accepted draft tokens, so they measure warm serving rather than the context speculation algorithm.
 
@@ -346,7 +365,9 @@ The default code path accepted a median 51 of 64 tokens and reduced logical targ
 
 The visual artifact compares 12 uncached requests with 12 accelerated requests on the same resident Qwen2.5-VL 3B model. Median wall time fell from 2.818 seconds uncached to 0.152 seconds on the accelerated path; median paired speedup was 18.33x and median TTFT speedup was 19.45x. All paired outputs and expected fixture answers matched. Eleven of 12 accelerated rows reused a 1,018-token visual prefix. The remaining row deliberately repeated the priming prompt, so it only reused projected image features and reached 1.33x. These are warm repeated-image results on one machine and model, not a claim about first-view latency, decode throughput, changed images, or arbitrary visual workloads.
 
-The cross-model artifact `vision_cache_qwen_matrix_20260714.json` applies the same image, prompts, resident-process policy, generation settings, and alternating pair order to six Qwen models. Across 72 pairs, both modes answer every fixture correctly. The median of the six model-level paired medians is 13.51x, ranging from 5.14x to 17.44x. Literal output equality is 95.83%: the only drift is three Qwen3.5 0.8B rows that differ by a semicolon inside a JSON fence while returning the same expected answer. The median reusable-prefix pair is 12.96x. Qwen3-VL's three genuine no-prefix controls have a 0.99x median, confirming that this path does not improve first-view work. Every Qwen3.5 row uses a guarded whole-state checkpoint, including the repeated priming prompt. Qwen3.6 is excluded because its official releases are 28B and 36B total parameters. Variant names are not always total multimodal size: Qwen3-VL-8B is listed as 9B total and Qwen3.5-9B as 10B total.
+The cross-model artifact `vision_cache_qwen_matrix_20260714.json` applies the same image, prompts, resident-process policy, generation settings, and alternating pair order to six Qwen models. Across 72 pairs, both modes answer every fixture correctly. The median of the six model-level paired medians is 13.51x, ranging from 5.14x to 17.44x. Literal output equality is 95.83%: the only drift is three Qwen3.5 0.8B rows that differ by a semicolon inside a JSON fence while returning the same expected answer. The median reusable-prefix pair is 12.96x. Qwen3-VL's three genuine no-prefix cache controls have a 0.99x median, confirming that cache reuse alone does not improve first-view work. Every Qwen3.5 row uses a guarded whole-state checkpoint, including the repeated priming prompt. Qwen3.6 is excluded because its official releases are 28B and 36B total parameters. Variant names are not always total multimodal size: Qwen3-VL-8B is listed as 9B total and Qwen3.5-9B as 10B total.
+
+The first-view artifact `cold_vision_qwen3vl_8b_postfusion_20260715.json` instead uses 10 unique public TextVQA images, disables both visual and prompt caches, alternates pair order, and excludes a held-out warm-up. Adaptive post-fusion compression retains a median 35.12% of visual states after layer 3. Median wall time falls from 4.078 to 2.368 seconds; aggregate speedup is 1.67x and median paired speedup is 1.70x. Both paths match an accepted dataset answer on 80% of rows, but normalized output equality is 70% and literal equality is 50%. This is a quality-neutral task-score pilot on one model and machine, not exact decoding evidence or a universal first-view claim.
 
 The research paper source and PDF are included in [paper](paper/). Keeping `paper/` and `results/` in the public repository is intentional: they make the claims auditable. They are not imported by the package at runtime.
 
@@ -413,6 +434,20 @@ Run additional models with aliases such as `qwen3-vl:2b`, `qwen3-vl:4b`, `qwen3-
 ```sh
 python3 scripts/summarize_vision_matrix.py results/local/vision_cache_*.json \
   --output results/local/vision_cache_matrix.json
+```
+
+Run the unique-image Qwen3-VL post-fusion benchmark:
+
+```sh
+python3 scripts/benchmark_cold_vision.py \
+  --model qwen3-vl:8b \
+  --datasets textvqa \
+  --samples-per-dataset 10 \
+  --max-tokens 16 \
+  --cold-mode off \
+  --vision-tokens adaptive \
+  --vision-token-ratio 0.35 \
+  --output results/local/cold_vision_qwen3vl_8b_postfusion.json
 ```
 
 ## Examples
