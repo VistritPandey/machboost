@@ -15,6 +15,7 @@ from ..vision import (
     normalize_multimodal_messages,
 )
 from ..vision_policy import choose_cold_vision
+from ..vision_tokens import configure_post_fusion_vision
 
 
 @dataclass(frozen=True)
@@ -36,6 +37,7 @@ class VisionRunStats:
     prompt_cache_prefix_tokens: int
     image_count: int
     cold_vision: dict[str, Any]
+    post_fusion_vision: dict[str, Any]
     mean_token_logprob: Optional[float]
     minimum_token_logprob: Optional[float]
     backend: str = "mlx-vlm"
@@ -156,6 +158,8 @@ class MLXVLMAccelerator:
         enable_thinking: bool = False,
         cold_vision_mode: str = "off",
         cold_vision_max_edge: Optional[int] = None,
+        vision_token_mode: str = "off",
+        vision_token_ratio: float = 0.35,
     ) -> tuple[str, VisionRunStats]:
         normalized, image_sources = normalize_multimodal_messages(messages)
         images = self.assets.materialize_all(image_sources)
@@ -173,6 +177,8 @@ class MLXVLMAccelerator:
             temperature=temperature,
             cold_vision_mode=cold_vision_mode,
             cold_vision_max_edge=cold_vision_max_edge,
+            vision_token_mode=vision_token_mode,
+            vision_token_ratio=vision_token_ratio,
             policy_prompt=_latest_user_text(normalized),
         )
 
@@ -242,6 +248,8 @@ class MLXVLMAccelerator:
         enable_thinking: bool = False,
         cold_vision_mode: str = "off",
         cold_vision_max_edge: Optional[int] = None,
+        vision_token_mode: str = "off",
+        vision_token_ratio: float = 0.35,
     ) -> tuple[str, VisionRunStats]:
         materialized = self.assets.materialize_all(images or ())
         templated = self._apply_chat_template(
@@ -260,6 +268,8 @@ class MLXVLMAccelerator:
             temperature=temperature,
             cold_vision_mode=cold_vision_mode,
             cold_vision_max_edge=cold_vision_max_edge,
+            vision_token_mode=vision_token_mode,
+            vision_token_ratio=vision_token_ratio,
             policy_prompt=prompt,
         )
 
@@ -274,6 +284,8 @@ class MLXVLMAccelerator:
         temperature: float,
         cold_vision_mode: str,
         cold_vision_max_edge: Optional[int],
+        vision_token_mode: str,
+        vision_token_ratio: float,
         policy_prompt: str,
     ) -> tuple[str, VisionRunStats]:
         if self._closed:
@@ -288,6 +300,8 @@ class MLXVLMAccelerator:
             temperature=temperature,
             cold_vision_mode=cold_vision_mode,
             cold_vision_max_edge=cold_vision_max_edge,
+            vision_token_mode=vision_token_mode,
+            vision_token_ratio=vision_token_ratio,
             policy_prompt=policy_prompt,
         )
         return future.result()
@@ -303,6 +317,8 @@ class MLXVLMAccelerator:
         temperature: float,
         cold_vision_mode: str,
         cold_vision_max_edge: Optional[int],
+        vision_token_mode: str,
+        vision_token_ratio: float,
         policy_prompt: str,
     ) -> tuple[str, VisionRunStats]:
         with self._generation_lock:
@@ -313,6 +329,19 @@ class MLXVLMAccelerator:
                 mode=cold_vision_mode,
                 max_edge=cold_vision_max_edge,
             )
+            post_fusion = configure_post_fusion_vision(
+                self.model,
+                mode=vision_token_mode,
+                retain_ratio=vision_token_ratio,
+            )
+            post_fusion_enabled = (
+                post_fusion is not None and post_fusion.mode != "off"
+            )
+            if post_fusion_enabled and cold_vision.mode != "off":
+                raise ValueError(
+                    "post-fusion visual tokens cannot be combined with cold vision resizing"
+                )
+            effective_vision_cache = use_vision_cache and not post_fusion_enabled
             cache_before = self.vision_cache.info()
             started = time.perf_counter()
             first_text_at: Optional[float] = None
@@ -335,7 +364,7 @@ class MLXVLMAccelerator:
                     images,
                     resize_shape=cold_vision.resize_shape,
                 )
-                if use_vision_cache
+                if effective_vision_cache
                 else None
             )
             if prepared is not None:
@@ -347,7 +376,7 @@ class MLXVLMAccelerator:
                     apc_matched_before = int(
                         apc_manager.stats_snapshot().get("matched_tokens", 0)
                     )
-            elif use_vision_cache and cold_vision.resize_shape is None:
+            elif effective_vision_cache and cold_vision.resize_shape is None:
                 stream_options["vision_cache"] = self.vision_cache
             if prepared is None and cold_vision.resize_shape is not None:
                 stream_options["resize_shape"] = cold_vision.resize_shape
@@ -400,7 +429,7 @@ class MLXVLMAccelerator:
             peak_memory_gb=float(getattr(last, "peak_memory", 0.0) or 0.0),
             total_duration_seconds=finished - started,
             time_to_first_token_seconds=None if first_text_at is None else first_text_at - started,
-            visual_cache_enabled=bool(use_vision_cache),
+            visual_cache_enabled=bool(effective_vision_cache),
             visual_cache_hit=cache_after.hits > cache_before.hits,
             visual_cache_miss=cache_after.misses > cache_before.misses,
             visual_cache_entries=cache_after.size,
@@ -410,6 +439,21 @@ class MLXVLMAccelerator:
             prompt_cache_prefix_tokens=prompt_cache_prefix_tokens,
             image_count=len(images),
             cold_vision=cold_vision.to_dict(),
+            post_fusion_vision=(
+                {
+                    "mode": str(vision_token_mode or "off").strip().lower(),
+                    "enabled": False,
+                    "requested_retention_ratio": float(vision_token_ratio),
+                    "prune_after_layer": 3,
+                    "original_sequence_tokens": 0,
+                    "retained_sequence_tokens": 0,
+                    "original_visual_tokens": 0,
+                    "retained_visual_tokens": 0,
+                    "actual_visual_retention_ratio": None,
+                }
+                if post_fusion is None
+                else post_fusion.info()
+            ),
             mean_token_logprob=(
                 None if not token_logprobs else sum(token_logprobs) / len(token_logprobs)
             ),
