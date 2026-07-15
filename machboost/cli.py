@@ -547,6 +547,8 @@ def run_native_chat(
                 kwargs.update(
                     use_vision_cache=not args.no_vision_cache,
                     temperature=args.temperature,
+                    cold_vision_mode=args.cold_vision,
+                    cold_vision_max_edge=args.vision_max_edge,
                 )
             response, stats = accelerator.generate_chat(messages, **kwargs)
         except KeyboardInterrupt:
@@ -709,6 +711,8 @@ def native_server_options(args: argparse.Namespace) -> dict:
         "temperature": args.temperature,
         "no_vision_cache": args.no_vision_cache,
         "vision_cache_size": args.vision_cache_size,
+        "cold_vision": args.cold_vision,
+        "vision_max_edge": args.vision_max_edge,
     }
 
 
@@ -837,6 +841,8 @@ def run_resident_completion(args: argparse.Namespace, *, output_stream=None, err
                     images=args.image or None,
                     use_vision_cache=not args.no_vision_cache,
                     temperature=args.temperature,
+                    cold_vision_mode=args.cold_vision,
+                    cold_vision_max_edge=args.vision_max_edge,
                 )
             text, stats = accelerator.generate(prompt, **kwargs)
             print("", file=output_stream)
@@ -895,6 +901,12 @@ def print_resident_stats(row: dict, elapsed_s: float, *, stream=None) -> None:
             if stats.get("visual_cache_miss")
             else " vision_cache=off"
         )
+        cold_vision = stats.get("cold_vision") or {}
+        if cold_vision.get("enabled"):
+            cache_state += (
+                f" cold_vision={cold_vision.get('mode', 'unknown')}"
+                f":{int(cold_vision.get('target_max_edge') or 0)}px"
+            )
     print(
         "stats: "
         f"elapsed={elapsed_s:.2f}s "
@@ -1136,6 +1148,17 @@ def add_native_run_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--no-vision-cache", action="store_true", help="Re-run the vision encoder for every request.")
     parser.add_argument("--vision-cache-size", type=int, default=20, help="Projected vision feature LRU size.")
+    parser.add_argument(
+        "--cold-vision",
+        choices=["off", "adaptive", "fast", "balanced", "quality"],
+        default="off",
+        help="Experimental first-view visual budget. Adaptive chooses from image detail and question type.",
+    )
+    parser.add_argument(
+        "--vision-max-edge",
+        type=int,
+        help="Override the cold-vision maximum image edge in pixels; images are never upscaled.",
+    )
     parser.add_argument("--direct", action="store_true", help="Load in this process instead of using the resident server.")
     parser.add_argument("--keep-alive", default="forever", help="Resident lifetime, for example forever, 10m, or 1h.")
     add_server_connection_arguments(parser, include_autostart=True)
