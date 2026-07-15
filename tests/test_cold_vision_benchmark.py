@@ -18,6 +18,8 @@ class ColdVisionBenchmarkTests(unittest.TestCase):
         self.assertTrue(answer_matches("Dakota Digital", ("dakota", "other")))
         self.assertTrue(answer_matches("$42,700", ("42700",)))
         self.assertFalse(answer_matches("READY", ("ATLAS",)))
+        self.assertFalse(answer_matches("The light is visible", ("l", "no")))
+        self.assertTrue(answer_matches("GleamLight / Philippe Molitor", ("philippe molitor",)))
 
     def test_summary_reports_unique_cold_pairs_and_quality(self) -> None:
         rows = []
@@ -61,6 +63,7 @@ class ColdVisionBenchmarkTests(unittest.TestCase):
         self.assertEqual(summary["pairs"], 2)
         self.assertEqual(summary["unique_images"], 2)
         self.assertEqual(summary["median_paired_total_speedup"], 4.0)
+        self.assertEqual(summary["aggregate_total_speedup"], 4.0)
         self.assertEqual(summary["median_prompt_token_reduction_rate"], 0.75)
         self.assertEqual(summary["baseline_expected_match_rate"], 1.0)
         self.assertEqual(summary["accelerated_expected_match_rate"], 1.0)
