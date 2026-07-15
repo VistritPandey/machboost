@@ -8,7 +8,8 @@ from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from unittest.mock import patch
 
-from machboost.adapters.mlx_vlm import MLXVLMAccelerator
+from machboost.adapters.mlx_vlm import MLXVLMAccelerator, _resolution_scoped_images
+from machboost.vision_policy import ColdVisionDecision
 
 
 @dataclass
@@ -136,6 +137,47 @@ class MLXVLMAcceleratorTests(unittest.TestCase):
         self.assertEqual(stats.image_count, 1)
         self.assertFalse(stats.prompt_cache_enabled)
         self.assertEqual(stats.prompt_cache_prefix_tokens, 0)
+        self.assertEqual(stats.cold_vision["mode"], "off")
+        self.assertFalse(stats.cold_vision["enabled"])
+
+    def test_cold_vision_resize_reaches_native_stream_and_stats(self):
+        decision = ColdVisionDecision(
+            mode="adaptive",
+            enabled=True,
+            target_max_edge=512,
+            resize_shape=(512, 512),
+            source_max_edge=1024,
+            image_entropy=0.8,
+            image_edge_density=0.2,
+            question_class="text-detail",
+            reason="test decision",
+        )
+        messages = [
+            {"role": "user", "content": "Old chart question"},
+            {"role": "assistant", "content": "Old answer"},
+            {"role": "user", "content": "Read the current label", "images": [str(self.image)]},
+        ]
+
+        with patch(
+            "machboost.adapters.mlx_vlm.choose_cold_vision",
+            return_value=decision,
+        ) as choose:
+            _, stats = self.accelerator.generate_chat(
+                messages,
+                max_tokens=8,
+                use_vision_cache=False,
+                cold_vision_mode="adaptive",
+            )
+
+        choose.assert_called_once_with(
+            "Read the current label",
+            [str(self.image.resolve())],
+            mode="adaptive",
+            max_edge=None,
+        )
+        self.assertEqual(self.stream.calls[-1]["kwargs"]["resize_shape"], (512, 512))
+        self.assertTrue(stats.cold_vision["enabled"])
+        self.assertEqual(stats.cold_vision["target_max_edge"], 512)
 
     def test_chat_template_receives_history_and_image_count(self):
         messages = [
@@ -185,10 +227,14 @@ class MLXVLMAcceleratorTests(unittest.TestCase):
             first = self.accelerator._prompt_cache_for([str(self.image)])
             repeated = self.accelerator._prompt_cache_for([str(self.image)])
             different = self.accelerator._prompt_cache_for([str(second_image)])
+            reduced = self.accelerator._prompt_cache_for(
+                _resolution_scoped_images([str(self.image)], (512, 512))
+            )
 
         self.assertIs(first, repeated)
         self.assertIsNot(first, different)
-        self.assertEqual(len(self.accelerator._prompt_caches), 2)
+        self.assertIsNot(first, reduced)
+        self.assertEqual(len(self.accelerator._prompt_caches), 3)
 
     def test_qwen_chat_keeps_image_tokens_on_first_user_turn(self):
         self.accelerator.model.config = {"model_type": "qwen2_5_vl"}
