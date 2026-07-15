@@ -2,6 +2,43 @@
 
 This directory stores public benchmark artifacts for MachBoost text and visual acceleration paths.
 
+## Unique-Image Post-Fusion Pilot, July 15 2026
+
+Artifact: `cold_vision_qwen3vl_8b_postfusion_20260715.json`
+
+Model: `mlx-community/Qwen3-VL-8B-Instruct-4bit`
+
+Hardware: Apple M1 Max, 32 GB unified memory
+
+Workload: ten unique TextVQA images with one short question each. Every pair compares the native full-token path with adaptive post-fusion visual-token compression at a requested 35% retention ratio. Both visual and prompt caches are disabled, pair order alternates, and one held-out unique image warms each mode before measurement. Model load is excluded.
+
+| Metric | Native | Post-fusion | Ratio |
+|---|---:|---:|---:|
+| Median wall time | 4.078s | 2.368s | 1.72x ratio of medians |
+| Aggregate wall time | 43.771s | 26.170s | 1.67x |
+| Median paired wall time | n/a | n/a | 1.70x |
+| Median time to first text | 4.029s | 2.351s | 1.71x |
+| Accepted-answer match | 80% | 80% | unchanged in this sample |
+| Normalized output equality | n/a | 70% paired | approximate |
+
+The path keeps the original image and vision encoder unchanged. Qwen3-VL processes the complete visual sequence through its first three language layers and all required deep-stack visual injections. MachBoost then spatially groups the visual hidden states, preserves high-variance groups, merges the remainder with query-weighted pooling, and runs the remaining 33 language layers on the shortened sequence. The measured median retained 35.12% of visual states, and all ten accelerated rows report zero visual-cache hits and zero reused prompt-prefix tokens.
+
+This is not exact decoding: literal output equality is 50%, normalized equality is 70%, and equal 80% task scores on ten rows do not establish quality parity. It is also not a 2x result under the committed harness. A separate same-session 30% probe preserved the 8/10 task score but reached only 1.50x aggregate speedup and a 2.523-second median, slower than the 35% run. Metal compilation and tensor-shape effects make latency non-monotonic in the retained-token count.
+
+Reproduce the committed run with:
+
+```sh
+python3 scripts/benchmark_cold_vision.py \
+  --model qwen3-vl:8b \
+  --datasets textvqa \
+  --samples-per-dataset 10 \
+  --max-tokens 16 \
+  --cold-mode off \
+  --vision-tokens adaptive \
+  --vision-token-ratio 0.35 \
+  --output results/local/cold_vision_qwen3vl_8b_postfusion.json
+```
+
 ## Cross-Model Qwen Vision Matrix, July 14-15 2026
 
 Aggregate artifact: `vision_cache_qwen_matrix_20260714.json`
