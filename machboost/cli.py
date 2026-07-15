@@ -549,6 +549,8 @@ def run_native_chat(
                     temperature=args.temperature,
                     cold_vision_mode=args.cold_vision,
                     cold_vision_max_edge=args.vision_max_edge,
+                    vision_token_mode=args.vision_tokens,
+                    vision_token_ratio=args.vision_token_ratio,
                 )
             response, stats = accelerator.generate_chat(messages, **kwargs)
         except KeyboardInterrupt:
@@ -713,6 +715,8 @@ def native_server_options(args: argparse.Namespace) -> dict:
         "vision_cache_size": args.vision_cache_size,
         "cold_vision": args.cold_vision,
         "vision_max_edge": args.vision_max_edge,
+        "vision_tokens": args.vision_tokens,
+        "vision_token_ratio": args.vision_token_ratio,
     }
 
 
@@ -843,6 +847,8 @@ def run_resident_completion(args: argparse.Namespace, *, output_stream=None, err
                     temperature=args.temperature,
                     cold_vision_mode=args.cold_vision,
                     cold_vision_max_edge=args.vision_max_edge,
+                    vision_token_mode=args.vision_tokens,
+                    vision_token_ratio=args.vision_token_ratio,
                 )
             text, stats = accelerator.generate(prompt, **kwargs)
             print("", file=output_stream)
@@ -906,6 +912,12 @@ def print_resident_stats(row: dict, elapsed_s: float, *, stream=None) -> None:
             cache_state += (
                 f" cold_vision={cold_vision.get('mode', 'unknown')}"
                 f":{int(cold_vision.get('target_max_edge') or 0)}px"
+            )
+        post_fusion = stats.get("post_fusion_vision") or {}
+        if post_fusion.get("enabled"):
+            cache_state += (
+                f" vision_tokens={post_fusion.get('mode', 'unknown')}"
+                f":{float(post_fusion.get('actual_visual_retention_ratio') or 0.0):.0%}"
             )
     print(
         "stats: "
@@ -1158,6 +1170,18 @@ def add_native_run_arguments(parser: argparse.ArgumentParser) -> None:
         "--vision-max-edge",
         type=int,
         help="Override the cold-vision maximum image edge in pixels; images are never upscaled.",
+    )
+    parser.add_argument(
+        "--vision-tokens",
+        choices=["off", "merge", "adaptive"],
+        default="off",
+        help="Experimental Qwen3-VL post-fusion visual token compression.",
+    )
+    parser.add_argument(
+        "--vision-token-ratio",
+        type=float,
+        default=0.35,
+        help="Requested visual token retention ratio for post-fusion compression.",
     )
     parser.add_argument("--direct", action="store_true", help="Load in this process instead of using the resident server.")
     parser.add_argument("--keep-alive", default="forever", help="Resident lifetime, for example forever, 10m, or 1h.")
