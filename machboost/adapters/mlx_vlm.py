@@ -14,6 +14,7 @@ from ..vision import (
     VisualAssetStore,
     normalize_multimodal_messages,
 )
+from ..vision_policy import choose_cold_vision
 
 
 @dataclass(frozen=True)
@@ -34,6 +35,7 @@ class VisionRunStats:
     prompt_cache_enabled: bool
     prompt_cache_prefix_tokens: int
     image_count: int
+    cold_vision: dict[str, Any]
     backend: str = "mlx-vlm"
     accepted_draft_tokens: int = 0
     target_calls: int = 0
@@ -150,6 +152,8 @@ class MLXVLMAccelerator:
         use_vision_cache: bool = True,
         temperature: float = 0.0,
         enable_thinking: bool = False,
+        cold_vision_mode: str = "off",
+        cold_vision_max_edge: Optional[int] = None,
     ) -> tuple[str, VisionRunStats]:
         normalized, image_sources = normalize_multimodal_messages(messages)
         images = self.assets.materialize_all(image_sources)
@@ -165,6 +169,9 @@ class MLXVLMAccelerator:
             on_text=on_text,
             use_vision_cache=use_vision_cache,
             temperature=temperature,
+            cold_vision_mode=cold_vision_mode,
+            cold_vision_max_edge=cold_vision_max_edge,
+            policy_prompt=_latest_user_text(normalized),
         )
 
     def _format_chat_prompt(
@@ -231,6 +238,8 @@ class MLXVLMAccelerator:
         use_vision_cache: bool = True,
         temperature: float = 0.0,
         enable_thinking: bool = False,
+        cold_vision_mode: str = "off",
+        cold_vision_max_edge: Optional[int] = None,
     ) -> tuple[str, VisionRunStats]:
         materialized = self.assets.materialize_all(images or ())
         templated = self._apply_chat_template(
@@ -247,6 +256,9 @@ class MLXVLMAccelerator:
             on_text=on_text,
             use_vision_cache=use_vision_cache,
             temperature=temperature,
+            cold_vision_mode=cold_vision_mode,
+            cold_vision_max_edge=cold_vision_max_edge,
+            policy_prompt=prompt,
         )
 
     def _generate(
@@ -258,6 +270,9 @@ class MLXVLMAccelerator:
         on_text: Optional[Callable[[str], None]],
         use_vision_cache: bool,
         temperature: float,
+        cold_vision_mode: str,
+        cold_vision_max_edge: Optional[int],
+        policy_prompt: str,
     ) -> tuple[str, VisionRunStats]:
         if self._closed:
             raise RuntimeError("MLX vision accelerator is closed")
@@ -269,6 +284,9 @@ class MLXVLMAccelerator:
             on_text=on_text,
             use_vision_cache=use_vision_cache,
             temperature=temperature,
+            cold_vision_mode=cold_vision_mode,
+            cold_vision_max_edge=cold_vision_max_edge,
+            policy_prompt=policy_prompt,
         )
         return future.result()
 
@@ -281,9 +299,18 @@ class MLXVLMAccelerator:
         on_text: Optional[Callable[[str], None]],
         use_vision_cache: bool,
         temperature: float,
+        cold_vision_mode: str,
+        cold_vision_max_edge: Optional[int],
+        policy_prompt: str,
     ) -> tuple[str, VisionRunStats]:
         with self._generation_lock:
             self._bind_thread_local_stream()
+            cold_vision = choose_cold_vision(
+                policy_prompt,
+                images,
+                mode=cold_vision_mode,
+                max_edge=cold_vision_max_edge,
+            )
             cache_before = self.vision_cache.info()
             started = time.perf_counter()
             first_text_at: Optional[float] = None
@@ -298,7 +325,15 @@ class MLXVLMAccelerator:
             prompt_cache_prefix_tokens = 0
             apc_manager = None
             apc_matched_before = 0
-            prepared = self._prepare_cached_vision(prompt, images) if use_vision_cache else None
+            prepared = (
+                self._prepare_cached_vision(
+                    prompt,
+                    images,
+                    resize_shape=cold_vision.resize_shape,
+                )
+                if use_vision_cache
+                else None
+            )
             if prepared is not None:
                 stream_image, prepared_options, prompt_cache_prefix_tokens = prepared
                 stream_options.update(prepared_options)
@@ -308,8 +343,10 @@ class MLXVLMAccelerator:
                     apc_matched_before = int(
                         apc_manager.stats_snapshot().get("matched_tokens", 0)
                     )
-            elif use_vision_cache:
+            elif use_vision_cache and cold_vision.resize_shape is None:
                 stream_options["vision_cache"] = self.vision_cache
+            if prepared is None and cold_vision.resize_shape is not None:
+                stream_options["resize_shape"] = cold_vision.resize_shape
             rows = self._stream_generate(
                 self.model,
                 self.processor,
@@ -354,6 +391,7 @@ class MLXVLMAccelerator:
             prompt_cache_enabled=prompt_cache_enabled,
             prompt_cache_prefix_tokens=prompt_cache_prefix_tokens,
             image_count=len(images),
+            cold_vision=cold_vision.to_dict(),
         )
         return "".join(parts), stats
 
@@ -370,6 +408,8 @@ class MLXVLMAccelerator:
         self,
         prompt: str,
         images: Sequence[str],
+        *,
+        resize_shape: Optional[tuple[int, int]] = None,
     ) -> Optional[tuple[None, dict[str, Any], int]]:
         module_name = str(getattr(self._stream_generate, "__module__", ""))
         if not images or not module_name.startswith("mlx_vlm"):
@@ -391,6 +431,7 @@ class MLXVLMAccelerator:
             images=list(images),
             prompts=prompt,
             image_token_index=config_value(self.model.config, "image_token_index", None),
+            resize_shape=resize_shape,
             add_special_tokens=add_special_tokens,
         )
         pixel_values = inputs.get("pixel_values")
@@ -409,7 +450,8 @@ class MLXVLMAccelerator:
                 if key not in {"input_ids", "pixel_values", "attention_mask"}
             }
         )
-        prompt_cache_state = self._prompt_cache_for(images)
+        cache_source = _resolution_scoped_images(images, resize_shape)
+        prompt_cache_state = self._prompt_cache_for(cache_source)
         input_ids = inputs.get("input_ids")
         prefix_tokens = 0
         if input_ids is not None:
@@ -434,13 +476,13 @@ class MLXVLMAccelerator:
             prompt_cache_state.cache = None
             options["apc_manager"] = self._get_apc_manager()
         if model_type != "qwen3_vl":
-            features = self.vision_cache.get(list(images))
+            features = self.vision_cache.get(cache_source)
             if features is None:
                 features = self._encode_vision_features(pixel_values, inputs, model_type)
                 if features is None:
                     return None
                 mx.eval(features)
-                self.vision_cache.put(list(images), features)
+                self.vision_cache.put(cache_source, features)
             options["cached_image_features"] = features
         options["prompt_cache_state"] = prompt_cache_state
         return None, options, prefix_tokens
@@ -523,3 +565,20 @@ def config_value(config: Any, name: str, default: Any = None) -> Any:
     if isinstance(config, dict):
         return config.get(name, default)
     return getattr(config, name, default)
+
+
+def _latest_user_text(messages: Sequence[dict[str, str]]) -> str:
+    for message in reversed(messages):
+        if message.get("role") == "user":
+            return str(message.get("content") or "")
+    return str(messages[-1].get("content") or "") if messages else ""
+
+
+def _resolution_scoped_images(
+    images: Sequence[str],
+    resize_shape: Optional[tuple[int, int]],
+) -> list[str]:
+    scoped = list(images)
+    if resize_shape is not None:
+        scoped.append(f"machboost:cold-vision:{resize_shape[0]}x{resize_shape[1]}")
+    return scoped
