@@ -5,6 +5,7 @@ import ast
 import hashlib
 import json
 import platform
+import re
 import statistics
 import time
 from dataclasses import asdict, dataclass
@@ -398,6 +399,8 @@ def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "baseline_median_total_seconds": baseline_total,
         "accelerated_median_total_seconds": accelerated_total,
         "median_total_speedup": baseline_total / accelerated_total,
+        "aggregate_total_speedup": sum(row["client_total_seconds"] for row in baseline)
+        / sum(row["client_total_seconds"] for row in accelerated),
         "median_paired_total_speedup": statistics.median(
             row["paired_total_speedup"] for row in accelerated
         ),
@@ -466,11 +469,25 @@ def normalize_answer(value: str) -> str:
 
 
 def answer_matches(output: str, expected: Iterable[str]) -> bool:
-    normalized_output = normalize_answer(output)
-    return any(
-        normalized_expected and normalized_expected in normalized_output
-        for normalized_expected in (normalize_answer(answer) for answer in expected)
-    )
+    output_tokens = _answer_tokens(output)
+    compact_output = normalize_answer(output)
+    for answer in expected:
+        expected_tokens = _answer_tokens(answer)
+        if not expected_tokens:
+            continue
+        width = len(expected_tokens)
+        if any(
+            output_tokens[index : index + width] == expected_tokens
+            for index in range(len(output_tokens) - width + 1)
+        ):
+            return True
+        if normalize_answer(answer) == compact_output:
+            return True
+    return False
+
+
+def _answer_tokens(value: str) -> list[str]:
+    return re.findall(r"[a-z0-9]+", str(value).lower())
 
 
 def _rate(values: Iterable[bool]) -> float:
