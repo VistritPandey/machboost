@@ -341,6 +341,31 @@ class MLXVLMAcceleratorTests(unittest.TestCase):
         self.assertIsNone(options["prompt_cache_state"].cache)
         self.assertEqual(options["cached_image_features"], "cached-features")
 
+    def test_apc_checkpoint_match_is_included_in_prefix_metrics(self):
+        class FakeAPCManager:
+            def __init__(self):
+                self.snapshots = iter((0, 776))
+
+            def stats_snapshot(self):
+                return {"matched_tokens": next(self.snapshots)}
+
+        apc_manager = FakeAPCManager()
+        prepared = (None, {"apc_manager": apc_manager}, 0)
+
+        with patch.object(
+            self.accelerator,
+            "_prepare_cached_vision",
+            return_value=prepared,
+        ):
+            _, stats = self.accelerator.generate(
+                "Describe the image.",
+                images=[str(self.image)],
+                max_tokens=8,
+            )
+
+        self.assertTrue(stats.prompt_cache_enabled)
+        self.assertEqual(stats.prompt_cache_prefix_tokens, 776)
+
     def test_qwen_partial_prefix_drops_untrimmed_attention_mask(self):
         self.accelerator.model.config = {"model_type": "qwen2_5_vl"}
         self.accelerator._stream_generate.__module__ = "mlx_vlm.generate"
