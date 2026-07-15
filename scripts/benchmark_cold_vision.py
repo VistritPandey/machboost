@@ -294,6 +294,8 @@ def run_request(
         "prompt_tokens_per_second": float(stats.get("prompt_tokens_per_second") or 0.0),
         "generation_tokens_per_second": float(stats.get("generation_tokens_per_second") or 0.0),
         "peak_memory_gb": float(stats.get("peak_memory_gb") or 0.0),
+        "mean_token_logprob": _optional_float(stats.get("mean_token_logprob")),
+        "minimum_token_logprob": _optional_float(stats.get("minimum_token_logprob")),
         "visual_cache_hit": bool(stats.get("visual_cache_hit")),
         "visual_cache_miss": bool(stats.get("visual_cache_miss")),
         "prompt_cache_prefix_tokens": int(stats.get("prompt_cache_prefix_tokens") or 0),
@@ -352,6 +354,10 @@ def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
             for dataset in sorted({row["dataset"] for row in rows})
         },
     }
+
+
+def _optional_float(value: Any) -> float | None:
+    return None if value is None else float(value)
 
 
 def _dataset_summary(rows: list[dict[str, Any]], dataset: str) -> dict[str, Any]:
