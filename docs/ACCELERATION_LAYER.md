@@ -56,10 +56,12 @@ Resident serving removes repeated model-loading costs and makes MachBoost usable
 
 ### Repeated-Image Acceleration
 
-The MLX-VLM adapter maintains two bounded, per-model caches:
+The MLX-VLM adapter selects from two bounded, per-model cache layers according to model capability:
 
 1. A content-addressed LRU stores projected vision features. This skips the vision tower when the same image bytes are submitted again.
-2. An image-scoped prompt state stores the language-model KV prefix associated with the visual token span. A later question over the same image can skip the matching visual-token prefill and process only the changed text suffix.
+2. An image-scoped prompt cache stores language-model state associated with the visual token span. A later question over the same image can skip the matching visual-token prefill and process only the changed text suffix.
+
+Qwen2.5-VL can use both layers. Qwen3-VL's vision tower also returns deep-stack visual tensors, so MachBoost disables projected-feature reuse for that family and uses only complete prompt-state reuse. Qwen3.5 can safely reuse its projected tensor, but its language model mixes ordinary attention KV layers with recurrent linear-attention state. MachBoost therefore restores a whole-prefix checkpoint for Qwen3.5 instead of trimming only K/V. A KV-only Qwen3.5 smoke run was rejected after it changed answers.
 
 Local file identities are derived from image content, with file metadata used only to avoid unnecessary rehashing. Data URLs and in-memory images are also hashed by content. A changed image therefore receives a different feature entry and prompt state. Cache entries remain local to one resident model process and are discarded on model unload, explicit cache reset, or server shutdown.
 
@@ -105,10 +107,11 @@ The visual path is independent of the text drafter:
 Image bytes + question
         |
         v
-Content key ---> projected-feature LRU ---> vision tower on miss
-        |
+Content key ---> capability gate ---> projected-feature LRU (when safe)
+        |                              |
+        |                              +---> vision tower on miss
         v
-Image-scoped KV state ---> visual-prefix prefill on miss
+Image-scoped prompt state ---> KV prefix or whole-state checkpoint
         |
         v
 Native MLX-VLM decoder ---> streamed output + cache metrics
@@ -309,6 +312,19 @@ The artifact `results/vision_cache_qwen25_3b_20260714.json` contains 12 uncached
 
 The one accelerated row without a partial prefix hit reused projected image features only and reached 1.33x. The other 11 rows reused both cache levels and ranged from 13.32x to 21.36x. The run excludes model load from request latency and does not establish performance on changed images, first-view requests, longer answers, other VLM architectures, or video.
 
+The follow-up matrix `results/vision_cache_qwen_matrix_20260714.json` applies the same protocol to six Qwen models and 72 request pairs:
+
+| Model | Official total | Median paired speedup | TTFT speedup | Exact output | Expected answer |
+|---|---:|---:|---:|---:|---:|
+| Qwen3-VL 2B | 2B | 11.41x | 12.23x | 100% | 100% |
+| Qwen3-VL 4B | 4B | 12.73x | 13.32x | 100% | 100% |
+| Qwen3-VL 8B | 9B | 16.69x | 17.30x | 100% | 100% |
+| Qwen3.5 0.8B | 0.9B | 5.14x | 5.48x | 75% | 100% |
+| Qwen3.5 4B | 5B | 14.29x | 16.43x | 100% | 100% |
+| Qwen3.5 9B | 10B | 17.44x | 18.82x | 100% | 100% |
+
+The median of the six model medians is 13.51x. The Qwen3-VL no-prefix controls have a 0.99x median, while reusable-prefix pairs drive the reported gains. Qwen3.5 0.8B's three literal mismatches differ only by punctuation around the correct `BLUE SQUARE` answer. Qwen3.6 is excluded because the official releases are 28B and 36B total parameters.
+
 ## Milestones
 
 ### P0: Evidence Runner
@@ -365,7 +381,7 @@ Status: initial image path done for 0.3.
 
 Remaining work:
 
-- broader VLM architecture and model-size coverage
+- public-dataset VLM coverage beyond the six-model synthetic extraction matrix
 - concurrent-session cache isolation and load testing
 - configurable image resizing and preprocessing policies
 - video input, frame sampling, and temporal feature reuse
