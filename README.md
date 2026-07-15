@@ -130,7 +130,7 @@ machboost run qwen3-vl:8b \
   --show-stats
 ```
 
-The image still passes through the full-resolution vision encoder. Qwen3-VL then processes every visual token through its three early language layers and required deep-stack injections. MachBoost groups the resulting visual states spatially, preserves the highest-variance groups, merges the rest with query-weighted pooling, and sends the shorter sequence through the remaining language layers. The request bypasses visual and prompt caches, so the reported gain is independent of prior images or prompts.
+The image still passes through the full-resolution vision encoder. Qwen3-VL then processes every visual token through its three early language layers and required deep-stack injections. MachBoost groups the resulting visual states spatially, preserves the most internally diverse groups, merges the rest with query-weighted pooling, and sends the shorter sequence through the remaining language layers. The request bypasses visual and prompt caches, so the reported gain is independent of prior images or prompts.
 
 This path is approximate and disabled by default. It currently supports batch-one Qwen3-VL requests only, cannot be combined with `--cold-vision`, and can change wording or answers. On a 10-image TextVQA pilot with Qwen3-VL 8B, 35% visual retention produced a 1.67x aggregate wall-time speedup and 1.70x median paired speedup. Baseline and compressed paths each matched the dataset answer on 8 of 10 questions; normalized outputs were equal on 7 of 10. A 30% follow-up retained the same task score but was slower, so 35% remains the measured profile rather than assuming that more pruning is always better.
 
