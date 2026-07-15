@@ -36,6 +36,8 @@ class VisionRunStats:
     prompt_cache_prefix_tokens: int
     image_count: int
     cold_vision: dict[str, Any]
+    mean_token_logprob: Optional[float]
+    minimum_token_logprob: Optional[float]
     backend: str = "mlx-vlm"
     accepted_draft_tokens: int = 0
     target_calls: int = 0
@@ -315,6 +317,8 @@ class MLXVLMAccelerator:
             started = time.perf_counter()
             first_text_at: Optional[float] = None
             parts: list[str] = []
+            token_logprobs: list[float] = []
+            observed_generation_steps: set[int] = set()
             last: Any = None
             stream_image: Optional[list[str]] = list(images) or None
             stream_options: dict[str, Any] = {
@@ -356,6 +360,20 @@ class MLXVLMAccelerator:
             )
             for row in rows:
                 last = row
+                generation_step = int(getattr(row, "generation_tokens", 0) or 0)
+                token = getattr(row, "token", None)
+                logprobs = getattr(row, "logprobs", None)
+                if (
+                    generation_step > 0
+                    and generation_step not in observed_generation_steps
+                    and token is not None
+                    and logprobs is not None
+                ):
+                    observed_generation_steps.add(generation_step)
+                    try:
+                        token_logprobs.append(float(logprobs[int(token)].item()))
+                    except (AttributeError, IndexError, TypeError, ValueError):
+                        pass
                 text = str(getattr(row, "text", "") or "")
                 if not text:
                     continue
@@ -392,6 +410,10 @@ class MLXVLMAccelerator:
             prompt_cache_prefix_tokens=prompt_cache_prefix_tokens,
             image_count=len(images),
             cold_vision=cold_vision.to_dict(),
+            mean_token_logprob=(
+                None if not token_logprobs else sum(token_logprobs) / len(token_logprobs)
+            ),
+            minimum_token_logprob=(None if not token_logprobs else min(token_logprobs)),
         )
         return "".join(parts), stats
 
