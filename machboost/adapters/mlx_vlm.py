@@ -296,11 +296,18 @@ class MLXVLMAccelerator:
             }
             prompt_cache_enabled = False
             prompt_cache_prefix_tokens = 0
+            apc_manager = None
+            apc_matched_before = 0
             prepared = self._prepare_cached_vision(prompt, images) if use_vision_cache else None
             if prepared is not None:
                 stream_image, prepared_options, prompt_cache_prefix_tokens = prepared
                 stream_options.update(prepared_options)
                 prompt_cache_enabled = True
+                apc_manager = prepared_options.get("apc_manager")
+                if apc_manager is not None:
+                    apc_matched_before = int(
+                        apc_manager.stats_snapshot().get("matched_tokens", 0)
+                    )
             elif use_vision_cache:
                 stream_options["vision_cache"] = self.vision_cache
             rows = self._stream_generate(
@@ -320,6 +327,14 @@ class MLXVLMAccelerator:
                 parts.append(text)
                 if on_text is not None:
                     on_text(text)
+            if apc_manager is not None:
+                apc_matched_after = int(
+                    apc_manager.stats_snapshot().get("matched_tokens", 0)
+                )
+                prompt_cache_prefix_tokens = max(
+                    prompt_cache_prefix_tokens,
+                    apc_matched_after - apc_matched_before,
+                )
             finished = time.perf_counter()
         cache_after = self.vision_cache.info()
         stats = VisionRunStats(
