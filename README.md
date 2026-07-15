@@ -5,7 +5,7 @@
 
 MachBoost is an experimental resident local-inference server and Python package for MLX, MLX-VLM, and Hugging Face models. It provides an Ollama-like model workflow, keeps models warm between requests, streams text and visual chat, and applies backend-specific acceleration when a request contains reusable work.
 
-For text, it drafts candidate tokens from nearby prompts, retrieved chunks, repo files, policies, configs, and docs, then verifies them with the target model. For repeated-image VLM requests, it reuses content-addressed projected vision features and an image-scoped visual-token KV prefix. Neither path changes model weights.
+For text, it drafts candidate tokens from nearby prompts, retrieved chunks, repo files, policies, configs, and docs, then verifies them with the target model. For repeated-image VLM requests, it uses architecture-aware caches: Qwen2.5-VL and Qwen3.5 can reuse projected vision features, while Qwen3-VL conservatively reuses only complete visual prompt state. Qwen3.5's hybrid recurrent/attention state is restored from whole-prefix checkpoints rather than an unsafe KV-only trim. None of these paths changes model weights.
 
 MachBoost is local-first and alpha-stage. It does not upload telemetry, mutate global runtime settings, change model weights, or claim universal speedups. Ordinary open-ended chat follows the backend's native generation path; context-backed verification is enabled only when a candidate exists.
 
@@ -96,6 +96,8 @@ Install the vision extra and run a supported MLX-VLM model with a local image:
 pip install -e ".[vision]"
 machboost pull qwen2.5-vl:3b
 machboost run qwen2.5-vl:3b --image ./invoice.png --show-stats
+machboost run qwen3-vl:4b --image ./invoice.png --show-stats
+machboost run qwen3.5:4b --image ./invoice.png --show-stats
 ```
 
 The interactive session keeps the model and attached image warm. Use `/image PATH` to attach another image, `/images` to inspect attachments, and `/clear-images` to remove them. The same path is available to Python applications:
@@ -114,7 +116,7 @@ response = client.chat(
 print(response["message"]["content"])
 ```
 
-Image reuse is content-addressed: changing the file bytes creates a new cache identity. Set `--no-vision-cache` or `options={"no_vision_cache": True}` for an uncached control. This optimization targets repeated questions over the same image; the first image request still performs normal vision encoding and prefill.
+Image reuse is content-addressed: changing the file bytes creates a new cache identity. Set `--no-vision-cache` or `options={"no_vision_cache": True}` for an uncached control. This optimization targets repeated questions over the same image; the first image request still performs normal vision encoding and prefill. Cache capabilities are model-specific, and MachBoost disables projected-feature reuse when a model requires additional visual tensors that cannot be cached safely.
 
 Use the high-level `Accelerator` when you want MachBoost to load a model and build the draft corpus from strings, files, or directories. Calibrate before enabling the boosted path for a workflow:
 
@@ -315,7 +317,7 @@ The Go CLI is useful for local systems experiments. The Python package is the pr
 | Backend | Status | Notes |
 |---|---|---|
 | MLX / `mlx-lm` | native adapter | Best Mac-first path. Strict evidence mode can disable prompt cache for clean exactness checks. |
-| MLX-VLM | native visual adapter | Reuses image features and image-scoped visual-token prefixes for repeated questions over unchanged images. |
+| MLX-VLM | native visual adapter | Uses model-safe projected-feature and/or full visual-prefix reuse for repeated questions over unchanged images. |
 | Hugging Face Transformers | native adapter | Useful for research and broad model coverage. |
 | MachBoost resident server | native control plane | Keeps MLX/HF models warm and exposes Ollama/OpenAI-compatible streaming APIs. |
 | Custom Python service | native if verifier exists | Implement `next_token`, `verify`, `encode`, and `decode` as needed. |
@@ -331,12 +333,20 @@ Public benchmark artifacts live in [results](results/), with a summary in [resul
 | `mlx_native_reentry_qwen25_3b_20260713.json` | same | experimental RAG re-entry | 5 | 100% | 1.58x |
 | `mlx_native_reentry_qwen25_3b_20260713.json` | same | open-ended native fallback | 5 | 100% | 1.08x |
 | `vision_cache_qwen25_3b_20260714.json` | `mlx-community/Qwen2.5-VL-3B-Instruct-4bit` | repeated questions over one image | 12 | 100% | 18.33x |
+| `vision_cache_qwen3vl_2b_20260714.json` | `mlx-community/Qwen3-VL-2B-Instruct-4bit` | repeated questions over one image | 12 | 100% | 11.41x |
+| `vision_cache_qwen3vl_4b_20260714.json` | `mlx-community/Qwen3-VL-4B-Instruct-4bit` | same | 12 | 100% | 12.73x |
+| `vision_cache_qwen3vl_8b_20260714.json` | `mlx-community/Qwen3-VL-8B-Instruct-4bit` | same | 12 | 100% | 16.69x |
+| `vision_cache_qwen35_08b_20260714.json` | `mlx-community/Qwen3.5-0.8B-MLX-4bit` | same | 12 | 75% | 4.75x |
+| `vision_cache_qwen35_4b_20260714.json` | `mlx-community/Qwen3.5-4B-MLX-4bit` | same | 12 | 100% | 11.51x |
+| `vision_cache_qwen35_9b_20260714.json` | `mlx-community/Qwen3.5-9B-MLX-4bit` | same | 12 | 100% | 15.20x |
 
 Resident-server latency is tracked separately in `resident_qwen25_3b_20260713.json`. On the same M1 Max, five warm forced 64-token requests reached a 0.657-second median wall time and 97.5 end-to-end tok/s. Five short streaming chats reached a 0.298-second median time to first text and 0.358-second median total latency. These requests used native fallback with zero accepted draft tokens, so they measure warm serving rather than the context speculation algorithm.
 
 The default code path accepted a median 51 of 64 tokens and reduced logical target forwards by 76.6%. One-token re-entry broadens coverage to copied RAG answers, accepting a median 30 tokens. The current repeated medians are below 2x and remain workload-specific. Older `strict` and 9B artifacts compared against synchronous or cache-disabled baselines and remain available only as diagnostics; they do not establish an improvement over optimized `mlx-lm` or Ollama.
 
 The visual artifact compares 12 uncached requests with 12 accelerated requests on the same resident Qwen2.5-VL 3B model. Median wall time fell from 2.818 seconds uncached to 0.152 seconds on the accelerated path; median paired speedup was 18.33x and median TTFT speedup was 19.45x. All paired outputs and expected fixture answers matched. Eleven of 12 accelerated rows reused a 1,018-token visual prefix. The remaining row deliberately repeated the priming prompt, so it only reused projected image features and reached 1.33x. These are warm repeated-image results on one machine and model, not a claim about first-view latency, decode throughput, changed images, or arbitrary visual workloads.
+
+The cross-model artifact `vision_cache_qwen_matrix_20260714.json` applies the same image, prompts, resident-process policy, generation settings, and alternating pair order to six Qwen models. Across 72 pairs, both modes answer every fixture correctly. The median of the six model-level paired medians is 12.12x, ranging from 4.75x to 16.69x. Literal output equality is 95.83%: the only drift is three Qwen3.5 0.8B rows that differ by a semicolon inside a JSON fence while returning the same expected answer. The median reusable-prefix pair is 12.23x; the median no-prefix pair is 3.12x. Qwen3.6 is excluded because its official releases are 28B and 36B total parameters. Variant names are not always total multimodal size: Qwen3-VL-8B is listed as 9B total and Qwen3.5-9B as 10B total.
 
 The research paper source and PDF are included in [paper](paper/). Keeping `paper/` and `results/` in the public repository is intentional: they make the claims auditable. They are not imported by the package at runtime.
 
@@ -396,6 +406,13 @@ python3 -m scripts.benchmark_vision_cache \
   --repeats 3 \
   --max-tokens 16 \
   --output results/local/vision_cache_qwen25_3b.json
+```
+
+Run additional models with aliases such as `qwen3-vl:2b`, `qwen3-vl:4b`, `qwen3-vl:8b`, `qwen3.5:0.8b`, `qwen3.5:4b`, and `qwen3.5:9b`. Consolidate compatible artifacts with:
+
+```sh
+python3 scripts/summarize_vision_matrix.py results/local/vision_cache_*.json \
+  --output results/local/vision_cache_matrix.json
 ```
 
 ## Examples
