@@ -44,8 +44,18 @@ def parse_args() -> argparse.Namespace:
         help="Comma-separated public datasets: chartqa,textvqa.",
     )
     parser.add_argument("--samples-per-dataset", type=int, default=10)
-    parser.add_argument("--cold-mode", choices=["adaptive", "fast", "balanced", "quality"], default="adaptive")
+    parser.add_argument(
+        "--cold-mode",
+        choices=["off", "adaptive", "fast", "balanced", "quality"],
+        default="adaptive",
+    )
     parser.add_argument("--vision-max-edge", type=int)
+    parser.add_argument(
+        "--vision-tokens",
+        choices=["off", "merge", "adaptive"],
+        default="off",
+    )
+    parser.add_argument("--vision-token-ratio", type=float, default=0.35)
     parser.add_argument(
         "--confidence-threshold",
         type=float,
@@ -95,6 +105,8 @@ def main() -> None:
                 cold_mode="off",
                 max_tokens=args.max_tokens,
                 vision_max_edge=None,
+                vision_token_mode="off",
+                vision_token_ratio=args.vision_token_ratio,
             )
         )
         warmup_rows.append(
@@ -106,6 +118,8 @@ def main() -> None:
                 cold_mode=args.cold_mode,
                 max_tokens=args.max_tokens,
                 vision_max_edge=args.vision_max_edge,
+                vision_token_mode=args.vision_tokens,
+                vision_token_ratio=args.vision_token_ratio,
             )
         )
 
@@ -122,6 +136,8 @@ def main() -> None:
                 cold_mode="off" if mode == "baseline" else args.cold_mode,
                 max_tokens=args.max_tokens,
                 vision_max_edge=None if mode == "baseline" else args.vision_max_edge,
+                vision_token_mode="off" if mode == "baseline" else args.vision_tokens,
+                vision_token_ratio=args.vision_token_ratio,
             )
             if mode == "accelerated" and args.confidence_threshold is not None:
                 row = verify_uncertain_request(
@@ -165,6 +181,8 @@ def main() -> None:
         "max_tokens": args.max_tokens,
         "cold_mode": args.cold_mode,
         "vision_max_edge": args.vision_max_edge,
+        "vision_tokens": args.vision_tokens,
+        "vision_token_ratio": args.vision_token_ratio,
         "confidence_threshold": args.confidence_threshold,
         "server_started": server_started,
         "load_duration_seconds": loaded["load_duration_seconds"],
@@ -259,6 +277,8 @@ def run_request(
     cold_mode: str,
     max_tokens: int,
     vision_max_edge: int | None,
+    vision_token_mode: str = "off",
+    vision_token_ratio: float = 0.35,
 ) -> dict[str, Any]:
     options: dict[str, Any] = {
         "num_predict": max_tokens,
@@ -266,6 +286,8 @@ def run_request(
         "no_vision_cache": True,
         "vision_cache_size": 4,
         "cold_vision": cold_mode,
+        "vision_tokens": vision_token_mode,
+        "vision_token_ratio": vision_token_ratio,
     }
     if vision_max_edge is not None:
         options["vision_max_edge"] = int(vision_max_edge)
@@ -316,6 +338,7 @@ def run_request(
         "visual_cache_miss": bool(stats.get("visual_cache_miss")),
         "prompt_cache_prefix_tokens": int(stats.get("prompt_cache_prefix_tokens") or 0),
         "cold_vision": dict(stats.get("cold_vision") or {}),
+        "post_fusion_vision": dict(stats.get("post_fusion_vision") or {}),
     }
 
 
@@ -352,6 +375,7 @@ def verify_uncertain_request(
         cold_mode="off",
         max_tokens=max_tokens,
         vision_max_edge=None,
+        vision_token_mode="off",
     )
     verification.update(
         {
@@ -393,6 +417,7 @@ def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
     accelerated_tokens = statistics.median(row["prompt_tokens"] for row in accelerated)
     decisions = [row.get("cold_vision") or {} for row in accelerated]
     verifications = [row.get("verification") or {} for row in accelerated]
+    post_fusion = [row.get("post_fusion_vision") or {} for row in accelerated]
     return {
         "pairs": len(accelerated),
         "unique_images": len({row["image_digest"] for row in accelerated}),
@@ -436,6 +461,12 @@ def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
             verification.get("first_pass_expected_match", row["expected_match"])
             for row, verification in zip(accelerated, verifications)
         ),
+        "post_fusion_enabled_rate": _rate(
+            decision.get("enabled", False) for decision in post_fusion
+        ),
+        "median_actual_visual_retention_ratio": _optional_median(
+            decision.get("actual_visual_retention_ratio") for decision in post_fusion
+        ),
         "datasets": {
             dataset: _dataset_summary(rows, dataset)
             for dataset in sorted({row["dataset"] for row in rows})
@@ -445,6 +476,11 @@ def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 def _optional_float(value: Any) -> float | None:
     return None if value is None else float(value)
+
+
+def _optional_median(values: Iterable[Any]) -> float | None:
+    present = [float(value) for value in values if value is not None]
+    return None if not present else statistics.median(present)
 
 
 def _dataset_summary(rows: list[dict[str, Any]], dataset: str) -> dict[str, Any]:
