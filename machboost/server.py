@@ -198,6 +198,8 @@ class RuntimeManager:
                     on_text=emit,
                     use_vision_cache=not bool(options.get("no_vision_cache", False)),
                     temperature=float(options.get("temperature", 0.0)),
+                    cold_vision_mode=str(options.get("cold_vision", "off")),
+                    cold_vision_max_edge=_optional_int(options.get("vision_max_edge")),
                 )
             else:
                 if messages_have_images(messages):
@@ -244,6 +246,8 @@ class RuntimeManager:
                     images=images,
                     use_vision_cache=not bool(options.get("no_vision_cache", False)),
                     temperature=float(options.get("temperature", 0.0)),
+                    cold_vision_mode=str(options.get("cold_vision", "off")),
+                    cold_vision_max_edge=_optional_int(options.get("vision_max_edge")),
                 )
             else:
                 if images:
@@ -821,6 +825,10 @@ def normalize_image_list(images: Any) -> list[str]:
     if not isinstance(images, (list, tuple)):
         raise ValueError("images must be a string or list")
     return [image.decode("ascii") if isinstance(image, bytes) else str(image) for image in images]
+
+
+def _optional_int(value: Any) -> Optional[int]:
+    return None if value is None else int(value)
 
 
 def messages_have_images(messages: Sequence[dict[str, Any]]) -> bool:
