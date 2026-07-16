@@ -21,6 +21,7 @@ class VideoFrame:
 @dataclass(frozen=True)
 class VideoSelection:
     video: str
+    strategy: str
     frames: tuple[VideoFrame, ...]
     sampled_frames: int
     selected_frames: int
@@ -98,12 +99,61 @@ class TemporalVideoSampler:
         )
         return VideoSelection(
             video=str(source),
+            strategy="temporal-change",
             frames=frames,
             sampled_frames=len(frame_paths),
             selected_frames=len(frames),
             reduction_rate=1.0 - len(frames) / len(frame_paths),
             sample_fps=float(fps),
             change_threshold=float(change_threshold),
+            max_frames=int(max_frames),
+            extraction_cache_hit=cache_hit,
+            elapsed_seconds=time.perf_counter() - started,
+        )
+
+    def sample_uniform(
+        self,
+        video: str | Path,
+        *,
+        fps: float = 1.0,
+        max_frames: int = 12,
+    ) -> VideoSelection:
+        started = time.perf_counter()
+        source = Path(video).expanduser().resolve()
+        if not source.is_file():
+            raise FileNotFoundError(f"video does not exist: {source}")
+        if fps <= 0:
+            raise ValueError("video sample FPS must be greater than zero")
+        if max_frames < 1:
+            raise ValueError("video max frames must be at least 1")
+        if shutil.which(self.ffmpeg) is None:
+            raise RuntimeError(
+                "FFmpeg is required for video inputs; install it or pass image frames instead"
+            )
+
+        extraction_dir = self.cache_dir / _video_cache_key(source, fps)
+        frame_paths, cache_hit = self._extract_frames(source, extraction_dir, fps)
+        if not frame_paths:
+            raise RuntimeError(f"FFmpeg extracted no frames from {source}")
+        selected_indices = select_uniform_frames(len(frame_paths), max_frames=max_frames)
+        frames = tuple(
+            VideoFrame(
+                path=str(frame_paths[index]),
+                sample_index=index,
+                timestamp_seconds=index / fps,
+                change_score=0.0,
+            )
+            for index in selected_indices
+        )
+        return VideoSelection(
+            video=str(source),
+            strategy="uniform",
+            frames=frames,
+            sampled_frames=len(frame_paths),
+            selected_frames=len(frames),
+            reduction_rate=1.0 - len(frames) / len(frame_paths),
+            sample_fps=float(fps),
+            change_threshold=0.0,
             max_frames=int(max_frames),
             extraction_cache_hit=cache_hit,
             elapsed_seconds=time.perf_counter() - started,
@@ -203,6 +253,21 @@ def select_temporal_frames(
         )
         selected = boundaries | set(ranked[: max(0, budget)])
     return tuple(sorted(selected))
+
+
+def select_uniform_frames(frame_count: int, *, max_frames: int) -> tuple[int, ...]:
+    if frame_count <= 0:
+        return ()
+    if max_frames < 1:
+        raise ValueError("video max frames must be at least 1")
+    selected_count = min(frame_count, max_frames)
+    if selected_count == 1:
+        return (0,)
+    last = frame_count - 1
+    return tuple(
+        round(index * last / (selected_count - 1))
+        for index in range(selected_count)
+    )
 
 
 def _video_cache_key(path: Path, fps: float) -> str:
