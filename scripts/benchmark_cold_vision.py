@@ -5,6 +5,7 @@ import ast
 import hashlib
 import json
 import platform
+import random
 import re
 import statistics
 import time
@@ -17,9 +18,22 @@ from typing import Any, Iterable, Sequence
 from machboost import MachBoostClient, ensure_server
 
 
+@dataclass(frozen=True)
+class DatasetSpec:
+    repository: str
+    split: str
+    config: str | None = None
+
+    @property
+    def source(self) -> str:
+        return f"https://huggingface.co/datasets/{self.repository}"
+
+
 DATASETS = {
-    "chartqa": ("lmms-lab/ChartQA", "test"),
-    "textvqa": ("lmms-lab/textvqa", "validation"),
+    "chartqa": DatasetSpec("lmms-lab/ChartQA", "test"),
+    "docvqa": DatasetSpec("lmms-lab/DocVQA", "validation", "DocVQA"),
+    "mmmu": DatasetSpec("lmms-lab/MMMU", "dev"),
+    "textvqa": DatasetSpec("lmms-lab/textvqa", "validation"),
 }
 
 
@@ -31,6 +45,7 @@ class Sample:
     image_digest: str
     question: str
     answers: tuple[str, ...]
+    images: tuple[str, ...] = ()
 
 
 def parse_args() -> argparse.Namespace:
@@ -41,7 +56,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--datasets",
         default="chartqa,textvqa",
-        help="Comma-separated public datasets: chartqa,textvqa.",
+        help="Comma-separated public datasets: chartqa,docvqa,mmmu,textvqa.",
     )
     parser.add_argument("--samples-per-dataset", type=int, default=10)
     parser.add_argument(
@@ -176,7 +191,7 @@ def main() -> None:
         "resolved_model": loaded["instance"]["model"],
         "backend": loaded["instance"]["backend"],
         "datasets": list(dataset_names),
-        "dataset_sources": {name: f"https://huggingface.co/datasets/{DATASETS[name][0]}" for name in dataset_names},
+        "dataset_sources": {name: DATASETS[name].source for name in dataset_names},
         "samples_per_dataset": args.samples_per_dataset,
         "max_tokens": args.max_tokens,
         "cold_mode": args.cold_mode,
@@ -215,28 +230,40 @@ def load_public_samples(
     samples: list[Sample] = []
     warmups: list[Sample] = []
     for dataset_name in dataset_names:
-        hub_name, split = DATASETS[dataset_name]
-        rows = load_dataset(hub_name, split=split, streaming=True)
+        spec = DATASETS[dataset_name]
+        rows = load_dataset(
+            spec.repository,
+            spec.config,
+            split=spec.split,
+            streaming=True,
+        )
         unique: list[Sample] = []
         seen: set[str] = set()
         for index, row in enumerate(rows):
-            image = row["image"].convert("RGB")
-            digest = image_digest(image)
+            row_images = tuple(image.convert("RGB") for image in images_for(dataset_name, row))
+            if not row_images:
+                continue
+            digest = images_digest(row_images)
             if digest in seen:
                 continue
             seen.add(digest)
-            target = work_dir / dataset_name / f"{digest}.png"
-            target.parent.mkdir(parents=True, exist_ok=True)
-            if not target.exists():
-                image.save(target)
+            target_dir = work_dir / dataset_name / digest
+            target_dir.mkdir(parents=True, exist_ok=True)
+            image_paths = []
+            for image_index, image in enumerate(row_images):
+                target = target_dir / f"{image_index}.png"
+                if not target.exists():
+                    image.save(target)
+                image_paths.append(str(target.resolve()))
             unique.append(
                 Sample(
                     dataset=dataset_name,
                     index=index,
-                    image=str(target.resolve()),
+                    image=image_paths[0],
                     image_digest=digest,
-                    question=str(row["question"]),
+                    question=question_for(dataset_name, row),
                     answers=answers_for(dataset_name, row),
+                    images=tuple(image_paths),
                 )
             )
             if len(unique) >= samples_per_dataset + 1:
@@ -254,10 +281,47 @@ def load_public_samples(
 def answers_for(dataset_name: str, row: dict[str, Any]) -> tuple[str, ...]:
     if dataset_name == "chartqa":
         return (str(row["answer"]),)
+    if dataset_name == "mmmu":
+        answer = str(row["answer"])
+        options = _literal_list(row.get("options"))
+        index = ord(answer.upper()) - ord("A") if len(answer) == 1 else -1
+        selected = str(options[index]) if 0 <= index < len(options) else ""
+        return tuple(value for value in (answer, selected) if value)
     raw = row["answers"]
     if isinstance(raw, str):
         raw = ast.literal_eval(raw)
     return tuple(str(answer) for answer in raw)
+
+
+def images_for(dataset_name: str, row: dict[str, Any]) -> tuple[Any, ...]:
+    if dataset_name == "mmmu":
+        return tuple(
+            row.get(f"image_{index}")
+            for index in range(1, 8)
+            if row.get(f"image_{index}") is not None
+        )
+    image = row.get("image")
+    return () if image is None else (image,)
+
+
+def question_for(dataset_name: str, row: dict[str, Any]) -> str:
+    question = str(row["question"])
+    if dataset_name != "mmmu":
+        return question
+    options = _literal_list(row.get("options"))
+    if not options:
+        return question
+    rendered = "\n".join(
+        f"{chr(ord('A') + index)}. {option}"
+        for index, option in enumerate(options)
+    )
+    return f"{question}\nOptions:\n{rendered}\nReturn only the option letter."
+
+
+def _literal_list(value: Any) -> list[Any]:
+    if isinstance(value, str):
+        value = ast.literal_eval(value)
+    return list(value or ())
 
 
 def image_digest(image: Any) -> str:
@@ -265,6 +329,13 @@ def image_digest(image: Any) -> str:
     digest.update(str(image.mode).encode("ascii"))
     digest.update(repr(image.size).encode("ascii"))
     digest.update(image.tobytes())
+    return digest.hexdigest()
+
+
+def images_digest(images: Sequence[Any]) -> str:
+    digest = hashlib.sha256()
+    for image in images:
+        digest.update(bytes.fromhex(image_digest(image)))
     return digest.hexdigest()
 
 
@@ -300,7 +371,7 @@ def run_request(
     events = client.generate(
         model,
         prompt,
-        images=[sample.image],
+        images=list(sample.images or (sample.image,)),
         options=options,
         keep_alive="forever",
         stream=True,
@@ -418,6 +489,7 @@ def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
     decisions = [row.get("cold_vision") or {} for row in accelerated]
     verifications = [row.get("verification") or {} for row in accelerated]
     post_fusion = [row.get("post_fusion_vision") or {} for row in accelerated]
+    confidence = paired_bootstrap_intervals(baseline, accelerated)
     return {
         "pairs": len(accelerated),
         "unique_images": len({row["image_digest"] for row in accelerated}),
@@ -426,9 +498,11 @@ def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "median_total_speedup": baseline_total / accelerated_total,
         "aggregate_total_speedup": sum(row["client_total_seconds"] for row in baseline)
         / sum(row["client_total_seconds"] for row in accelerated),
+        "aggregate_total_speedup_ci95": confidence["aggregate_total_speedup"],
         "median_paired_total_speedup": statistics.median(
             row["paired_total_speedup"] for row in accelerated
         ),
+        "median_paired_total_speedup_ci95": confidence["median_paired_total_speedup"],
         "baseline_median_ttft_seconds": baseline_ttft,
         "accelerated_median_ttft_seconds": accelerated_ttft,
         "median_ttft_speedup": baseline_ttft / accelerated_ttft,
@@ -439,6 +513,11 @@ def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
         ),
         "baseline_expected_match_rate": _rate(row["expected_match"] for row in baseline),
         "accelerated_expected_match_rate": _rate(row["expected_match"] for row in accelerated),
+        "expected_match_rate_delta": (
+            _rate(row["expected_match"] for row in accelerated)
+            - _rate(row["expected_match"] for row in baseline)
+        ),
+        "expected_match_rate_delta_ci95": confidence["expected_match_rate_delta"],
         "paired_literal_output_equal_rate": _rate(
             row["paired_literal_output_equal"] for row in accelerated
         ),
@@ -472,6 +551,64 @@ def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
             for dataset in sorted({row["dataset"] for row in rows})
         },
     }
+
+
+def paired_bootstrap_intervals(
+    baseline: Sequence[dict[str, Any]],
+    accelerated: Sequence[dict[str, Any]],
+    *,
+    draws: int = 2000,
+    seed: int = 20260716,
+) -> dict[str, list[float]]:
+    if not baseline or len(baseline) != len(accelerated):
+        raise ValueError("paired bootstrap requires equally sized non-empty rows")
+    count = len(baseline)
+    rng = random.Random(seed)
+    speedups = []
+    paired_medians = []
+    accuracy_deltas = []
+    for _ in range(max(1, int(draws))):
+        selected = [rng.randrange(count) for _ in range(count)]
+        baseline_seconds = sum(float(baseline[index]["client_total_seconds"]) for index in selected)
+        accelerated_seconds = sum(
+            float(accelerated[index]["client_total_seconds"]) for index in selected
+        )
+        speedups.append(baseline_seconds / accelerated_seconds)
+        paired_medians.append(
+            statistics.median(
+                float(baseline[index]["client_total_seconds"])
+                / float(accelerated[index]["client_total_seconds"])
+                for index in selected
+            )
+        )
+        accuracy_deltas.append(
+            sum(
+                int(bool(accelerated[index]["expected_match"]))
+                - int(bool(baseline[index]["expected_match"]))
+                for index in selected
+            )
+            / count
+        )
+    return {
+        "aggregate_total_speedup": _interval(speedups),
+        "median_paired_total_speedup": _interval(paired_medians),
+        "expected_match_rate_delta": _interval(accuracy_deltas),
+    }
+
+
+def _interval(values: Sequence[float]) -> list[float]:
+    ordered = sorted(float(value) for value in values)
+    return [_percentile(ordered, 0.025), _percentile(ordered, 0.975)]
+
+
+def _percentile(ordered: Sequence[float], quantile: float) -> float:
+    if not ordered:
+        raise ValueError("percentile requires at least one value")
+    position = max(0.0, min(1.0, quantile)) * (len(ordered) - 1)
+    lower = int(position)
+    upper = min(lower + 1, len(ordered) - 1)
+    weight = position - lower
+    return ordered[lower] * (1.0 - weight) + ordered[upper] * weight
 
 
 def _optional_float(value: Any) -> float | None:
