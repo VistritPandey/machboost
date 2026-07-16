@@ -7,7 +7,11 @@ from unittest.mock import patch
 from scripts.benchmark_cold_vision import (
     Sample,
     answer_matches,
+    answers_for,
     image_digest,
+    images_for,
+    paired_bootstrap_intervals,
+    question_for,
     summarize,
     verify_uncertain_request,
 )
@@ -158,6 +162,46 @@ class ColdVisionBenchmarkTests(unittest.TestCase):
                     }
                 ]
             )
+
+    def test_mmmu_sample_preserves_images_options_and_answer_text(self) -> None:
+        first = object()
+        second = object()
+        row = {
+            "question": "Compare <image 1> with <image 2>.",
+            "options": "['alpha', 'beta', 'gamma']",
+            "answer": "B",
+            "image_1": first,
+            "image_2": second,
+            **{f"image_{index}": None for index in range(3, 8)},
+        }
+
+        self.assertEqual(images_for("mmmu", row), (first, second))
+        self.assertEqual(answers_for("mmmu", row), ("B", "beta"))
+        question = question_for("mmmu", row)
+        self.assertIn("A. alpha", question)
+        self.assertIn("B. beta", question)
+        self.assertTrue(question.endswith("Return only the option letter."))
+
+    def test_paired_bootstrap_reports_speed_and_accuracy_intervals(self) -> None:
+        baseline = [
+            {"client_total_seconds": 4.0, "expected_match": True},
+            {"client_total_seconds": 6.0, "expected_match": False},
+        ]
+        accelerated = [
+            {"client_total_seconds": 2.0, "expected_match": True},
+            {"client_total_seconds": 3.0, "expected_match": True},
+        ]
+
+        intervals = paired_bootstrap_intervals(
+            baseline,
+            accelerated,
+            draws=100,
+            seed=7,
+        )
+
+        self.assertEqual(intervals["aggregate_total_speedup"], [2.0, 2.0])
+        self.assertEqual(intervals["median_paired_total_speedup"], [2.0, 2.0])
+        self.assertEqual(intervals["expected_match_rate_delta"], [0.0, 1.0])
 
     @unittest.skipUnless(importlib.util.find_spec("PIL"), "Pillow is optional")
     def test_image_digest_changes_with_pixels(self) -> None:
