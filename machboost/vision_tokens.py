@@ -220,7 +220,7 @@ class PostFusionVisionModel:
             mx.take(position_ids[2, 0], visual_index_array, axis=0).tolist(),
             dtype=int,
         )
-        spatial_factor = max(1, round(math.sqrt(1.0 / self.retain_ratio)))
+        spatial_factor = spatial_group_factor(self.retain_ratio)
         segments = _contiguous_segments(visual_indices)
         groups: dict[tuple[int, int, int, int], list[int]] = {}
         for position, (segment, time_index, height, width) in enumerate(
@@ -390,6 +390,13 @@ def bucket_token_target(visual_count: int, retain_ratio: float, bucket: int = 0)
     if width > 1:
         target = math.ceil(target / width) * width
     return min(count, target)
+
+
+def spatial_group_factor(retain_ratio: float) -> int:
+    ratio = float(retain_ratio)
+    if not 0.0 < ratio <= 1.0:
+        raise ValueError("visual token retention ratio must be between zero and one")
+    return max(1, math.ceil(math.sqrt(1.0 / ratio)))
 
 
 def _contiguous_segments(indices: Any) -> list[int]:
