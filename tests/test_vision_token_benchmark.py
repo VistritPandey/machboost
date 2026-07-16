@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from scripts.benchmark_vision_tokens import (
     DEFAULT_PROFILES,
     _add_pair_metrics,
+    _mark_failed_checkpoint,
     _write_checkpoint,
     parse_profile,
     parse_profiles,
@@ -72,6 +73,28 @@ class VisionTokenBenchmarkTests(unittest.TestCase):
         self.assertEqual(artifact["status"], "running")
         self.assertEqual(artifact["completed_samples"], 0)
         self.assertEqual(artifact["summaries"], {})
+
+    def test_failed_checkpoint_records_error_without_losing_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "checkpoint.json"
+            output.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "machboost.vision_token_ablation.v1",
+                        "status": "running",
+                        "baseline_rows": [{"index": 1}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            _mark_failed_checkpoint(output, RuntimeError("Metal failed"))
+            artifact = json.loads(output.read_text(encoding="utf-8"))
+
+        self.assertEqual(artifact["status"], "failed")
+        self.assertEqual(artifact["error"]["type"], "RuntimeError")
+        self.assertEqual(artifact["error"]["message"], "Metal failed")
+        self.assertEqual(artifact["baseline_rows"], [{"index": 1}])
 
 
 if __name__ == "__main__":
