@@ -157,6 +157,11 @@ def candidates_from_artifact(
 ) -> list[Candidate]:
     if artifact.get("schema_version") != ABLATION_SCHEMA:
         raise ValueError(f"unsupported vision ablation schema in {source}")
+    status = artifact.get("status")
+    if status not in (None, "complete"):
+        raise ValueError(
+            f"vision ablation artifact in {source} is not complete: {status}"
+        )
     baseline_by_key = {
         _row_key(row): row for row in artifact.get("baseline_rows") or ()
     }
