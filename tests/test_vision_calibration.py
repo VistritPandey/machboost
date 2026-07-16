@@ -51,6 +51,16 @@ class VisionCalibrationTests(unittest.TestCase):
         self.assertFalse(result["workloads"]["document-text"]["enabled"])
         self.assertEqual(result["workloads"]["document-text"]["mode"], "off")
 
+    def test_incomplete_checkpoint_is_rejected(self) -> None:
+        artifact = fixture_artifact()
+        artifact["status"] = "failed"
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "ablation.json"
+            source.write_text(json.dumps(artifact), encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "is not complete: failed"):
+                calibrate([source], min_pairs=2)
+
 
 def fixture_artifact(*, include_adaptive: bool = True) -> dict:
     baseline_rows = [fixture_row(index, "baseline", seconds=4.0) for index in range(2)]
