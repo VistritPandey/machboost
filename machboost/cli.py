@@ -18,6 +18,7 @@ from .adapters.ollama import OllamaHTTPAdapter, OllamaHTTPError
 from .client import MachBoostAPIError, MachBoostClient, ensure_server
 from .models import alias_rows, resolve_model
 from .server import DEFAULT_HOST, DEFAULT_PORT, serve as serve_runtime
+from .vision_auto import VISION_TOKEN_REQUEST_MODES, load_vision_calibration
 
 DEFAULT_CHAT_SYSTEM = "Answer directly and concisely. Do not reveal hidden reasoning."
 
@@ -551,6 +552,9 @@ def run_native_chat(
                     cold_vision_max_edge=args.vision_max_edge,
                     vision_token_mode=args.vision_tokens,
                     vision_token_ratio=args.vision_token_ratio,
+                    vision_token_layer=args.vision_token_layer,
+                    vision_token_bucket=args.vision_token_bucket,
+                    vision_calibration=load_vision_calibration(args.vision_calibration),
                 )
             response, stats = accelerator.generate_chat(messages, **kwargs)
         except KeyboardInterrupt:
@@ -717,6 +721,9 @@ def native_server_options(args: argparse.Namespace) -> dict:
         "vision_max_edge": args.vision_max_edge,
         "vision_tokens": args.vision_tokens,
         "vision_token_ratio": args.vision_token_ratio,
+        "vision_token_layer": args.vision_token_layer,
+        "vision_token_bucket": args.vision_token_bucket,
+        "vision_calibration": args.vision_calibration,
     }
 
 
@@ -849,6 +856,9 @@ def run_resident_completion(args: argparse.Namespace, *, output_stream=None, err
                     cold_vision_max_edge=args.vision_max_edge,
                     vision_token_mode=args.vision_tokens,
                     vision_token_ratio=args.vision_token_ratio,
+                    vision_token_layer=args.vision_token_layer,
+                    vision_token_bucket=args.vision_token_bucket,
+                    vision_calibration=load_vision_calibration(args.vision_calibration),
                 )
             text, stats = accelerator.generate(prompt, **kwargs)
             print("", file=output_stream)
@@ -1173,15 +1183,29 @@ def add_native_run_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--vision-tokens",
-        choices=["off", "merge", "adaptive"],
+        choices=VISION_TOKEN_REQUEST_MODES,
         default="off",
-        help="Experimental Qwen3-VL post-fusion visual token compression.",
+        help="Qwen3-VL post-fusion visual token policy. Auto classifies the prompt and image shape.",
     )
     parser.add_argument(
         "--vision-token-ratio",
         type=float,
         default=0.35,
         help="Requested visual token retention ratio for post-fusion compression.",
+    )
+    parser.add_argument(
+        "--vision-token-layer",
+        type=int,
+        help="Override the language layer after which visual tokens are compressed.",
+    )
+    parser.add_argument(
+        "--vision-token-bucket",
+        type=int,
+        help="Round the retained visual-token target to this bucket size; zero disables bucketing.",
+    )
+    parser.add_argument(
+        "--vision-calibration",
+        help="Path to a machboost.vision_calibration.v1 JSON policy artifact.",
     )
     parser.add_argument("--direct", action="store_true", help="Load in this process instead of using the resident server.")
     parser.add_argument("--keep-alive", default="forever", help="Resident lifetime, for example forever, 10m, or 1h.")
