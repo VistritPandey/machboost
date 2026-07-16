@@ -217,12 +217,13 @@ def frame_change_scores(frame_paths: Sequence[Path]) -> tuple[float, ...]:
     previous = None
     for frame_path in frame_paths:
         with Image.open(frame_path) as image:
-            current = image.convert("L").resize((64, 64))
+            current = image.convert("RGB").resize((64, 64))
             if previous is None:
                 scores.append(1.0)
             else:
                 difference = ImageChops.difference(previous, current)
-                scores.append(float(ImageStat.Stat(difference).mean[0]) / 255.0)
+                channel_means = ImageStat.Stat(difference).mean
+                scores.append(sum(float(value) for value in channel_means) / (3.0 * 255.0))
             previous = current.copy()
     return tuple(scores)
 
