@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import importlib.util
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from scripts.benchmark_cold_vision import (
@@ -12,6 +14,7 @@ from scripts.benchmark_cold_vision import (
     images_for,
     paired_bootstrap_intervals,
     question_for,
+    run_request,
     summarize,
     verify_uncertain_request,
 )
@@ -202,6 +205,49 @@ class ColdVisionBenchmarkTests(unittest.TestCase):
         self.assertEqual(intervals["aggregate_total_speedup"], [2.0, 2.0])
         self.assertEqual(intervals["median_paired_total_speedup"], [2.0, 2.0])
         self.assertEqual(intervals["expected_match_rate_delta"], [0.0, 1.0])
+
+    def test_request_forwards_shape_aware_policy_controls(self) -> None:
+        class Client:
+            options = None
+
+            def generate(self, model, prompt, *, images, options, keep_alive, stream):
+                self.options = options
+                return iter(
+                    [
+                        {"response": "yes", "done": False},
+                        {
+                            "response": "",
+                            "done": True,
+                            "eval_count": 1,
+                            "total_duration": 1_000_000,
+                            "machboost": {"stats": {"prompt_tokens": 128}},
+                        },
+                    ]
+                )
+
+        client = Client()
+        sample = Sample("docvqa", 1, "/tmp/image.png", "digest", "Read?", ("yes",))
+        with tempfile.TemporaryDirectory() as tmp:
+            calibration = Path(tmp) / "calibration.json"
+            run_request(
+                client,
+                "qwen3-vl:8b",
+                sample,
+                mode="accelerated",
+                cold_mode="off",
+                max_tokens=8,
+                vision_max_edge=None,
+                vision_token_mode="auto",
+                vision_token_ratio=0.5,
+                vision_token_layer=6,
+                vision_token_bucket=32,
+                vision_calibration=calibration,
+            )
+
+        self.assertEqual(client.options["vision_tokens"], "auto")
+        self.assertEqual(client.options["vision_token_layer"], 6)
+        self.assertEqual(client.options["vision_token_bucket"], 32)
+        self.assertEqual(client.options["vision_calibration"], str(calibration.resolve()))
 
     @unittest.skipUnless(importlib.util.find_spec("PIL"), "Pillow is optional")
     def test_image_digest_changes_with_pixels(self) -> None:
