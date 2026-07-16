@@ -14,6 +14,7 @@ from ..vision import (
     VisualAssetStore,
     normalize_multimodal_messages,
 )
+from ..vision_auto import choose_vision_token_policy
 from ..vision_policy import choose_cold_vision
 from ..vision_tokens import configure_post_fusion_vision
 
@@ -160,6 +161,9 @@ class MLXVLMAccelerator:
         cold_vision_max_edge: Optional[int] = None,
         vision_token_mode: str = "off",
         vision_token_ratio: float = 0.35,
+        vision_token_layer: Optional[int] = None,
+        vision_token_bucket: Optional[int] = None,
+        vision_calibration: Optional[dict[str, Any]] = None,
     ) -> tuple[str, VisionRunStats]:
         normalized, image_sources = normalize_multimodal_messages(messages)
         images = self.assets.materialize_all(image_sources)
@@ -179,6 +183,9 @@ class MLXVLMAccelerator:
             cold_vision_max_edge=cold_vision_max_edge,
             vision_token_mode=vision_token_mode,
             vision_token_ratio=vision_token_ratio,
+            vision_token_layer=vision_token_layer,
+            vision_token_bucket=vision_token_bucket,
+            vision_calibration=vision_calibration,
             policy_prompt=_latest_user_text(normalized),
         )
 
@@ -250,6 +257,9 @@ class MLXVLMAccelerator:
         cold_vision_max_edge: Optional[int] = None,
         vision_token_mode: str = "off",
         vision_token_ratio: float = 0.35,
+        vision_token_layer: Optional[int] = None,
+        vision_token_bucket: Optional[int] = None,
+        vision_calibration: Optional[dict[str, Any]] = None,
     ) -> tuple[str, VisionRunStats]:
         materialized = self.assets.materialize_all(images or ())
         templated = self._apply_chat_template(
@@ -270,6 +280,9 @@ class MLXVLMAccelerator:
             cold_vision_max_edge=cold_vision_max_edge,
             vision_token_mode=vision_token_mode,
             vision_token_ratio=vision_token_ratio,
+            vision_token_layer=vision_token_layer,
+            vision_token_bucket=vision_token_bucket,
+            vision_calibration=vision_calibration,
             policy_prompt=prompt,
         )
 
@@ -286,6 +299,9 @@ class MLXVLMAccelerator:
         cold_vision_max_edge: Optional[int],
         vision_token_mode: str,
         vision_token_ratio: float,
+        vision_token_layer: Optional[int],
+        vision_token_bucket: Optional[int],
+        vision_calibration: Optional[dict[str, Any]],
         policy_prompt: str,
     ) -> tuple[str, VisionRunStats]:
         if self._closed:
@@ -302,6 +318,9 @@ class MLXVLMAccelerator:
             cold_vision_max_edge=cold_vision_max_edge,
             vision_token_mode=vision_token_mode,
             vision_token_ratio=vision_token_ratio,
+            vision_token_layer=vision_token_layer,
+            vision_token_bucket=vision_token_bucket,
+            vision_calibration=vision_calibration,
             policy_prompt=policy_prompt,
         )
         return future.result()
@@ -319,6 +338,9 @@ class MLXVLMAccelerator:
         cold_vision_max_edge: Optional[int],
         vision_token_mode: str,
         vision_token_ratio: float,
+        vision_token_layer: Optional[int],
+        vision_token_bucket: Optional[int],
+        vision_calibration: Optional[dict[str, Any]],
         policy_prompt: str,
     ) -> tuple[str, VisionRunStats]:
         with self._generation_lock:
@@ -329,10 +351,22 @@ class MLXVLMAccelerator:
                 mode=cold_vision_mode,
                 max_edge=cold_vision_max_edge,
             )
-            post_fusion = configure_post_fusion_vision(
-                self.model,
+            vision_token_decision = choose_vision_token_policy(
+                policy_prompt,
+                images,
                 mode=vision_token_mode,
                 retain_ratio=vision_token_ratio,
+                prune_after_layer=vision_token_layer,
+                token_bucket=vision_token_bucket,
+                calibration=vision_calibration,
+            )
+            post_fusion = configure_post_fusion_vision(
+                self.model,
+                mode=vision_token_decision.mode,
+                retain_ratio=vision_token_decision.retain_ratio,
+                prune_after_layer=vision_token_decision.prune_after_layer,
+                token_bucket=vision_token_decision.token_bucket,
+                policy=vision_token_decision.to_dict(),
             )
             post_fusion_enabled = (
                 post_fusion is not None and post_fusion.mode != "off"
@@ -441,15 +475,19 @@ class MLXVLMAccelerator:
             cold_vision=cold_vision.to_dict(),
             post_fusion_vision=(
                 {
-                    "mode": str(vision_token_mode or "off").strip().lower(),
+                    "mode": vision_token_decision.mode,
                     "enabled": False,
-                    "requested_retention_ratio": float(vision_token_ratio),
-                    "prune_after_layer": 3,
+                    "requested_retention_ratio": vision_token_decision.retain_ratio,
+                    "prune_after_layer": vision_token_decision.prune_after_layer,
+                    "applied_after_layer": 0,
+                    "token_bucket": vision_token_decision.token_bucket,
+                    "target_visual_tokens": 0,
                     "original_sequence_tokens": 0,
                     "retained_sequence_tokens": 0,
                     "original_visual_tokens": 0,
                     "retained_visual_tokens": 0,
                     "actual_visual_retention_ratio": None,
+                    "policy": vision_token_decision.to_dict(),
                 }
                 if post_fusion is None
                 else post_fusion.info()
