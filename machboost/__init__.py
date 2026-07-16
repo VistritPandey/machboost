@@ -22,6 +22,7 @@ from .client import MachBoostAPIError, MachBoostClient, ensure_server
 from .adapters.mlx_vlm import MLXVLMAccelerator, VisionRunStats
 from .models import ModelAlias, ModelResolution, resolve_model
 from .server import RuntimeManager
+from .video import TemporalVideoSampler, VideoFrame, VideoSelection
 from .vision import ContentAddressedVisionCache, VisualAssetStore, VisionCacheInfo
 
 __all__ = [
@@ -44,6 +45,9 @@ __all__ = [
     "ModelResolution",
     "RunStats",
     "RuntimeManager",
+    "TemporalVideoSampler",
+    "VideoFrame",
+    "VideoSelection",
     "VisualAssetStore",
     "VisionCacheInfo",
     "VisionRunStats",
