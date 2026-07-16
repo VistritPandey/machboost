@@ -7,6 +7,7 @@ from pathlib import Path
 
 from machboost.video import (
     TemporalVideoSampler,
+    frame_change_scores,
     select_temporal_frames,
     select_uniform_frames,
 )
@@ -40,6 +41,20 @@ class VideoTests(unittest.TestCase):
     def test_uniform_selection_spans_the_full_video(self) -> None:
         self.assertEqual(select_uniform_frames(10, max_frames=4), (0, 3, 6, 9))
         self.assertEqual(select_uniform_frames(3, max_frames=10), (0, 1, 2))
+
+    @unittest.skipUnless(importlib.util.find_spec("PIL"), "Pillow is optional")
+    def test_change_score_detects_equal_luminance_color_transitions(self) -> None:
+        from PIL import Image
+
+        with tempfile.TemporaryDirectory() as tmp:
+            red = Path(tmp) / "red.png"
+            green = Path(tmp) / "green.png"
+            Image.new("RGB", (32, 32), (255, 0, 0)).save(red)
+            Image.new("RGB", (32, 32), (0, 130, 0)).save(green)
+
+            scores = frame_change_scores((red, green))
+
+        self.assertGreater(scores[1], 0.1)
 
     @unittest.skipUnless(importlib.util.find_spec("PIL"), "Pillow is optional")
     def test_sampler_reports_selected_frame_telemetry(self) -> None:
