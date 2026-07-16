@@ -139,6 +139,11 @@ def main() -> None:
     if args.samples_per_dataset < 1:
         raise ValueError("samples per dataset must be at least 1")
     profiles = parse_profiles(args.profiles)
+    output = args.output or Path(
+        "results/local/"
+        f"vision_tokens_{args.model.replace(':', '_')}_{datetime.now().strftime('%Y%m%d')}.json"
+    )
+    output.parent.mkdir(parents=True, exist_ok=True)
 
     samples, warmups = load_public_samples(
         dataset_names,
@@ -155,17 +160,37 @@ def main() -> None:
     )
 
     warmup_rows: list[dict[str, Any]] = []
-    for sample in warmups:
-        warmup_rows.append(_run_baseline(client, args.model, sample, args.max_tokens))
-        for profile in profiles:
-            warmup_rows.append(
-                _run_profile(client, args.model, sample, profile, args.max_tokens)
-            )
-
     baseline_rows: list[dict[str, Any]] = []
     profile_rows: dict[str, list[dict[str, Any]]] = {
         profile.slug: [] for profile in profiles
     }
+    _write_checkpoint(
+        output,
+        args=args,
+        dataset_names=dataset_names,
+        profiles=profiles,
+        baseline_rows=baseline_rows,
+        profile_rows=profile_rows,
+        warmup_rows=warmup_rows,
+    )
+    for sample in warmups:
+        _print_progress("warmup", sample, "baseline")
+        warmup_rows.append(_run_baseline(client, args.model, sample, args.max_tokens))
+        for profile in profiles:
+            _print_progress("warmup", sample, profile.slug)
+            warmup_rows.append(
+                _run_profile(client, args.model, sample, profile, args.max_tokens)
+            )
+        _write_checkpoint(
+            output,
+            args=args,
+            dataset_names=dataset_names,
+            profiles=profiles,
+            baseline_rows=baseline_rows,
+            profile_rows=profile_rows,
+            warmup_rows=warmup_rows,
+        )
+
     methods: tuple[VisionProfile | None, ...] = (None, *profiles)
     for sample_index, sample in enumerate(samples):
         rotated = methods[sample_index % len(methods) :] + methods[: sample_index % len(methods)]
@@ -173,8 +198,10 @@ def main() -> None:
         candidates: dict[str, dict[str, Any]] = {}
         for profile in rotated:
             if profile is None:
+                _print_progress("evaluate", sample, "baseline")
                 baseline = _run_baseline(client, args.model, sample, args.max_tokens)
             else:
+                _print_progress("evaluate", sample, profile.slug)
                 candidates[profile.slug] = _run_profile(
                     client,
                     args.model,
@@ -189,6 +216,15 @@ def main() -> None:
             candidate = candidates[profile.slug]
             _add_pair_metrics(baseline, candidate)
             profile_rows[profile.slug].append(candidate)
+        _write_checkpoint(
+            output,
+            args=args,
+            dataset_names=dataset_names,
+            profiles=profiles,
+            baseline_rows=baseline_rows,
+            profile_rows=profile_rows,
+            warmup_rows=warmup_rows,
+        )
 
     summaries = {
         profile.slug: summarize(
@@ -197,13 +233,9 @@ def main() -> None:
         )
         for profile in profiles
     }
-    output = args.output or Path(
-        "results/local/"
-        f"vision_tokens_{args.model.replace(':', '_')}_{datetime.now().strftime('%Y%m%d')}.json"
-    )
-    output.parent.mkdir(parents=True, exist_ok=True)
     artifact = {
         "schema_version": "machboost.vision_token_ablation.v1",
+        "status": "complete",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "method": "shared-baseline paired unique-image post-fusion visual-token ablation",
         "model": args.model,
@@ -229,6 +261,52 @@ def main() -> None:
     output.write_text(json.dumps(artifact, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(summaries, indent=2))
     print(f"artifact: {output}")
+
+
+def _print_progress(stage: str, sample: Sample, method: str) -> None:
+    print(
+        f"[{stage}] dataset={sample.dataset} index={sample.index} method={method}",
+        flush=True,
+    )
+
+
+def _write_checkpoint(
+    output: Path,
+    *,
+    args: argparse.Namespace,
+    dataset_names: Sequence[str],
+    profiles: Sequence[VisionProfile],
+    baseline_rows: list[dict[str, Any]],
+    profile_rows: dict[str, list[dict[str, Any]]],
+    warmup_rows: list[dict[str, Any]],
+) -> None:
+    summaries = {
+        profile.slug: summarize(
+            [dict(row) for row in baseline_rows]
+            + [dict(row) for row in profile_rows[profile.slug]]
+        )
+        for profile in profiles
+        if baseline_rows and len(profile_rows[profile.slug]) == len(baseline_rows)
+    }
+    artifact = {
+        "schema_version": "machboost.vision_token_ablation.v1",
+        "status": "running",
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "model": args.model,
+        "datasets": list(dataset_names),
+        "dataset_sources": {name: DATASETS[name].source for name in dataset_names},
+        "samples_per_dataset": args.samples_per_dataset,
+        "max_tokens": args.max_tokens,
+        "profiles": [asdict(profile) | {"slug": profile.slug} for profile in profiles],
+        "completed_samples": len(baseline_rows),
+        "summaries": summaries,
+        "warmups": warmup_rows,
+        "baseline_rows": baseline_rows,
+        "profile_rows": profile_rows,
+    }
+    temporary = output.with_suffix(output.suffix + ".tmp")
+    temporary.write_text(json.dumps(artifact, indent=2) + "\n", encoding="utf-8")
+    temporary.replace(output)
 
 
 def _run_baseline(client, model: str, sample: Sample, max_tokens: int) -> dict[str, Any]:
