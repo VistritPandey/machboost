@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "machboost"
-version = "0.4.0"
+version = "0.5.0"
 description = "Resident local inference server with conditional text and visual acceleration."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -39,6 +39,10 @@ mlx = [
 ]
 vision = [
   "mlx-vlm>=0.5.0",
+  "Pillow",
+]
+video = [
+  "Pillow",
 ]
 all = [
   "torch",
@@ -46,6 +50,7 @@ all = [
   "mlx",
   "mlx-lm",
   "mlx-vlm>=0.5.0",
+  "Pillow",
 ]
 
 [project.scripts]
