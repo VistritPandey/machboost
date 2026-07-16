@@ -15,6 +15,7 @@ from urllib.parse import urlparse
 from . import __version__
 from .accelerator import Accelerator
 from .models import model_targets, resolve_model
+from .vision_auto import load_vision_calibration
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 11435
@@ -202,6 +203,11 @@ class RuntimeManager:
                     cold_vision_max_edge=_optional_int(options.get("vision_max_edge")),
                     vision_token_mode=str(options.get("vision_tokens", "off")),
                     vision_token_ratio=float(options.get("vision_token_ratio", 0.35)),
+                    vision_token_layer=_optional_int(options.get("vision_token_layer")),
+                    vision_token_bucket=_optional_int(options.get("vision_token_bucket")),
+                    vision_calibration=load_vision_calibration(
+                        options.get("vision_calibration")
+                    ),
                 )
             else:
                 if messages_have_images(messages):
@@ -252,6 +258,11 @@ class RuntimeManager:
                     cold_vision_max_edge=_optional_int(options.get("vision_max_edge")),
                     vision_token_mode=str(options.get("vision_tokens", "off")),
                     vision_token_ratio=float(options.get("vision_token_ratio", 0.35)),
+                    vision_token_layer=_optional_int(options.get("vision_token_layer")),
+                    vision_token_bucket=_optional_int(options.get("vision_token_bucket")),
+                    vision_calibration=load_vision_calibration(
+                        options.get("vision_calibration")
+                    ),
                 )
             else:
                 if images:
