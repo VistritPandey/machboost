@@ -9,14 +9,26 @@ from typing import Any
 
 from machboost import TemporalVideoSampler, ensure_server
 from machboost.vision_auto import VISION_TOKEN_REQUEST_MODES
-from scripts.benchmark_cold_vision import (
-    Sample,
-    machine_data,
-    normalize_answer,
-    package_versions,
-    run_request,
-    summarize,
-)
+try:
+    from scripts.benchmark_cold_vision import (
+        Sample,
+        machine_data,
+        normalize_answer,
+        package_versions,
+        run_request,
+        summarize,
+    )
+except ModuleNotFoundError as exc:
+    if exc.name != "scripts":
+        raise
+    from benchmark_cold_vision import (
+        Sample,
+        machine_data,
+        normalize_answer,
+        package_versions,
+        run_request,
+        summarize,
+    )
 
 
 def parse_args() -> argparse.Namespace:
