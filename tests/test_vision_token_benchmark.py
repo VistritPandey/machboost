@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import json
+import tempfile
 import unittest
+from pathlib import Path
+from types import SimpleNamespace
 
 from scripts.benchmark_vision_tokens import (
     DEFAULT_PROFILES,
     _add_pair_metrics,
+    _write_checkpoint,
     parse_profile,
     parse_profiles,
 )
@@ -43,6 +48,30 @@ class VisionTokenBenchmarkTests(unittest.TestCase):
         self.assertEqual(accelerated["paired_total_speedup"], 2.0)
         self.assertFalse(accelerated["paired_literal_output_equal"])
         self.assertTrue(accelerated["paired_normalized_output_equal"])
+
+    def test_checkpoint_is_valid_before_first_sample(self) -> None:
+        profiles = parse_profiles("auto")
+        args = SimpleNamespace(
+            model="qwen3-vl:8b",
+            samples_per_dataset=5,
+            max_tokens=8,
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "checkpoint.json"
+            _write_checkpoint(
+                output,
+                args=args,
+                dataset_names=("textvqa",),
+                profiles=profiles,
+                baseline_rows=[],
+                profile_rows={profiles[0].slug: []},
+                warmup_rows=[],
+            )
+            artifact = json.loads(output.read_text(encoding="utf-8"))
+
+        self.assertEqual(artifact["status"], "running")
+        self.assertEqual(artifact["completed_samples"], 0)
+        self.assertEqual(artifact["summaries"], {})
 
 
 if __name__ == "__main__":
