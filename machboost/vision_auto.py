@@ -118,7 +118,16 @@ def choose_vision_token_policy(
     if token_bucket is not None and int(token_bucket) < 0:
         raise ValueError("visual token bucket must be zero or greater")
 
-    signals = image_signals or inspect_vision_images(images)
+    signals = image_signals or (
+        inspect_vision_images(images)
+        if requested == "auto"
+        else VisionImageSignals(
+            count=len(images),
+            max_edge=0,
+            entropy=0.0,
+            edge_density=0.0,
+        )
+    )
     workload = classify_vision_workload(prompt, image_count=signals.count)
     if requested == "off" or not images:
         return VisionTokenDecision(
