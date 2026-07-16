@@ -5,7 +5,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from machboost.video import TemporalVideoSampler, select_temporal_frames
+from machboost.video import (
+    TemporalVideoSampler,
+    select_temporal_frames,
+    select_uniform_frames,
+)
 
 
 class VideoTests(unittest.TestCase):
@@ -32,6 +36,10 @@ class VideoTests(unittest.TestCase):
             select_temporal_frames((1.0, 0.8, 0.7), threshold=0.0, max_frames=1),
             (0,),
         )
+
+    def test_uniform_selection_spans_the_full_video(self) -> None:
+        self.assertEqual(select_uniform_frames(10, max_frames=4), (0, 3, 6, 9))
+        self.assertEqual(select_uniform_frames(3, max_frames=10), (0, 1, 2))
 
     @unittest.skipUnless(importlib.util.find_spec("PIL"), "Pillow is optional")
     def test_sampler_reports_selected_frame_telemetry(self) -> None:
@@ -63,6 +71,7 @@ class VideoTests(unittest.TestCase):
             )
 
         self.assertEqual(result.sampled_frames, 4)
+        self.assertEqual(result.strategy, "temporal-change")
         self.assertEqual(result.selected_frames, 3)
         self.assertEqual([frame.sample_index for frame in result.frames], [0, 2, 3])
         self.assertEqual(result.frames[1].timestamp_seconds, 1.0)
