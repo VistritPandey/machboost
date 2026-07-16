@@ -8,7 +8,12 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from machboost.vision_auto import CALIBRATION_SCHEMA
-from scripts.benchmark_cold_vision import normalize_answer, summarize
+try:
+    from scripts.benchmark_cold_vision import normalize_answer, summarize
+except ModuleNotFoundError as exc:
+    if exc.name != "scripts":
+        raise
+    from benchmark_cold_vision import normalize_answer, summarize
 
 
 ABLATION_SCHEMA = "machboost.vision_token_ablation.v1"
