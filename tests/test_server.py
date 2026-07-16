@@ -73,10 +73,21 @@ class FakeVisionAccelerator:
         cold_vision_max_edge=None,
         vision_token_mode="off",
         vision_token_ratio=0.35,
+        vision_token_layer=None,
+        vision_token_bucket=None,
+        vision_calibration=None,
     ):
         self.chat_calls.append((messages, max_tokens, use_vision_cache, temperature))
         self.cold_vision_calls.append((cold_vision_mode, cold_vision_max_edge))
-        self.vision_token_calls.append((vision_token_mode, vision_token_ratio))
+        self.vision_token_calls.append(
+            (
+                vision_token_mode,
+                vision_token_ratio,
+                vision_token_layer,
+                vision_token_bucket,
+                vision_calibration,
+            )
+        )
         if use_vision_cache and len(self.chat_calls) > 1:
             self.cache_hits += 1
         if on_text is not None:
@@ -97,10 +108,21 @@ class FakeVisionAccelerator:
         cold_vision_max_edge=None,
         vision_token_mode="off",
         vision_token_ratio=0.35,
+        vision_token_layer=None,
+        vision_token_bucket=None,
+        vision_calibration=None,
     ):
         self.generate_calls.append((prompt, tuple(images or ()), use_vision_cache))
         self.cold_vision_calls.append((cold_vision_mode, cold_vision_max_edge))
-        self.vision_token_calls.append((vision_token_mode, vision_token_ratio))
+        self.vision_token_calls.append(
+            (
+                vision_token_mode,
+                vision_token_ratio,
+                vision_token_layer,
+                vision_token_bucket,
+                vision_calibration,
+            )
+        )
         if on_text is not None:
             on_text("visual completion")
         return "visual completion", FakeStats(generated_tokens=2)
@@ -419,7 +441,34 @@ class HTTPServerTests(unittest.TestCase):
 
         self.assertEqual(
             self.loaded[0][1].vision_token_calls[0],
-            ("adaptive", 0.35),
+            ("adaptive", 0.35, None, None, None),
+        )
+
+    @patch("machboost.server.load_vision_calibration")
+    def test_ollama_generate_forwards_automatic_vision_policy(self, load_calibration):
+        calibration = {"schema": "machboost.vision_calibration.v1"}
+        load_calibration.return_value = calibration
+
+        self.request(
+            "/api/generate",
+            {
+                "model": "qwen3-vl:8b",
+                "prompt": "Read the label.",
+                "images": ["image-one"],
+                "stream": False,
+                "options": {
+                    "vision_tokens": "auto",
+                    "vision_token_layer": 6,
+                    "vision_token_bucket": 32,
+                    "vision_calibration": "vision-calibration.json",
+                },
+            },
+        )
+
+        load_calibration.assert_called_once_with("vision-calibration.json")
+        self.assertEqual(
+            self.loaded[0][1].vision_token_calls[0],
+            ("auto", 0.35, 6, 32, calibration),
         )
 
     def test_text_backend_rejects_image_payload(self):
