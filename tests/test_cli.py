@@ -373,6 +373,39 @@ class CLITests(unittest.TestCase):
         self.assertEqual(client.chat_calls[0][2]["vision_token_ratio"], 0.35)
         self.assertIn("vision_tokens=adaptive:35%", output.getvalue())
 
+    def test_resident_visual_chat_forwards_automatic_policy_controls(self):
+        prompts = iter(["Read this.", "/bye"])
+        client = FakeResidentClient()
+
+        with patch.object(cli, "connect_resident", return_value=client):
+            code = cli.run_resident_chat(
+                cli.build_parser().parse_args(
+                    [
+                        "run",
+                        "qwen3-vl:8b",
+                        "--image",
+                        "fixture.png",
+                        "--vision-tokens",
+                        "auto",
+                        "--vision-token-layer",
+                        "6",
+                        "--vision-token-bucket",
+                        "32",
+                        "--vision-calibration",
+                        "vision-calibration.json",
+                    ]
+                ),
+                input_func=lambda prompt: next(prompts),
+                output_stream=io.StringIO(),
+            )
+
+        self.assertEqual(code, 0)
+        options = client.chat_calls[0][2]
+        self.assertEqual(options["vision_tokens"], "auto")
+        self.assertEqual(options["vision_token_layer"], 6)
+        self.assertEqual(options["vision_token_bucket"], 32)
+        self.assertEqual(options["vision_calibration"], "vision-calibration.json")
+
     def test_visual_completion_forwards_image(self):
         output = io.StringIO()
         client = FakeResidentClient()
