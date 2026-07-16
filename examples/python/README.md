@@ -40,6 +40,16 @@ python3 examples/python/vision_client_demo.py \
 
 The visual client sends separate deterministic questions over one image and prints the resident backend's feature-cache hit, matching visual-prefix token count, and request latency. The second and later questions are the intended accelerated path.
 
+Temporal video frame selection:
+
+```sh
+brew install ffmpeg
+pip install -e ".[video]"
+python3 examples/python/video_sampler_demo.py ./clip.mp4 --fps 2 --max-frames 12
+```
+
+The video sampler compares a uniform frame budget with RGB change-aware selection and prints the selected chronological frame paths, timestamps, change scores, cache state, and reduction rate. It does not load a model. Use `machboost run qwen3-vl:8b --video ./clip.mp4` to pass selected frames to a resident VLM.
+
 ```sh
 pip install -e ".[hf]"
 python3 examples/python/hf_adapter_demo.py
