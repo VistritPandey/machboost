@@ -2,6 +2,16 @@
 
 This directory stores public benchmark artifacts for MachBoost text and visual acceleration paths.
 
+## Version 0.5 Evaluation Status, July 16 2026
+
+Version 0.5 adds a shared-baseline post-fusion ablation runner, paired bootstrap confidence intervals, deterministic random controls, workload-aware automatic policies, offline calibration gates, and a uniform-versus-temporal video harness. These tools do not replace the committed evidence below until complete artifacts are reviewed and added to this directory.
+
+A planned ChartQA, DocVQA, MMMU, and TextVQA matrix did not complete on the evaluation M1 Max. A fresh native Qwen3-VL 8B request for the held-out 2257 by 1764 DocVQA page reached the end of a 3,945-token prefill but did not return generation metrics before the explicit 120-second timeout. This occurred with post-fusion compression disabled. After terminating that native request, later model initialization attempts failed in Metal with `kIOGPUCommandBufferCallbackErrorImpactingInteractivity`. Those sessions are invalid performance runs and are not committed as evidence.
+
+The runner now prints every dataset/sample/method boundary, writes an atomic checkpoint after each completed sample, and marks caught failures with a type and message. Future dataset runs should be isolated so one native backend failure does not erase valid measurements from other datasets.
+
+The temporal sampler was integration-tested on a generated nine-second, three-scene color video. At two sampled frames per second and a 12-frame uniform budget, RGB change detection retained four chronological frames: the beginning, both color transitions, and the end. This is a 66.7% frame-count reduction test, not a VLM latency or quality result. No video speedup is claimed here.
+
 ## Unique-Image Post-Fusion Pilot, July 15 2026
 
 Artifact: `cold_vision_qwen3vl_8b_postfusion_20260715.json`
