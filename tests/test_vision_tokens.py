@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from machboost.vision_tokens import (
     PostFusionVisionModel,
     _contiguous_segments,
+    bucket_token_target,
     configure_post_fusion_vision,
 )
 
@@ -45,14 +46,20 @@ class PostFusionVisionTests(unittest.TestCase):
         )
         repeated = configure_post_fusion_vision(
             model,
-            mode="merge",
+            mode="random",
             retain_ratio=0.25,
+            prune_after_layer=6,
+            token_bucket=32,
+            policy={"source": "test"},
         )
 
         self.assertIs(first, repeated)
         self.assertIs(model.language_model.model, first)
-        self.assertEqual(repeated.mode, "merge")
+        self.assertEqual(repeated.mode, "random")
         self.assertEqual(repeated.retain_ratio, 0.25)
+        self.assertEqual(repeated.prune_after_layer, 6)
+        self.assertEqual(repeated.token_bucket, 32)
+        self.assertEqual(repeated.policy, {"source": "test"})
         self.assertFalse(repeated.info()["enabled"])
 
     def test_unsupported_model_rejects_compression(self) -> None:
@@ -72,6 +79,12 @@ class PostFusionVisionTests(unittest.TestCase):
                 retain_ratio=0.25,
                 prune_after_layer=0,
             )
+        with self.assertRaisesRegex(ValueError, "bucket"):
+            wrapper.configure(
+                mode="merge",
+                retain_ratio=0.25,
+                token_bucket=-1,
+            )
 
     def test_info_reports_actual_retention(self) -> None:
         wrapper = PostFusionVisionModel(FakeInnerModel())
@@ -80,18 +93,28 @@ class PostFusionVisionTests(unittest.TestCase):
         wrapper.retained_sequence_tokens = 300
         wrapper.original_visual_tokens = 640
         wrapper.retained_visual_tokens = 224
+        wrapper.target_visual_tokens = 224
+        wrapper.applied_after_layer = 6
 
         info = wrapper.info()
 
         self.assertTrue(info["enabled"])
         self.assertEqual(info["actual_visual_retention_ratio"], 0.35)
         self.assertEqual(info["retained_sequence_tokens"], 300)
+        self.assertEqual(info["target_visual_tokens"], 224)
+        self.assertEqual(info["applied_after_layer"], 6)
 
     def test_contiguous_segments_separate_multiple_visual_spans(self) -> None:
         self.assertEqual(
             _contiguous_segments([3, 4, 5, 9, 10, 20]),
             [0, 0, 0, 1, 1, 2],
         )
+
+    def test_bucket_target_rounds_up_and_never_exceeds_visual_count(self) -> None:
+        self.assertEqual(bucket_token_target(672, 0.35), 236)
+        self.assertEqual(bucket_token_target(672, 0.35, 32), 256)
+        self.assertEqual(bucket_token_target(100, 0.95, 32), 96)
+        self.assertEqual(bucket_token_target(0, 0.35, 32), 0)
 
 
 if __name__ == "__main__":
