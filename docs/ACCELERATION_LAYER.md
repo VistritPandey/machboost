@@ -67,6 +67,25 @@ Local file identities are derived from image content, with file metadata used on
 
 This path does not improve first-view latency. It benefits repeated extraction, QA, and agent turns over unchanged visual inputs. It also does not increase decode tokens per second after prefill; its primary effect is lower time to first token.
 
+### First-View Visual Compression
+
+Version 0.5 adds a Qwen3-VL-specific post-fusion wrapper. It leaves the vision encoder and required deep-stack injections intact, then shortens the visual hidden-state sequence before the remaining language layers. Four request modes are available:
+
+- `merge`: one query-weighted representative per spatial group
+- `adaptive`: merge spatial groups while preserving groups with high internal feature diversity
+- `random`: deterministic token-count control for ablation only
+- `auto`: classify the prompt and image signals, then select mode, retention ratio, layer, and token bucket
+
+The automatic classifier distinguishes general, document/text, chart, spatial, and multi-image requests. A calibration artifact can replace built-in profiles per workload. The offline selector requires a minimum paired sample count, a lower confidence bound on speedup, bounded task-score loss, and normalized output agreement. Random controls are never deployable. A workload with no passing candidate resolves to native inference.
+
+This path is approximate. It can change outputs and remains disabled unless requested. It cannot be combined with first-view image resizing, and the current layer hook is specific to the MLX-VLM Qwen3-VL implementation.
+
+### Temporal Video Frames
+
+The video adapter uses FFmpeg to sample frames, computes RGB frame-to-frame change on 64 by 64 thumbnails, and keeps the first frame, scene changes, and final frame under a fixed frame budget. When too many changes pass the threshold, the largest changes win while chronological order is preserved. Extracted frames are cached by video metadata and sample rate.
+
+Selected frames enter the existing multi-image VLM path. The adapter is therefore model-agnostic at the file boundary, but it is not equivalent to a native video encoder. It can remove redundant static frames before vision encoding; it can also miss short motion events. Uniform-frame and temporal-frame benchmark paths are kept separate so frame-count reduction is not presented as a model-quality result.
+
 ### Wrapper / Policy Mode
 
 Black-box local servers can still be wrapped for diagnostics, benchmarking, and option management. They cannot receive exact MachBoost speedups unless they expose a verifier API.
@@ -117,6 +136,21 @@ Image-scoped prompt state ---> KV prefix or whole-state checkpoint
 Native MLX-VLM decoder ---> streamed output + cache metrics
 ```
 
+First-view and video requests add two optional transformations before native decoding:
+
+```text
+Video file ---> FFmpeg samples ---> RGB temporal selector ---> chronological images
+                                                               |
+New image(s) + question ---> policy classifier ----------------+
+                |                                              |
+                +--> native visual sequence                    |
+                         |                                     |
+                         +--> post-fusion merge after layer N --+
+                                                               |
+                                                               v
+                                                    remaining LM layers
+```
+
 ## Core Interfaces
 
 ### Candidate Drafter
@@ -162,6 +196,9 @@ Inputs:
 - acceptance rate
 - accepted draft span length
 - target-call or forward-call reduction
+- visual-token retention, layer boundary, and task class
+- paired task-score delta and output agreement
+- lower confidence bound on paired wall-time speedup
 
 Outputs:
 
@@ -290,12 +327,12 @@ go run ./cmd/machboost bench command -- sleep 1
 |---|---:|---:|---|
 | Hugging Face | yes | yes | native adapter, streaming server, and benchmarks exist |
 | MLX / `mlx-lm` | yes | yes | native adapter, fast text streaming, and strict evidence mode exist |
-| MLX-VLM | yes | repeated-image feature and prefix reuse | image chat, streaming, and paired benchmark exist |
+| MLX-VLM | yes | repeated-image reuse and approximate first-view compression | image/video-frame chat, streaming, policy calibration, and paired benchmarks exist |
 | Custom Python service | caller-owned | yes, if verifier exists | supported through `machboost(...)` |
 | External Ollama HTTP | already resident | no | compatibility wrapper and benchmarks only |
 | llama.cpp | planned | possible | needs verifier/KV hooks or patch |
 
-Protocol compatibility does not imply full feature parity. Version 0.3 does not yet provide Ollama model creation/copy/deletion or embeddings. Image input is supported for Ollama-style chat/generate requests and OpenAI-style content parts when the selected backend is MLX-VLM.
+Protocol compatibility does not imply full feature parity. MachBoost does not yet provide Ollama model creation/copy/deletion or embeddings. Image input is supported for Ollama-style chat/generate requests and OpenAI-style content parts when the selected backend is MLX-VLM. Video is accepted by the MachBoost CLI and expanded into image frames before the request.
 
 ## Visual Evidence
 
@@ -370,7 +407,7 @@ Next targets:
 
 ### P4: Multimodal Runtime
 
-Status: initial image path done for 0.3.
+Status: image path, first-view policy, and temporal frame adapter done for 0.5.
 
 - image request schemas for the CLI, Python client, and local HTTP APIs
 - multimodal model alias and capability discovery
@@ -378,19 +415,25 @@ Status: initial image path done for 0.3.
 - image-scoped visual-prefix KV reuse
 - paired time-to-first-token and end-to-end Qwen2.5-VL benchmark
 - exact output and fixture-answer comparisons under greedy decoding
+- Qwen3-VL post-fusion merge, adaptive, random-control, and automatic policies
+- shared-baseline public-dataset ablations with paired bootstrap intervals
+- offline workload calibration with quality and latency gates
+- FFmpeg video sampling with RGB temporal-change selection
+- uniform-versus-temporal video benchmark harness
 
 Remaining work:
 
-- public-dataset VLM coverage beyond the six-model synthetic extraction matrix
+- complete multi-dataset first-view evidence after the observed native MLX high-resolution stability failure is resolved
 - concurrent-session cache isolation and load testing
-- configurable image resizing and preprocessing policies
-- video input, frame sampling, and temporal feature reuse
-- real image datasets and task-level quality metrics
+- video task-level quality evidence on real benchmarks
+- query-aware temporal token selection and temporal feature reuse
+- non-Qwen post-fusion adapters
 
 ## Product Principle
 
 MachBoost should feel boring:
 
-- If it can help, it speeds up exact output.
+- If an exact path can help, it preserves exact output.
+- If an approximate visual path is requested, it reports the applied policy and measured quality boundary.
 - If it cannot help, it stays out of the way.
 - It always leaves an audit trail explaining what happened.
