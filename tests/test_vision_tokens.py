@@ -8,6 +8,7 @@ from machboost.vision_tokens import (
     _contiguous_segments,
     bucket_token_target,
     configure_post_fusion_vision,
+    spatial_group_factor,
 )
 
 
@@ -115,6 +116,11 @@ class PostFusionVisionTests(unittest.TestCase):
         self.assertEqual(bucket_token_target(672, 0.35, 32), 256)
         self.assertEqual(bucket_token_target(100, 0.95, 32), 96)
         self.assertEqual(bucket_token_target(0, 0.35, 32), 0)
+
+    def test_half_retention_still_groups_neighboring_visual_tokens(self) -> None:
+        self.assertEqual(spatial_group_factor(1.0), 1)
+        self.assertEqual(spatial_group_factor(0.5), 2)
+        self.assertEqual(spatial_group_factor(0.35), 2)
 
 
 if __name__ == "__main__":
