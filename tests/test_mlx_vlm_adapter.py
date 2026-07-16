@@ -6,9 +6,10 @@ import unittest
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 from machboost.adapters.mlx_vlm import MLXVLMAccelerator, _resolution_scoped_images
+from machboost.vision_auto import VisionImageSignals
 from machboost.vision_policy import ColdVisionDecision
 
 
@@ -248,11 +249,54 @@ class MLXVLMAcceleratorTests(unittest.TestCase):
             self.accelerator.model,
             mode="adaptive",
             retain_ratio=0.35,
+            prune_after_layer=3,
+            token_bucket=0,
+            policy=ANY,
         )
         self.assertFalse(stats.visual_cache_enabled)
         self.assertFalse(stats.prompt_cache_enabled)
         self.assertEqual(stats.post_fusion_vision["retained_visual_tokens"], 224)
         self.assertNotIn("vision_cache", self.stream.calls[-1]["kwargs"])
+
+    def test_auto_post_fusion_resolves_document_policy(self):
+        post_fusion = SimpleNamespace(
+            mode="adaptive",
+            info=lambda: {
+                "mode": "adaptive",
+                "enabled": True,
+                "requested_retention_ratio": 0.50,
+                "prune_after_layer": 6,
+                "token_bucket": 32,
+            },
+        )
+        signals = VisionImageSignals(
+            count=1,
+            max_edge=1200,
+            entropy=0.5,
+            edge_density=0.1,
+        )
+
+        with (
+            patch("machboost.vision_auto.inspect_vision_images", return_value=signals),
+            patch(
+                "machboost.adapters.mlx_vlm.configure_post_fusion_vision",
+                return_value=post_fusion,
+            ) as configure,
+        ):
+            self.accelerator.generate(
+                "Read the invoice total.",
+                images=[str(self.image)],
+                max_tokens=8,
+                vision_token_mode="auto",
+            )
+
+        options = configure.call_args.kwargs
+        self.assertEqual(options["mode"], "adaptive")
+        self.assertEqual(options["retain_ratio"], 0.50)
+        self.assertEqual(options["prune_after_layer"], 6)
+        self.assertEqual(options["token_bucket"], 32)
+        self.assertEqual(options["policy"]["requested_mode"], "auto")
+        self.assertEqual(options["policy"]["workload"], "document-text")
 
     def test_chat_template_receives_history_and_image_count(self):
         messages = [
