@@ -3,7 +3,7 @@
 [![CI](https://github.com/VistritPandey/machboost/actions/workflows/ci.yml/badge.svg)](https://github.com/VistritPandey/machboost/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-MachBoost is an experimental resident local-inference server and Python package for MLX, MLX-VLM, and Hugging Face models. It provides an Ollama-like model workflow, keeps models warm between requests, streams text and visual chat, and applies backend-specific acceleration when a request contains reusable work. An opt-in Qwen3-VL path also reduces first-view visual prefill by compressing visual hidden states after the model's early fusion layers.
+MachBoost is an experimental resident local-inference server and Python package for MLX, MLX-VLM, and Hugging Face models. It provides an Ollama-like model workflow, keeps models warm between requests, streams text and visual chat, and applies backend-specific acceleration when a request contains reusable work. An opt-in Qwen3-VL path reduces first-view visual prefill by compressing visual hidden states after early fusion, while an FFmpeg adapter can turn video into a smaller chronological set of change-aware frames.
 
 For text, it drafts candidate tokens from nearby prompts, retrieved chunks, repo files, policies, configs, and docs, then verifies them with the target model. For repeated-image VLM requests, it uses architecture-aware caches: Qwen2.5-VL and Qwen3.5 can reuse projected vision features, while Qwen3-VL conservatively reuses only complete visual prompt state. Qwen3.5's hybrid recurrent/attention state is restored from whole-prefix checkpoints rather than an unsafe KV-only trim. None of these paths changes model weights.
 
@@ -27,6 +27,7 @@ Install optional backends as needed:
 pip install -e ".[mlx]"
 pip install -e ".[hf]"
 pip install -e ".[vision]"
+pip install -e ".[video]"
 pip install -e ".[all]"
 ```
 
@@ -100,7 +101,7 @@ machboost run qwen3-vl:4b --image ./invoice.png --show-stats
 machboost run qwen3.5:4b --image ./invoice.png --show-stats
 ```
 
-The interactive session keeps the model and attached image warm. Use `/image PATH` to attach another image, `/images` to inspect attachments, and `/clear-images` to remove them. The same path is available to Python applications:
+The interactive session keeps the model and attached image warm. Use `/image PATH` to attach another image, `/video PATH` to attach selected video frames, `/images` to inspect attachments, and `/clear-images` to remove them. The same path is available to Python applications:
 
 ```python
 from machboost import MachBoostClient, ensure_server
@@ -120,19 +121,73 @@ Image reuse is content-addressed: changing the file bytes creates a new cache id
 
 ### Experimental First-View Acceleration
 
-Qwen3-VL can opt into adaptive post-fusion visual-token compression for a new image and question:
+Qwen3-VL can opt into prompt- and image-aware post-fusion visual-token compression for a new image and question:
 
 ```sh
 machboost run qwen3-vl:8b \
   --image ./document.png \
-  --vision-tokens adaptive \
-  --vision-token-ratio 0.35 \
+  --vision-tokens auto \
   --show-stats
 ```
 
-The image still passes through the full-resolution vision encoder. Qwen3-VL then processes every visual token through its three early language layers and required deep-stack injections. MachBoost groups the resulting visual states spatially, preserves the most internally diverse groups, merges the rest with query-weighted pooling, and sends the shorter sequence through the remaining language layers. The request bypasses visual and prompt caches, so the reported gain is independent of prior images or prompts.
+The image still passes through the full-resolution vision encoder. Qwen3-VL processes every visual token through its required deep-stack injections and the selected number of early language layers. MachBoost then groups the visual states spatially, preserves internally diverse groups, merges the rest with query-weighted pooling, and sends the shorter sequence through the remaining layers. The request bypasses visual and prompt caches, so the reported gain is independent of prior images or prompts.
+
+`auto` classifies the request as general, document/text, chart, spatial, or multi-image. It selects a retention ratio, layer boundary, and token bucket from conservative built-in profiles. Manual experiments can use `merge`, `adaptive`, or the deterministic `random` control with `--vision-token-ratio`, `--vision-token-layer`, and `--vision-token-bucket`. Production code should calibrate these choices on representative data:
+
+```sh
+python3 scripts/benchmark_vision_tokens.py \
+  --model qwen3-vl:8b \
+  --datasets chartqa,docvqa,mmmu,textvqa \
+  --samples-per-dataset 20 \
+  --output results/local/vision-token-ablation.json
+
+python3 scripts/calibrate_vision_tokens.py \
+  results/local/vision-token-ablation.json \
+  --output vision-calibration.json
+
+machboost run qwen3-vl:8b \
+  --image ./document.png \
+  --vision-tokens auto \
+  --vision-calibration ./vision-calibration.json
+```
+
+The calibrator excludes random pruning from deployment and requires minimum sample count, a speedup confidence bound, task-accuracy retention, and normalized output agreement. If no candidate passes, that workload resolves to `off`.
 
 This path is approximate and disabled by default. It currently supports batch-one Qwen3-VL requests only, cannot be combined with `--cold-vision`, and can change wording or answers. On a 10-image TextVQA pilot with Qwen3-VL 8B, 35% visual retention produced a 1.67x aggregate wall-time speedup and 1.70x median paired speedup. Baseline and compressed paths each matched the dataset answer on 8 of 10 questions; normalized outputs were equal on 7 of 10. A 30% follow-up retained the same task score but was slower, so 35% remains the measured profile rather than assuming that more pruning is always better.
+
+### Video Inputs
+
+Video input requires FFmpeg plus Pillow:
+
+```sh
+brew install ffmpeg
+pip install -e ".[vision,video]"
+
+machboost run qwen3-vl:8b \
+  --video ./clip.mp4 \
+  --video-fps 2 \
+  --video-change-threshold 0.08 \
+  --video-max-frames 12 \
+  --vision-tokens auto
+```
+
+MachBoost samples frames into a content-keyed local cache, computes RGB frame-to-frame change on compact thumbnails, keeps scene changes plus the first and final frame, and caps the result by change strength. The selected images are passed to the VLM in chronological order. This is a generic frame-selection adapter, not a native video encoder, and aggressive selection can miss motion or short events.
+
+The sampler is also public Python API:
+
+```python
+from machboost import TemporalVideoSampler
+
+selection = TemporalVideoSampler().sample(
+    "./clip.mp4",
+    fps=2.0,
+    change_threshold=0.08,
+    max_frames=12,
+)
+print(selection.to_dict())
+```
+
+On the repository's three-scene integration fixture, the selector keeps four chronological frames from a 12-frame uniform budget, including both color transitions. This verifies frame reduction and transition coverage only; it is not a VLM speed or quality benchmark.
 
 Use the high-level `Accelerator` when you want MachBoost to load a model and build the draft corpus from strings, files, or directories. Calibrate before enabling the boosted path for a workflow:
 
@@ -237,6 +292,7 @@ MachBoost is most useful when the model is likely to continue with text already 
 - repeated logs, templates, checklists, and structured artifacts
 - repeated extraction, QA, or agent turns over the same image
 - short Qwen3-VL first-view requests where visual prefill dominates and approximate token merging is acceptable
+- videos with long static spans where selected chronological frames retain the task evidence
 
 It is usually neutral or slower for open-ended creative writing, one-word answers, and prompts where the next tokens are not recoverable from local context. The package exposes benchmark and calibration APIs so applications can turn the boosted path on only when it helps.
 
@@ -251,6 +307,7 @@ machboost pull qwen2.5:3b
 machboost warm qwen2.5:3b
 machboost run qwen2.5:3b
 machboost run qwen2.5-vl:3b --image ./image.png
+machboost run qwen3-vl:8b --video ./clip.mp4 --vision-tokens auto
 machboost chat qwen2.5:3b
 machboost complete qwen2.5-coder:3b "def parse_config(text):"
 machboost ps
@@ -289,6 +346,8 @@ machboost run Qwen/Qwen2.5-3B-Instruct --backend hf --local-files-only
 machboost run mlx-community/Qwen3.5-0.8B-MLX-4bit --backend mlx --strict
 machboost run mlx-community/Qwen2.5-3B-Instruct-4bit --backend mlx --context ./docs --ngram 1 --reentry-probe-tokens 1
 machboost run qwen3-vl:8b --image ./document.png --vision-tokens adaptive --vision-token-ratio 0.35 --show-stats
+machboost run qwen3-vl:8b --image ./chart.png --vision-tokens auto --vision-calibration ./vision-calibration.json
+machboost run qwen3-vl:8b --video ./clip.mp4 --video-fps 2 --video-max-frames 12
 ```
 
 `--reentry-probe-tokens` is experimental and disabled by default. `--direct` restores the one-process behavior for debugging. On Apple Silicon, a short alias prefers the MLX 4-bit model; explicit Hugging Face models default to `--device auto --dtype auto`, which selects MPS with float16 when available.
@@ -335,7 +394,7 @@ The Go CLI is useful for local systems experiments. The Python package is the pr
 | Backend | Status | Notes |
 |---|---|---|
 | MLX / `mlx-lm` | native adapter | Best Mac-first path. Strict evidence mode can disable prompt cache for clean exactness checks. |
-| MLX-VLM | native visual adapter | Uses model-safe cache reuse for unchanged images and opt-in post-fusion compression for uncached Qwen3-VL requests. |
+| MLX-VLM | native visual adapter | Uses model-safe cache reuse, opt-in post-fusion compression, and chronological video-frame inputs for supported VLMs. |
 | Hugging Face Transformers | native adapter | Useful for research and broad model coverage. |
 | MachBoost resident server | native control plane | Keeps MLX/HF models warm and exposes Ollama/OpenAI-compatible streaming APIs. |
 | Custom Python service | native if verifier exists | Implement `next_token`, `verify`, `encode`, and `decode` as needed. |
@@ -450,6 +509,34 @@ python3 scripts/benchmark_cold_vision.py \
   --output results/local/cold_vision_qwen3vl_8b_postfusion.json
 ```
 
+Run the shared-baseline policy ablation and derive an offline calibration artifact:
+
+```sh
+python3 scripts/benchmark_vision_tokens.py \
+  --model qwen3-vl:8b \
+  --datasets chartqa,docvqa,mmmu,textvqa \
+  --samples-per-dataset 20 \
+  --output results/local/vision-token-ablation.json
+
+python3 scripts/calibrate_vision_tokens.py \
+  results/local/vision-token-ablation.json \
+  --min-pairs 10 \
+  --output results/local/vision-calibration.json
+```
+
+The ablation runner rotates method order, reuses one native baseline per image, reports paired bootstrap confidence intervals, prints request progress, and writes incremental checkpoints. A native backend timeout or Metal failure invalidates the affected dataset run; it must not be reported as an acceleration result.
+
+Compare uniform and temporal-change video frames:
+
+```sh
+python3 scripts/benchmark_video_frames.py ./clip.mp4 \
+  --model qwen3-vl:8b \
+  --question "What changes in the clip?" \
+  --answer "the light changes from blue to red" \
+  --repeats 5 \
+  --output results/local/video-frame-benchmark.json
+```
+
 ## Examples
 
 Runnable examples live in [examples/python](examples/python/):
@@ -461,6 +548,7 @@ python3 examples/python/accelerator_calibration_demo.py
 python3 examples/python/hf_adapter_demo.py
 python3 examples/python/mlx_adapter_demo.py
 python3 examples/python/vision_client_demo.py --image ./image.png
+python3 examples/python/video_sampler_demo.py ./clip.mp4
 python3 examples/python/ollama_adapter_demo.py
 ```
 
