@@ -18,6 +18,7 @@ from .adapters.ollama import OllamaHTTPAdapter, OllamaHTTPError
 from .client import MachBoostAPIError, MachBoostClient, ensure_server
 from .models import alias_rows, resolve_model
 from .server import DEFAULT_HOST, DEFAULT_PORT, serve as serve_runtime
+from .video import TemporalVideoSampler, VideoSelection
 from .vision_auto import VISION_TOKEN_REQUEST_MODES, load_vision_calibration
 
 DEFAULT_CHAT_SYSTEM = "Answer directly and concisely. Do not reveal hidden reasoning."
@@ -484,11 +485,18 @@ def run_native_chat(
             print("try passing an explicit text or VLM backend", file=error_stream)
         return 2
 
+    try:
+        active_images, has_video_frames = prepare_visual_inputs(args, stream=error_stream)
+    except Exception as exc:
+        print(f"video input error: {exc}", file=error_stream)
+        return 2
     turns: list[dict[str, object]] = []
-    active_images = list(args.image or ())
     print(f"machboost run: {args.model}", file=output_stream)
     print("Type /bye, /exit, or /quit to leave. Type /clear to reset chat history.", file=output_stream)
-    print("Use /image PATH, /images, or /clear-images to manage visual inputs.", file=output_stream)
+    print(
+        "Use /image PATH, /video PATH, /images, or /clear-images to manage visual inputs.",
+        file=output_stream,
+    )
 
     while True:
         try:
@@ -515,15 +523,28 @@ def run_native_chat(
                 active_images.append(image)
                 print(f"image attached: {image}", file=output_stream)
             continue
+        if command.startswith("/video "):
+            video = command.partition(" ")[2].strip()
+            if video:
+                try:
+                    selection = sample_video(video, args, stream=error_stream)
+                except Exception as exc:
+                    print(f"video input error: {exc}", file=error_stream)
+                    continue
+                active_images.extend(selection.images)
+                has_video_frames = True
+            continue
         if command == "/images":
             print("\n".join(active_images) if active_images else "no images attached", file=output_stream)
             continue
         if command == "/clear-images":
             active_images = []
+            has_video_frames = False
             print("images cleared", file=output_stream)
             continue
 
-        turns.append({"role": "user", "content": user_text})
+        content = video_prompt(user_text) if has_video_frames else user_text
+        turns.append({"role": "user", "content": content})
         messages = [{"role": "system", "content": args.system or DEFAULT_CHAT_SYSTEM}]
         messages.extend(turns)
         if active_images:
@@ -741,6 +762,45 @@ def connect_resident(args: argparse.Namespace, *, error_stream=None) -> MachBoos
     return client
 
 
+def prepare_visual_inputs(
+    args: argparse.Namespace,
+    *,
+    stream=None,
+) -> tuple[list[str], bool]:
+    images = list(args.image or ())
+    videos = list(args.video or ())
+    for video in videos:
+        images.extend(sample_video(video, args, stream=stream).images)
+    return images, bool(videos)
+
+
+def sample_video(video: str, args: argparse.Namespace, *, stream=None) -> VideoSelection:
+    stream = stream or sys.stderr
+    selection = TemporalVideoSampler().sample(
+        video,
+        fps=args.video_fps,
+        change_threshold=args.video_change_threshold,
+        max_frames=args.video_max_frames,
+    )
+    print(
+        "video: "
+        f"selected={selection.selected_frames}/{selection.sampled_frames} "
+        f"reduction={selection.reduction_rate:.0%} "
+        f"elapsed={selection.elapsed_seconds:.2f}s "
+        f"extract_cache={'hit' if selection.extraction_cache_hit else 'miss'}",
+        file=stream,
+    )
+    return selection
+
+
+def video_prompt(prompt: str) -> str:
+    return (
+        "The attached images are chronological frames selected from a video. "
+        "Use their order when answering.\n\n"
+        + prompt
+    )
+
+
 def run_resident_chat(
     args: argparse.Namespace,
     *,
@@ -756,12 +816,19 @@ def run_resident_chat(
         print(f"machboost server error: {exc}", file=error_stream)
         return 2
 
+    try:
+        active_images, has_video_frames = prepare_visual_inputs(args, stream=error_stream)
+    except Exception as exc:
+        print(f"video input error: {exc}", file=error_stream)
+        return 2
     turns: list[dict[str, str]] = []
-    active_images = list(args.image or ())
     print(f"machboost run: {args.model}", file=output_stream)
     print(f"server: {client.endpoint} (model stays warm until stop or shutdown)", file=output_stream)
     print("Type /bye, /exit, or /quit to leave. Type /clear to reset chat history.", file=output_stream)
-    print("Use /image PATH, /images, or /clear-images to manage visual inputs.", file=output_stream)
+    print(
+        "Use /image PATH, /video PATH, /images, or /clear-images to manage visual inputs.",
+        file=output_stream,
+    )
 
     while True:
         try:
@@ -788,15 +855,28 @@ def run_resident_chat(
                 active_images.append(image)
                 print(f"image attached: {image}", file=output_stream)
             continue
+        if command.startswith("/video "):
+            video = command.partition(" ")[2].strip()
+            if video:
+                try:
+                    selection = sample_video(video, args, stream=error_stream)
+                except Exception as exc:
+                    print(f"video input error: {exc}", file=error_stream)
+                    continue
+                active_images.extend(selection.images)
+                has_video_frames = True
+            continue
         if command == "/images":
             print("\n".join(active_images) if active_images else "no images attached", file=output_stream)
             continue
         if command == "/clear-images":
             active_images = []
+            has_video_frames = False
             print("images cleared", file=output_stream)
             continue
 
-        turns.append({"role": "user", "content": user_text})
+        content = video_prompt(user_text) if has_video_frames else user_text
+        turns.append({"role": "user", "content": content})
         messages = [{"role": "system", "content": args.system or DEFAULT_CHAT_SYSTEM}, *turns]
         response_parts: list[str] = []
         final_row: dict = {}
@@ -839,17 +919,20 @@ def run_resident_completion(args: argparse.Namespace, *, output_stream=None, err
     error_stream = error_stream or sys.stderr
     try:
         prompt = completion_prompt(args)
+        images, has_video_frames = prepare_visual_inputs(args, stream=error_stream)
+        if has_video_frames:
+            prompt = video_prompt(prompt)
         if args.direct:
             accelerator = load_native_accelerator(args, stream=error_stream)
             kwargs = {
                 "max_tokens": args.max_tokens,
                 "on_text": lambda text: print(text, end="", flush=True, file=output_stream),
             }
-            if args.image and not getattr(accelerator, "supports_vision", False):
+            if images and not getattr(accelerator, "supports_vision", False):
                 raise ValueError("attached images require a vision model")
             if getattr(accelerator, "supports_vision", False):
                 kwargs.update(
-                    images=args.image or None,
+                    images=images or None,
                     use_vision_cache=not args.no_vision_cache,
                     temperature=args.temperature,
                     cold_vision_mode=args.cold_vision,
@@ -873,8 +956,8 @@ def run_resident_completion(args: argparse.Namespace, *, output_stream=None, err
             "keep_alive": args.keep_alive,
             "stream": True,
         }
-        if args.image:
-            request_options["images"] = args.image
+        if images:
+            request_options["images"] = images
         rows = client.generate(args.model, prompt, **request_options)
         final_row: dict = {}
         for row in rows:
@@ -1167,6 +1250,15 @@ def add_native_run_arguments(parser: argparse.ArgumentParser) -> None:
         default=[],
         help="Image path, URL, data URL, or base64 payload. Can be repeated.",
     )
+    parser.add_argument(
+        "--video",
+        action="append",
+        default=[],
+        help="Video path to sample into chronological change-aware frames. Can be repeated.",
+    )
+    parser.add_argument("--video-fps", type=float, default=1.0)
+    parser.add_argument("--video-change-threshold", type=float, default=0.08)
+    parser.add_argument("--video-max-frames", type=int, default=12)
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--no-vision-cache", action="store_true", help="Re-run the vision encoder for every request.")
     parser.add_argument("--vision-cache-size", type=int, default=20, help="Projected vision feature LRU size.")
