@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Iterable, Sequence
 
 from machboost import MachBoostClient, ensure_server
+from machboost.vision_auto import VISION_TOKEN_REQUEST_MODES
 
 
 @dataclass(frozen=True)
@@ -67,10 +68,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--vision-max-edge", type=int)
     parser.add_argument(
         "--vision-tokens",
-        choices=["off", "merge", "adaptive"],
+        choices=VISION_TOKEN_REQUEST_MODES,
         default="off",
     )
     parser.add_argument("--vision-token-ratio", type=float, default=0.35)
+    parser.add_argument("--vision-token-layer", type=int)
+    parser.add_argument("--vision-token-bucket", type=int)
+    parser.add_argument("--vision-calibration", type=Path)
     parser.add_argument(
         "--confidence-threshold",
         type=float,
@@ -122,6 +126,9 @@ def main() -> None:
                 vision_max_edge=None,
                 vision_token_mode="off",
                 vision_token_ratio=args.vision_token_ratio,
+                vision_token_layer=None,
+                vision_token_bucket=None,
+                vision_calibration=None,
             )
         )
         warmup_rows.append(
@@ -135,6 +142,9 @@ def main() -> None:
                 vision_max_edge=args.vision_max_edge,
                 vision_token_mode=args.vision_tokens,
                 vision_token_ratio=args.vision_token_ratio,
+                vision_token_layer=args.vision_token_layer,
+                vision_token_bucket=args.vision_token_bucket,
+                vision_calibration=args.vision_calibration,
             )
         )
 
@@ -153,6 +163,9 @@ def main() -> None:
                 vision_max_edge=None if mode == "baseline" else args.vision_max_edge,
                 vision_token_mode="off" if mode == "baseline" else args.vision_tokens,
                 vision_token_ratio=args.vision_token_ratio,
+                vision_token_layer=None if mode == "baseline" else args.vision_token_layer,
+                vision_token_bucket=None if mode == "baseline" else args.vision_token_bucket,
+                vision_calibration=None if mode == "baseline" else args.vision_calibration,
             )
             if mode == "accelerated" and args.confidence_threshold is not None:
                 row = verify_uncertain_request(
@@ -198,6 +211,11 @@ def main() -> None:
         "vision_max_edge": args.vision_max_edge,
         "vision_tokens": args.vision_tokens,
         "vision_token_ratio": args.vision_token_ratio,
+        "vision_token_layer": args.vision_token_layer,
+        "vision_token_bucket": args.vision_token_bucket,
+        "vision_calibration": (
+            None if args.vision_calibration is None else str(args.vision_calibration.resolve())
+        ),
         "confidence_threshold": args.confidence_threshold,
         "server_started": server_started,
         "load_duration_seconds": loaded["load_duration_seconds"],
@@ -350,6 +368,9 @@ def run_request(
     vision_max_edge: int | None,
     vision_token_mode: str = "off",
     vision_token_ratio: float = 0.35,
+    vision_token_layer: int | None = None,
+    vision_token_bucket: int | None = None,
+    vision_calibration: Path | str | None = None,
 ) -> dict[str, Any]:
     options: dict[str, Any] = {
         "num_predict": max_tokens,
@@ -362,6 +383,12 @@ def run_request(
     }
     if vision_max_edge is not None:
         options["vision_max_edge"] = int(vision_max_edge)
+    if vision_token_layer is not None:
+        options["vision_token_layer"] = int(vision_token_layer)
+    if vision_token_bucket is not None:
+        options["vision_token_bucket"] = int(vision_token_bucket)
+    if vision_calibration is not None:
+        options["vision_calibration"] = str(Path(vision_calibration).expanduser().resolve())
 
     prompt = f"Answer only, with no explanation: {sample.question}"
     started = time.perf_counter()
