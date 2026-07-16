@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import math
+import random
 from typing import Any, Optional
 
 
-POST_FUSION_MODES = ("off", "merge", "adaptive")
+POST_FUSION_MODES = ("off", "merge", "adaptive", "random")
 
 
 class PostFusionVisionModel:
@@ -15,6 +16,8 @@ class PostFusionVisionModel:
         self.mode = "off"
         self.retain_ratio = 0.35
         self.prune_after_layer = 3
+        self.token_bucket = 0
+        self.policy: dict[str, Any] = {}
         self.reset_stats()
 
     def __getattr__(self, name: str) -> Any:
@@ -26,6 +29,8 @@ class PostFusionVisionModel:
         mode: str,
         retain_ratio: float,
         prune_after_layer: int = 3,
+        token_bucket: int = 0,
+        policy: Optional[dict[str, Any]] = None,
     ) -> None:
         normalized = str(mode or "off").strip().lower()
         if normalized not in POST_FUSION_MODES:
@@ -38,9 +43,13 @@ class PostFusionVisionModel:
             raise ValueError("post-fusion visual token ratio must be between 0.1 and 1.0")
         if int(prune_after_layer) < 1:
             raise ValueError("post-fusion prune layer must be at least 1")
+        if int(token_bucket) < 0:
+            raise ValueError("post-fusion visual token bucket must be zero or greater")
         self.mode = normalized
         self.retain_ratio = ratio
         self.prune_after_layer = int(prune_after_layer)
+        self.token_bucket = int(token_bucket)
+        self.policy = dict(policy or {})
         self.reset_stats()
 
     def reset_stats(self) -> None:
@@ -48,6 +57,8 @@ class PostFusionVisionModel:
         self.retained_sequence_tokens = 0
         self.original_visual_tokens = 0
         self.retained_visual_tokens = 0
+        self.target_visual_tokens = 0
+        self.applied_after_layer = 0
 
     def info(self) -> dict[str, Any]:
         original = self.original_visual_tokens
@@ -57,6 +68,9 @@ class PostFusionVisionModel:
             "enabled": self.mode != "off" and original > 0,
             "requested_retention_ratio": self.retain_ratio,
             "prune_after_layer": self.prune_after_layer,
+            "applied_after_layer": self.applied_after_layer,
+            "token_bucket": self.token_bucket,
+            "target_visual_tokens": self.target_visual_tokens,
             "original_sequence_tokens": self.original_sequence_tokens,
             "retained_sequence_tokens": self.retained_sequence_tokens,
             "original_visual_tokens": original,
@@ -64,6 +78,7 @@ class PostFusionVisionModel:
             "actual_visual_retention_ratio": (
                 None if original == 0 else retained / original
             ),
+            "policy": dict(self.policy),
         }
 
     def __call__(
@@ -111,7 +126,10 @@ class PostFusionVisionModel:
         deepstack_layers = (
             0 if deepstack_visual_embeds is None else len(deepstack_visual_embeds)
         )
-        compress_after = max(self.prune_after_layer, deepstack_layers)
+        compress_after = min(
+            max(self.prune_after_layer, deepstack_layers),
+            max(1, len(self.base.layers) - 1),
+        )
         for layer_index, (layer, layer_cache) in enumerate(
             zip(self.base.layers, cache)
         ):
@@ -145,6 +163,12 @@ class PostFusionVisionModel:
             self.retained_sequence_tokens = int(hidden.shape[1])
             self.original_visual_tokens = visual_before
             self.retained_visual_tokens = visual_after
+            self.target_visual_tokens = bucket_token_target(
+                visual_before,
+                self.retain_ratio,
+                self.token_bucket,
+            )
+            self.applied_after_layer = layer_index + 1
 
         return self.base.norm(hidden)
 
@@ -266,31 +290,39 @@ class PostFusionVisionModel:
         *,
         visual_count: int,
     ) -> set[int]:
-        if self.mode != "adaptive":
+        if self.mode not in {"adaptive", "random"}:
             return set()
 
         import mlx.core as mx
 
-        target = math.ceil(visual_count * self.retain_ratio)
+        target = bucket_token_target(
+            visual_count,
+            self.retain_ratio,
+            self.token_bucket,
+        )
         base_retained = len(groups)
         if target <= base_retained:
             return set()
-        max_group = max(len(group) for group in groups)
-        padded = [
-            group + [group[0]] * (max_group - len(group))
-            for group in groups
-        ]
-        grouped = mx.take(
-            visual_hidden,
-            mx.array(padded, dtype=mx.uint32),
-            axis=0,
-        )
-        normalized = grouped / mx.maximum(
-            mx.linalg.norm(grouped, axis=-1, keepdims=True),
-            1e-6,
-        )
-        detail = 1.0 - mx.linalg.norm(mx.mean(normalized, axis=1), axis=-1)
-        ranked = mx.argsort(detail).tolist()[::-1]
+        if self.mode == "random":
+            ranked = list(range(len(groups)))
+            random.Random(visual_count * 1009 + target).shuffle(ranked)
+        else:
+            max_group = max(len(group) for group in groups)
+            padded = [
+                group + [group[0]] * (max_group - len(group))
+                for group in groups
+            ]
+            grouped = mx.take(
+                visual_hidden,
+                mx.array(padded, dtype=mx.uint32),
+                axis=0,
+            )
+            normalized = grouped / mx.maximum(
+                mx.linalg.norm(grouped, axis=-1, keepdims=True),
+                1e-6,
+            )
+            detail = 1.0 - mx.linalg.norm(mx.mean(normalized, axis=1), axis=-1)
+            ranked = mx.argsort(detail).tolist()[::-1]
         selected: set[int] = set()
         retained = base_retained
         for group_index in ranked:
@@ -310,6 +342,8 @@ def configure_post_fusion_vision(
     mode: str = "off",
     retain_ratio: float = 0.35,
     prune_after_layer: int = 3,
+    token_bucket: int = 0,
+    policy: Optional[dict[str, Any]] = None,
 ) -> Optional[PostFusionVisionModel]:
     normalized = str(mode or "off").strip().lower()
     if normalized not in POST_FUSION_MODES:
@@ -341,8 +375,21 @@ def configure_post_fusion_vision(
         mode=normalized,
         retain_ratio=retain_ratio,
         prune_after_layer=prune_after_layer,
+        token_bucket=token_bucket,
+        policy=policy,
     )
     return wrapper
+
+
+def bucket_token_target(visual_count: int, retain_ratio: float, bucket: int = 0) -> int:
+    count = max(0, int(visual_count))
+    if count == 0:
+        return 0
+    target = max(1, math.ceil(count * float(retain_ratio)))
+    width = int(bucket)
+    if width > 1:
+        target = math.ceil(target / width) * width
+    return min(count, target)
 
 
 def _contiguous_segments(indices: Any) -> list[int]:
