@@ -139,10 +139,7 @@ def main() -> None:
     if args.samples_per_dataset < 1:
         raise ValueError("samples per dataset must be at least 1")
     profiles = parse_profiles(args.profiles)
-    output = args.output or Path(
-        "results/local/"
-        f"vision_tokens_{args.model.replace(':', '_')}_{datetime.now().strftime('%Y%m%d')}.json"
-    )
+    output = output_path(args)
     output.parent.mkdir(parents=True, exist_ok=True)
 
     samples, warmups = load_public_samples(
@@ -270,6 +267,33 @@ def _print_progress(stage: str, sample: Sample, method: str) -> None:
     )
 
 
+def output_path(args: argparse.Namespace) -> Path:
+    return args.output or Path(
+        "results/local/"
+        f"vision_tokens_{args.model.replace(':', '_')}_{datetime.now().strftime('%Y%m%d')}.json"
+    )
+
+
+def _mark_failed_checkpoint(output: Path, error: Exception) -> None:
+    if not output.is_file():
+        return
+    try:
+        artifact = json.loads(output.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    if artifact.get("schema_version") != "machboost.vision_token_ablation.v1":
+        return
+    artifact["status"] = "failed"
+    artifact["failed_at"] = datetime.now(timezone.utc).isoformat()
+    artifact["error"] = {
+        "type": type(error).__name__,
+        "message": str(error),
+    }
+    temporary = output.with_suffix(output.suffix + ".tmp")
+    temporary.write_text(json.dumps(artifact, indent=2) + "\n", encoding="utf-8")
+    temporary.replace(output)
+
+
 def _write_checkpoint(
     output: Path,
     *,
@@ -360,4 +384,8 @@ def _add_pair_metrics(baseline: dict[str, Any], accelerated: dict[str, Any]) -> 
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as error:
+        _mark_failed_checkpoint(output_path(parse_args()), error)
+        raise
