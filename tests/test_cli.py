@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from machboost import __version__
@@ -420,6 +421,53 @@ class CLITests(unittest.TestCase):
 
         self.assertEqual(code, 0)
         self.assertEqual(client.generate_calls[0][5], ["fixture.png"])
+
+    def test_resident_visual_chat_samples_video_frames(self):
+        prompts = iter(["What changes?", "/bye"])
+        client = FakeResidentClient()
+        selection = SimpleNamespace(images=("frame-1.jpg", "frame-4.jpg"))
+
+        with (
+            patch.object(cli, "connect_resident", return_value=client),
+            patch.object(cli, "sample_video", return_value=selection) as sample_video,
+        ):
+            code = cli.run_resident_chat(
+                cli.build_parser().parse_args(
+                    ["run", "qwen3-vl:8b", "--video", "clip.mp4"]
+                ),
+                input_func=lambda prompt: next(prompts),
+                output_stream=io.StringIO(),
+            )
+
+        self.assertEqual(code, 0)
+        sample_video.assert_called_once()
+        self.assertEqual(client.chat_calls[0][5], ["frame-1.jpg", "frame-4.jpg"])
+        self.assertIn(
+            "chronological frames selected from a video",
+            client.chat_calls[0][1][-1]["content"],
+        )
+
+    def test_visual_completion_forwards_sampled_video_frames(self):
+        client = FakeResidentClient()
+        selection = SimpleNamespace(images=("frame-1.jpg", "frame-3.jpg"))
+
+        with (
+            patch.object(cli, "connect_resident", return_value=client),
+            patch.object(cli, "sample_video", return_value=selection),
+        ):
+            code = cli.run_resident_completion(
+                cli.build_parser().parse_args(
+                    ["complete", "qwen3-vl:8b", "Describe changes.", "--video", "clip.mp4"]
+                ),
+                output_stream=io.StringIO(),
+            )
+
+        self.assertEqual(code, 0)
+        self.assertEqual(client.generate_calls[0][5], ["frame-1.jpg", "frame-3.jpg"])
+        self.assertIn(
+            "chronological frames selected from a video",
+            client.generate_calls[0][1],
+        )
 
 
 class FakePullStatus:
