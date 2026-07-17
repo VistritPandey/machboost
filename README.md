@@ -63,12 +63,22 @@ machboost pull qwen2.5:3b
 machboost run qwen2.5:3b
 ```
 
-`machboost run` starts a local server automatically when needed. The server keeps the model in unified memory until `machboost stop`, `machboost shutdown`, or process exit, so subsequent commands avoid model reload latency. Preload a model before the first user request with:
+`machboost run` starts a local server automatically when needed, loads the model, and performs a one-token compile warmup before showing the chat prompt. The header separates model load, compile warmup, and total wall time, so startup work is not hidden behind the first message. Models stay resident for five idle minutes by default; a background reaper releases expired models even when no later command is issued. Preload explicitly with:
 
 ```sh
 machboost warm qwen2.5:3b
 machboost ps
 ```
+
+Inside chat, `Ctrl-C` stops only the current reply and `Ctrl-D` unloads the current model and exits. `/bye` exits while preserving the five-minute idle window. Use `--keep-alive forever` only when indefinite residency is intentional.
+
+Compare warm MachBoost and Ollama chat latency with unique prompts:
+
+```sh
+machboost bench llama3.2:3b --ollama-model llama3.2:3b --runs 3 --warmups 1
+```
+
+The benchmark reports client-observed time to first text, wall time, backend prompt timing, decode tokens per second, and normalized exact-output equality. Two-engine runs alternate which runtime executes first in each round, and every round uses a fresh prompt nonce. MLX and Ollama conversions can use different model files or quantization formats, so this is a runtime comparison rather than proof of an algorithmic speedup.
 
 Use full repository IDs when a model has no short alias. If the model is not cached, the selected backend may download it through its normal Hugging Face or MLX loader. Use `--local-files-only` with Hugging Face to require an existing cache.
 
@@ -270,7 +280,7 @@ Applications can control a resident server directly:
 from machboost import MachBoostClient
 
 client = MachBoostClient()
-client.load("qwen2.5:3b", keep_alive="forever")
+client.load("qwen2.5:3b", keep_alive="5m", warmup=True)
 
 for chunk in client.chat(
     "qwen2.5:3b",
@@ -316,7 +326,7 @@ machboost stop qwen2.5:3b
 machboost shutdown
 ```
 
-`machboost list` shows cached Hugging Face and MLX models, backend readiness, and available short aliases. `machboost run MODEL` connects to the resident server, loads the model once, builds a draft corpus from any `--context` files or directories, and opens a streaming interactive chat. Inside chat, use `/bye`, `/exit`, `/quit`, EOF, or Ctrl-C to leave, and `/clear` to reset history. Leaving chat does not unload the model.
+`machboost list` shows cached Hugging Face and MLX models, backend readiness, and available short aliases. `machboost run MODEL` connects to the resident server, loads the model before accepting input, builds a draft corpus from any `--context` files or directories, and opens a streaming interactive chat. Use `/?` for commands, `/clear` to reset history, `/bye` to exit while keeping the idle window, `Ctrl-C` to stop a reply, and `Ctrl-D` or `/unload` to unload and exit.
 
 Run the server in the foreground when integrating it with another application or process manager:
 
@@ -324,11 +334,12 @@ Run the server in the foreground when integrating it with another application or
 machboost serve --host 127.0.0.1 --port 11435
 ```
 
-By default, models remain warm indefinitely. A finite lifetime can be selected per load or run:
+By default, models remain warm for five idle minutes. The lifetime can be selected per load or run:
 
 ```sh
 machboost warm qwen2.5:3b --keep-alive 1h
 machboost run qwen2.5:3b --keep-alive 10m
+machboost run qwen2.5:3b --keep-alive forever
 ```
 
 Plain open-ended chat without local context uses a fast serial greedy path and should report `estimated_speedup=1.00x`. MachBoost speedups require useful `--context` that predicts upcoming tokens.
@@ -338,7 +349,7 @@ Useful native options:
 ```sh
 machboost list --backend mlx
 machboost list --all
-machboost run qwen2.5:3b --show-stats
+machboost run qwen2.5:3b --verbose
 machboost run qwen2.5:3b --direct
 machboost run Qwen/Qwen2.5-3B-Instruct --backend hf --device mps --max-tokens 128
 machboost run Qwen/Qwen2.5-3B-Instruct --backend hf --dtype float16 --show-stats
@@ -348,6 +359,7 @@ machboost run mlx-community/Qwen2.5-3B-Instruct-4bit --backend mlx --context ./d
 machboost run qwen3-vl:8b --image ./document.png --vision-tokens adaptive --vision-token-ratio 0.35 --show-stats
 machboost run qwen3-vl:8b --image ./chart.png --vision-tokens auto --vision-calibration ./vision-calibration.json
 machboost run qwen3-vl:8b --video ./clip.mp4 --video-fps 2 --video-max-frames 12
+machboost bench qwen2.5:3b --engine machboost --runs 5 --json
 ```
 
 `--reentry-probe-tokens` is experimental and disabled by default. `--direct` restores the one-process behavior for debugging. On Apple Silicon, a short alias prefers the MLX 4-bit model; explicit Hugging Face models default to `--device auto --dtype auto`, which selects MPS with float16 when available.
