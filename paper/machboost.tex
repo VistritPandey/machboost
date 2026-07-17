@@ -26,7 +26,7 @@
 \maketitle
 
 \begin{abstract}
-MachBoost is a local inference package for conditional acceleration. Its text path drafts from explicit local context and verifies candidate token blocks with the target model. For visual requests, it can either reuse state derived from unchanged image bytes or, experimentally, shorten a new image's visual sequence after Qwen3-VL completes early cross-modal fusion. We evaluate these paths on an Apple M1 Max. Context-backed code continuation with a 3B MLX model reaches a 1.96$\times$ median paired speedup over native \texttt{mlx-lm}; copied retrieval answers reach 1.58$\times$ with experimental one-token re-entry. Across six Qwen vision models, repeated-image paired medians range from 5.14$\times$ to 17.44$\times$. A separate Qwen3-VL 8B pilot uses ten unique TextVQA images with all caches disabled. Retaining a median 35.12\% of visual hidden states after layer 3 yields a 1.67$\times$ aggregate wall-time speedup and a 1.70$\times$ median paired speedup. Native and compressed paths each match an accepted dataset answer on eight of ten questions, although normalized outputs agree on only seven. The package now includes workload-aware policy selection, offline calibration gates, and temporal video-frame selection, but these additions do not yet have complete task-level evidence. The first-view result remains approximate, single-model evidence rather than an exact or universal acceleration claim.
+MachBoost is a local inference package for conditional acceleration. Its text path drafts from explicit local context and verifies candidate token blocks with the target model. For visual requests, it can either reuse state derived from unchanged image bytes or, experimentally, shorten a new image's visual sequence after Qwen3-VL completes early cross-modal fusion. We evaluate these paths on an Apple M1 Max. A favorable context-backed code fixture with a 3B Qwen model reaches a 1.96$\times$ median paired speedup over native \texttt{mlx-lm}; copied retrieval answers reach 1.58$\times$ with experimental one-token re-entry. A broader Llama 3.2 3B audit, however, records a 1.008$\times$ aggregate median and exact token equality in 20 of 21 pairs. Cache-enabled text drafting is therefore not yet a general exact acceleration path. Across six Qwen vision models, repeated-image paired medians range from 5.14$\times$ to 17.44$\times$. A separate Qwen3-VL 8B pilot uses ten unique TextVQA images with all caches disabled. Retaining a median 35.12\% of visual hidden states after layer 3 yields a 1.67$\times$ aggregate wall-time speedup and a 1.70$\times$ median paired speedup. Native and compressed paths each match an accepted dataset answer on eight of ten questions, although normalized outputs agree on only seven. The package includes workload-aware policy selection, offline calibration gates, and temporal video-frame selection, but these additions do not yet have complete task-level evidence. The first-view result remains approximate, single-model evidence rather than an exact or universal acceleration claim.
 \end{abstract}
 
 \section{Introduction}
@@ -178,7 +178,7 @@ MachBoost is implemented as a small Python package with no required runtime depe
 
 The core package defines a \texttt{StepService} protocol with \texttt{next\_token(prefix)} and an optional \texttt{verify(prefix, candidate)} hook. A service with only \texttt{next\_token} can use the wrapper but cannot skip target work. A verifier can accept several draft tokens per target call. The high-level \texttt{Accelerator} loads MLX or Hugging Face models, reads strings, files, or directories as context, and exposes \texttt{benchmark}, \texttt{calibrate}, and \texttt{generate}.
 
-Version 0.2.0 added a resident HTTP process. It owns loaded accelerators, serializes requests per model, retains each model indefinitely by default, and supports finite idle lifetimes or explicit unloading. The CLI can start this process automatically, preload a short model alias such as \texttt{qwen2.5:3b}, and issue chat or raw completion requests without reloading weights. The server exposes \texttt{/api/chat}, \texttt{/api/generate}, model lifecycle endpoints, and OpenAI-compatible chat and completion endpoints. Native MLX streaming forwards \texttt{mlx-lm}'s already-detokenized text segments; verified multi-token spans use a stateful streaming detokenizer. This avoids the earlier cost of decoding the entire token prefix once per emitted token.
+Version 0.2.0 added a resident HTTP process; version 0.5.1 gives idle models a five-minute lifetime by default and retains them indefinitely only when requested. The process owns loaded accelerators, serializes requests per model, supports explicit unloading, and performs a short text-model compile warm-up before the first prompt. The CLI can start the server automatically, preload an alias such as \texttt{qwen2.5:3b}, and issue chat or raw completion requests without reloading weights. The server exposes \texttt{/api/chat}, \texttt{/api/generate}, model lifecycle endpoints, and OpenAI-compatible chat and completion endpoints. Native MLX streaming forwards \texttt{mlx-lm}'s already-detokenized text segments; verified multi-token spans use a stateful streaming detokenizer. This avoids the earlier cost of decoding the entire token prefix once per emitted token.
 
 The 0.3 series adds vision-model aliases, image arguments in the CLI and Python client, Ollama-style image payloads, and OpenAI-style image content parts. The current alias set includes Qwen2.5-VL 3B, Qwen3-VL 2B/4B/8B, and Qwen3.5 0.8B/4B/9B. MLX objects are created and used on one dedicated worker thread because MLX arrays and streams are thread-affine. The worker owns model load, image preparation, cache lookup, generation, and cache release. Version 0.4 adds the opt-in \texttt{vision\_tokens} mode and retention telemetry. Version 0.5 adds automatic and calibrated policies, random and shape/depth ablations, and temporal video-frame inputs. Post-fusion compression remains restricted to Qwen3-VL because the wrapper depends on that family's layer and deep-stack interfaces.
 
@@ -186,7 +186,7 @@ The Ollama HTTP adapter remains a wrapper: Ollama's public generation API does n
 
 \section{Evaluation}
 \subsection{Machine and Model}
-Measurements were collected on an Apple M1 Max with 10 CPU cores and 32 GB unified memory, running macOS 26.5.2. The environment used Python 3.13.3, MLX 0.31.2, \texttt{mlx-lm} 0.31.3, and MLX-VLM 0.5.0. Text experiments used \path{mlx-community/Qwen2.5-3B-Instruct-4bit}. The repeated-image matrix used MLX 4-bit conversions of Qwen3-VL 2B/4B/8B and Qwen3.5 0.8B/4B/9B. The first-view pilot used \path{mlx-community/Qwen3-VL-8B-Instruct-4bit}. Only one model was resident during each run. Model fetch and load time were recorded but excluded from paired request latency.
+Measurements were collected on an Apple M1 Max with 10 CPU cores and 32 GB unified memory, running macOS 26.5.2. The environment used Python 3.13.3, MLX 0.31.2, \texttt{mlx-lm} 0.31.3, and MLX-VLM 0.5.0. Text experiments used \path{mlx-community/Qwen2.5-3B-Instruct-4bit} and \path{mlx-community/Llama-3.2-3B-Instruct-4bit}. The repeated-image matrix used MLX 4-bit conversions of Qwen3-VL 2B/4B/8B and Qwen3.5 0.8B/4B/9B. The first-view pilot used \path{mlx-community/Qwen3-VL-8B-Instruct-4bit}. Only one model was resident during each run. Model fetch and load time were recorded but excluded from paired request latency.
 
 The benchmark requests 64 greedy tokens for three fixture families: literal Python continuation, retrieval-grounded answering, and open-ended writing. Each family is repeated five times with a fresh nonce under both default and re-entry profiles. Baseline and accelerated order alternate. Wall time includes prompt processing. The baseline calls \texttt{mlx-lm}'s native streaming generator; it is not MachBoost's \texttt{next\_token} loop. The artifacts \path{results/mlx_native_default_qwen25_3b_20260713.json} and \path{results/mlx_native_reentry_qwen25_3b_20260713.json} contain prompts, token previews, raw times, package versions, hardware data, and each run's order.
 
@@ -216,6 +216,30 @@ The default retrieval answer has no candidate at its generation boundary and tak
 
 All 30 reported rows match their paired native token sequences. A separate 15-row exploratory run with a three-token re-entry probe had one RAG mismatch after an accepted span. This is why re-entry remains opt-in. For a user-facing system, the useful statistics are coverage, conditional speedup, and equality rate rather than one aggregate median.
 
+\subsection{Llama 3.2 Generalization Audit}
+A later audit tests seven workflow shapes on Llama 3.2 3B, with three alternating-order pairs per fixture and 64 greedy output tokens. Table~\ref{tab:llamaaudit} summarizes \path{results/llama32_3b_mlx_context_benchmark_20260716.json}.
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{lrrrr}
+\toprule
+Fixture & Rows & Exact pairs & Median speedup & Accepted tokens \\
+\midrule
+Code completion & 3 & 3/3 & 1.325$\times$ & 47 \\
+Policy quotation & 3 & 3/3 & 1.234$\times$ & 34 \\
+Structured JSON & 3 & 2/3 & 1.352$\times$ & 34 \\
+Four no-draft fixtures & 12 & 12/12 & about 1.00$\times$ & 0 \\
+\midrule
+Overall & 21 & 20/21 & 1.008$\times$ & 0 \\
+\bottomrule
+\end{tabular}
+\caption{Llama 3.2 3B context-drafting audit. Accepted tokens are per-fixture medians; the overall median is zero because most fixtures do not enter block verification.}
+\label{tab:llamaaudit}
+\end{table}
+
+The single mismatch occurs in a structured-JSON row after 34 accepted draft tokens. The artifact retains an identical decoded preview for the compared outputs but not the differing tail token, so it does not establish the cause. A strict control recomputes the full accepted prefix and records 9/9 exact pairs, but its 0.207$\times$ median makes it about 4.8$\times$ slower than native generation. This control is useful for diagnosis, not deployment. The audit narrows the earlier Qwen result: context drafting can help at eligible boundaries, while broad workload speed and exactness remain unresolved.
+
 \subsection{Resident Serving Results}
 The resident benchmark preloads the same 3B model, then sends five forced 64-token completions and five short streaming chats. It measures wall time at the server or Python streaming client, including prompt processing and detokenization. Table~\ref{tab:resident} summarizes the artifact \path{results/resident_qwen25_3b_20260713.json}.
 
@@ -234,7 +258,26 @@ Short streaming chat & 5 & 0.298 s & 0.358 s & -- \\
 \label{tab:resident}
 \end{table}
 
-The first forced completion takes 0.973 seconds because the Metal execution path still needs initialization after weight loading; the following four take 0.650--0.663 seconds. These rows accept no context draft tokens. The measurement therefore demonstrates load amortization, corrected streaming, and native fallback rather than a speculative-decoding gain. A same-day Ollama probe records a 0.883-second median for the same forced-token shape, a 1.35$\times$ wall-time ratio relative to the 0.657-second resident run. The two runtimes use different 4-bit model formats and the requests were not interleaved, so this is a backend-suitability observation rather than exact-weight evidence.
+The first forced completion takes 0.973 seconds because the Metal execution path still needs initialization after weight loading; the following four take 0.650--0.663 seconds. These rows accept no context draft tokens. The measurement therefore demonstrates load amortization, corrected streaming, and native fallback rather than a speculative-decoding gain. An early, non-interleaved Ollama probe is retained in the repository as a historical diagnostic but is superseded by the comparison below.
+
+A July 17 serving benchmark uses Llama 3.2 3B, two warm-up requests, seven measured requests, alternating runtime order, and a unique prompt nonce. It compares resident MachBoost MLX with Ollama 0.31.2. No context is supplied, so MachBoost follows native MLX generation. Table~\ref{tab:ollamaserving} summarizes \path{results/chat_latency_llama32_3b_20260717.json}.
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{lrrrr}
+\toprule
+Runtime & Rows & Median wall & Median TTFT & Decode tok/s \\
+\midrule
+MachBoost MLX & 7 & 0.679 s & 0.247 s & 144.00 \\
+Ollama & 7 & 0.803 s & 0.198 s & 96.65 \\
+\bottomrule
+\end{tabular}
+\caption{Warm resident serving comparison. MachBoost and Ollama use different quantized model files and prompt templates; their generated outputs are not expected to be identical.}
+\label{tab:ollamaserving}
+\end{table}
+
+MachBoost is 1.18$\times$ faster by median wall time and 1.49$\times$ faster by reported decode throughput in this run. Ollama reaches first text about 1.25$\times$ sooner. These numbers compare two serving stacks, not the context-drafting algorithm or exact weights, and one machine-model pair is not enough for a general runtime ranking.
 
 \subsection{Repeated-Image Results}
 The visual benchmark uses a generated 1024 by 768 image containing a project name, status, budget, owner, and labeled colored shape. Four short extraction questions are each repeated three times. Every pair sends one request with both visual caches disabled and one request with both enabled; pair order alternates by repetition. Both paths use the same loaded model, greedy decoding, a 16-token limit, and the same image. Before recording, the harness performs one uncached warm-up and one cached prime. Table~\ref{tab:vision} summarizes \path{results/vision_cache_qwen25_3b_20260714.json}.
@@ -345,7 +388,9 @@ Lossless Q4 compression & 1.08--1.15$\times$ ideal entropy bound & The quantized
 The failures share a simple accounting problem. A draft only helps when the time removed from target decoding exceeds draft generation, verification, synchronization, and cache repair. A smaller model is not automatically a cheap enough draft. Moving it to another processor is not sufficient either if it predicts one token at a time. The strongest published results solve this with trained multi-token prediction, high acceptance, or concurrent heterogeneous execution rather than with process priority.
 
 \section{Limitations}
-The text evidence has 30 headline rows, one model, one quantization, one machine, and controlled 64-token prompts. The resident evidence adds ten requests but does not broaden model or hardware coverage. The accelerated code fixture is intentionally favorable: the desired code is substantially present in context. It demonstrates the mechanism but does not estimate how often real users encounter an eligible boundary. Longer repository sessions, multiple 3B--9B architectures, prefill-heavy prompts, concurrent clients, and energy measurements remain untested under the corrected harness.
+The text evidence begins with 30 controlled Qwen rows and adds a 21-pair Llama 3.2 audit on the same machine. The favorable Qwen code fixture substantially contains the desired continuation; it demonstrates the mechanism but does not estimate real-world eligibility. In the broader Llama suite, most fixtures accept no tokens, the aggregate median is 1.008$\times$, and one cache-enabled JSON pair is not token-identical. The strict verifier restores equality in its smaller control but is about 4.8$\times$ slower than native generation. Longer repository sessions, additional 3B--9B architectures, prefill-heavy prompts, concurrent clients, and energy measurements remain untested.
+
+The latest resident comparison alternates seven measured Llama requests between MachBoost and Ollama, but the stacks use different model files and templates. It measures serving suitability rather than an algorithmic speedup or quality comparison. The earlier Qwen resident artifact adds ten requests but does not broaden hardware coverage.
 
 The repeated-image evidence spans six model sizes but remains one synthetic image, four extraction questions, three repeats, short answers, two closely related Qwen families, and one Apple Silicon machine. It excludes model load and starts after an explicit prime. The result says nothing about changed images, long-form visual reasoning, memory pressure under many cached images, or concurrent sessions. Qwen3-VL's no-prefix cache controls show no gain from cache machinery alone. Since decode work is unchanged, the ratio should shrink as answer length grows.
 
@@ -353,19 +398,19 @@ The first-view evidence is smaller: ten OCR-heavy TextVQA rows, one quantized Qw
 
 The video adapter selects image frames; it is not a video-language architecture. Its RGB difference can retain scene cuts but miss short actions, camera motion, semantically important small regions, or repeated scenes with different relevance to the question. It has no real-video quality benchmark and no evidence against PruneVid or EchoPrune. Audio has no MachBoost adapter.
 
-Only greedy decoding is evaluated. Even then, cold and warm kernels can use different reduction shapes; the Qwen3.5 0.8B punctuation drift is a concrete example of literal non-invariance without a task-answer change. This does not establish equivalence for sampling or beam search. Ollama is also not accelerated through its public HTTP API.
+Only greedy decoding is evaluated. Even then, cold and warm kernels can use different reduction shapes; the Qwen3.5 0.8B punctuation drift and the Llama structured-JSON tail mismatch are concrete examples of literal non-invariance. The latter artifact does not retain enough information to establish whether cache trajectory, a near-tied logit, or another implementation detail caused the difference. This does not establish equivalence for sampling or beam search. Ollama is also not accelerated through its public HTTP API.
 
 Finally, this work introduces neither prompt lookup, prompt caching, nor visual-token pruning. The contribution is a set of local integrations, safety boundaries, and paired artifacts: context drafting, architecture-aware cache handling, and post-deepstack Qwen3-VL compression. A stronger research claim needs broader comparisons with LLMA, Prompt Lookup Decoding, PLD+, MLX-VLM's current server, production prefix-cache systems, and established VLM pruning baselines.
 
 \section{Next Experiments}
-There are two plausible tracks. The first keeps models unchanged: add an online eligibility predictor, extend bounded re-entry beyond the current one-token experiment, and add native verifier hooks for llama.cpp/Ollama. The resident server makes this testable under long sessions; evaluation should report request coverage, cold and warm time to first token, decode throughput, peak memory, concurrency, energy, and exact outputs against each backend's own optimized generator.
+There are two plausible tracks. The first keeps models unchanged. Before expanding re-entry, it should identify and eliminate the cache-trajectory mismatch seen in the Llama audit, then test an online eligibility predictor and native verifier hooks for llama.cpp/Ollama. The resident server makes this testable under long sessions; evaluation should report request coverage, cold and warm time to first token, decode throughput, peak memory, concurrency, energy, and exact outputs against each backend's own optimized generator.
 
 The second track accepts model-specific preparation. A multi-token drafter distilled from the target could run on the Apple Neural Engine while target verification runs on the GPU, following the heterogeneous lesson of Mirror-SD. Quantized draft weights and KV state could reduce memory traffic in long contexts. Both ideas exceed the scope of a wrapper and should be treated as separate research prototypes with quality and compatibility tests.
 
 The immediate visual work is external validity. After resolving or isolating the observed native high-resolution MLX failure, the checkpointed harness should run ChartQA, DocVQA, MMMU, TextVQA, spatial reasoning, and hallucination-sensitive datasets independently. It should add non-Qwen VLMs, sweep layer, retention ratio, image size, and answer length, and report confidence intervals, memory, energy, and task metrics. The implemented random control is the first comparison; attention ranking, AdaptInfer, and ZOO-Prune remain necessary to determine whether query-weighted merging contributes beyond token count alone. Automatic policies should remain disabled unless a model/task calibration set clears both latency and quality gates. Video evaluation should compare uniform sampling, RGB change selection, query-aware selection, PruneVid, and EchoPrune on temporal question-answering benchmarks.
 
 \section{Conclusion}
-MachBoost has three measured conditional paths and one unvalidated temporal adapter. On a 3B text model, literal context-backed code continuation reaches a 1.96$\times$ median over five paired runs; one-token re-entry reaches 1.58$\times$ on copied retrieval answers. Across six visual models, short repeated questions over one unchanged image produce model-level paired medians from 5.14$\times$ to 17.44$\times$. For a new image, post-fusion Qwen3-VL compression reaches 1.67$\times$ aggregate speedup on a ten-row TextVQA pilot while both modes score 8/10. That path is approximate: normalized output equality is 70\%, and the experiment is too small to establish quality parity. Version 0.5 adds the controls needed for broader evidence, but the failed native high-resolution run is not a result. The useful claim remains narrower than universal faster inference: context overlap can reduce text decode, unchanged content can remove repeated visual prefill, and post-fusion token reduction can lower first-view prefill for a tested Qwen3-VL workload. Each mechanism has a separate eligibility and correctness contract.
+MachBoost has three measured conditional paths and one unvalidated temporal adapter. On a favorable 3B Qwen fixture, literal context-backed code continuation reaches a 1.96$\times$ median over five paired runs; one-token re-entry reaches 1.58$\times$ on copied retrieval answers. A broader Llama 3.2 3B suite is more restrained: 20 of 21 pairs are exact and the aggregate median is 1.008$\times$. The current cache-enabled text path is therefore experimental. Across six visual models, short repeated questions over one unchanged image produce model-level paired medians from 5.14$\times$ to 17.44$\times$. For a new image, post-fusion Qwen3-VL compression reaches 1.67$\times$ aggregate speedup on a ten-row TextVQA pilot while both modes score 8/10. That path is approximate: normalized output equality is 70\%, and the experiment is too small to establish quality parity. Version 0.5 adds controls for broader evidence, but the failed native high-resolution run is not a result. The useful claim remains narrower than universal faster inference: context overlap can sometimes reduce text decode, unchanged content can remove repeated visual prefill, and post-fusion token reduction can lower first-view prefill for a tested Qwen3-VL workload. Each mechanism has a separate eligibility and correctness contract.
 
 \bibliographystyle{plain}
 \small
