@@ -3,11 +3,20 @@
 [![CI](https://github.com/VistritPandey/machboost/actions/workflows/ci.yml/badge.svg)](https://github.com/VistritPandey/machboost/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-MachBoost is an experimental resident local-inference server and Python package for MLX, MLX-VLM, and Hugging Face models. It provides an Ollama-like model workflow, keeps models warm between requests, streams text and visual chat, and applies backend-specific acceleration when a request contains reusable work. An opt-in Qwen3-VL path reduces first-view visual prefill by compressing visual hidden states after early fusion, while an FFmpeg adapter can turn video into a smaller chronological set of change-aware frames.
+MachBoost is an alpha-stage, local-first inference server and Python package for MLX, MLX-VLM, and Hugging Face models. It offers an Ollama-like model workflow, keeps models resident between requests, and streams text and visual chat. Optional acceleration paths target reusable local text, repeated image inputs, and selected Qwen3-VL visual-prefill workloads.
 
-For text, it drafts candidate tokens from nearby prompts, retrieved chunks, repo files, policies, configs, and docs, then verifies them with the target model. For repeated-image VLM requests, it uses architecture-aware caches: Qwen2.5-VL and Qwen3.5 can reuse projected vision features, while Qwen3-VL conservatively reuses only complete visual prompt state. Qwen3.5's hybrid recurrent/attention state is restored from whole-prefix checkpoints rather than an unsafe KV-only trim. None of these paths changes model weights.
+The paths have different contracts. Plain chat delegates generation to the selected backend and mainly provides residency and API compatibility. Text drafting proposes tokens from caller-supplied context and verifies them with the target model, but the cache-enabled MLX path remains experimental because a recent Llama 3.2 audit found one token-sequence mismatch in 21 pairs. Repeated-image acceleration reuses process-local visual work for unchanged image bytes. First-view Qwen3-VL compression is explicitly approximate and can change answers.
 
-MachBoost is local-first and alpha-stage. It does not upload telemetry, mutate global runtime settings, change model weights, or claim universal speedups. Ordinary open-ended chat follows the backend's native generation path; context-backed verification is enabled only when a candidate exists.
+MachBoost does not upload telemetry, mutate global runtime settings, or change model weights. It does not claim universal speedups, file-identical equivalence across model conversions, or quality preservation for approximate visual compression.
+
+### Current Status
+
+| Path | Current evidence | Product status |
+|---|---|---|
+| Plain resident text chat | Native MLX decode through a local server; no drafting without context | usable, with measurable server/streaming overhead versus direct `mlx-lm` |
+| Context-backed MLX text | up to 1.96x median on one favorable Qwen2.5 3B code fixture; latest Llama 3.2 3B suite was 1.008x aggregate with 20/21 exact pairs | experimental; calibrate per model and workload |
+| Repeated unchanged image | 5.14x-17.44x model-level paired medians on one synthetic image and short extraction prompts | promising for repeated-image prefill; not a first-view or decode result |
+| New-image Qwen3-VL compression | 1.70x median on ten TextVQA rows, with 70% normalized output equality and equal 8/10 aggregate task scores | approximate, opt-in, and not quality-equivalence evidence |
 
 ## Install
 
@@ -31,7 +40,7 @@ pip install -e ".[video]"
 pip install -e ".[all]"
 ```
 
-After publishing this repository on GitHub, users can install directly from GitHub:
+Install directly from GitHub:
 
 ```sh
 pip install "machboost[mlx] @ git+https://github.com/VistritPandey/machboost.git"
@@ -78,7 +87,7 @@ Compare warm MachBoost and Ollama chat latency with unique prompts:
 machboost bench llama3.2:3b --ollama-model llama3.2:3b --runs 3 --warmups 1
 ```
 
-The benchmark reports client-observed time to first text, wall time, backend prompt timing, decode tokens per second, and normalized exact-output equality. Two-engine runs alternate which runtime executes first in each round, and every round uses a fresh prompt nonce. MLX and Ollama conversions can use different model files or quantization formats, so this is a runtime comparison rather than proof of an algorithmic speedup.
+The benchmark reports client-observed time to first text, wall time, backend prompt timing, and decode tokens per second. Two-engine runs alternate which runtime executes first in each round, and every round uses a fresh prompt nonce. Cross-runtime output equality is recorded but is not an accuracy test: MLX and Ollama can use different templates, conversions, and quantization formats. This command measures serving/runtime suitability, not MachBoost's context-drafting algorithm.
 
 Use full repository IDs when a model has no short alias. If the model is not cached, the selected backend may download it through its normal Hugging Face or MLX loader. Use `--local-files-only` with Hugging Face to require an existing cache.
 
@@ -142,7 +151,7 @@ machboost run qwen3-vl:8b \
 
 The image still passes through the full-resolution vision encoder. Qwen3-VL processes every visual token through its required deep-stack injections and the selected number of early language layers. MachBoost then groups the visual states spatially, preserves internally diverse groups, merges the rest with query-weighted pooling, and sends the shorter sequence through the remaining layers. The request bypasses visual and prompt caches, so the reported gain is independent of prior images or prompts.
 
-`auto` classifies the request as general, document/text, chart, spatial, or multi-image. It selects a retention ratio, layer boundary, and token bucket from conservative built-in profiles. Manual experiments can use `merge`, `adaptive`, or the deterministic `random` control with `--vision-token-ratio`, `--vision-token-layer`, and `--vision-token-bucket`. Production code should calibrate these choices on representative data:
+`auto` classifies the request as general, document/text, chart, spatial, or multi-image. It selects a retention ratio, layer boundary, and token bucket from built-in experimental profiles. Manual experiments can use `merge`, `adaptive`, or the deterministic `random` control with `--vision-token-ratio`, `--vision-token-layer`, and `--vision-token-bucket`. Do not deploy a profile without calibrating it on representative data:
 
 ```sh
 python3 scripts/benchmark_vision_tokens.py \
@@ -293,7 +302,7 @@ for chunk in client.chat(
 
 ## When It Helps
 
-MachBoost is most useful when the model is likely to continue with text already present nearby:
+MachBoost is designed for workloads where the model is likely to continue with text already present nearby:
 
 - repo or source-code continuation
 - config and JSON generation
@@ -304,7 +313,7 @@ MachBoost is most useful when the model is likely to continue with text already 
 - short Qwen3-VL first-view requests where visual prefill dominates and approximate token merging is acceptable
 - videos with long static spans where selected chronological frames retain the task evidence
 
-It is usually neutral or slower for open-ended creative writing, one-word answers, and prompts where the next tokens are not recoverable from local context. The package exposes benchmark and calibration APIs so applications can turn the boosted path on only when it helps.
+It is usually neutral or slower for open-ended creative writing, one-word answers, and prompts where the next tokens are not recoverable from local context. Eligibility is model- and prompt-dependent; benchmark and calibration APIs let applications keep the boosted path off when it does not pass latency and output checks.
 
 ## Command Line
 
@@ -342,7 +351,7 @@ machboost run qwen2.5:3b --keep-alive 10m
 machboost run qwen2.5:3b --keep-alive forever
 ```
 
-Plain open-ended chat without local context uses a fast serial greedy path and should report `estimated_speedup=1.00x`. MachBoost speedups require useful `--context` that predicts upcoming tokens.
+Plain open-ended chat without local context delegates to the backend's native greedy generator and should report `estimated_speedup=1.00x`. It still traverses the resident HTTP/streaming layer, so direct in-process `mlx-lm` can have lower first-token latency. Algorithmic text speedups require useful `--context` that predicts upcoming tokens.
 
 Useful native options:
 
@@ -405,8 +414,8 @@ The Go CLI is useful for local systems experiments. The Python package is the pr
 
 | Backend | Status | Notes |
 |---|---|---|
-| MLX / `mlx-lm` | native adapter | Best Mac-first path. Strict evidence mode can disable prompt cache for clean exactness checks. |
-| MLX-VLM | native visual adapter | Uses model-safe cache reuse, opt-in post-fusion compression, and chronological video-frame inputs for supported VLMs. |
+| MLX / `mlx-lm` | native adapter | Primary Apple Silicon path. Cache-enabled drafting is experimental; strict mode disables prompt cache for slower exactness controls. |
+| MLX-VLM | native visual adapter | Provides architecture-aware repeated-image reuse, opt-in approximate post-fusion compression, and chronological video-frame inputs for supported VLMs. |
 | Hugging Face Transformers | native adapter | Useful for research and broad model coverage. |
 | MachBoost resident server | native control plane | Keeps MLX/HF models warm and exposes Ollama/OpenAI-compatible streaming APIs. |
 | Custom Python service | native if verifier exists | Implement `next_token`, `verify`, `encode`, and `decode` as needed. |
@@ -414,13 +423,13 @@ The Go CLI is useful for local systems experiments. The Python package is the pr
 
 ## Evidence
 
-Public benchmark artifacts live in [results](results/), with a summary in [results/README.md](results/README.md). The current native-baseline evidence is:
+Public benchmark artifacts live in [results](results/), with methods and limitations in [results/README.md](results/README.md). Representative results are:
 
-| Artifact | Model | Path | Repeats | Exact Match | Median Paired Speedup |
+| Artifact | Model | Path | Pairs | Output/task result | Median paired speedup |
 |---|---|---:|---:|---:|---|
 | `mlx_native_default_qwen25_3b_20260713.json` | `mlx-community/Qwen2.5-3B-Instruct-4bit` | default code continuation | 5 | 100% | 1.96x |
 | `mlx_native_reentry_qwen25_3b_20260713.json` | same | experimental RAG re-entry | 5 | 100% | 1.58x |
-| `mlx_native_reentry_qwen25_3b_20260713.json` | same | open-ended native fallback | 5 | 100% | 1.08x |
+| `llama32_3b_mlx_context_benchmark_20260716.json` | `mlx-community/Llama-3.2-3B-Instruct-4bit` | seven-fixture context suite | 21 | 95.24% exact output | 1.008x |
 | `vision_cache_qwen25_3b_20260714.json` | `mlx-community/Qwen2.5-VL-3B-Instruct-4bit` | repeated questions over one image | 12 | 100% | 18.33x |
 | `vision_cache_qwen3vl_2b_20260714.json` | `mlx-community/Qwen3-VL-2B-Instruct-4bit` | repeated questions over one image | 12 | 100% | 11.41x |
 | `vision_cache_qwen3vl_4b_20260714.json` | `mlx-community/Qwen3-VL-4B-Instruct-4bit` | same | 12 | 100% | 12.73x |
@@ -430,15 +439,17 @@ Public benchmark artifacts live in [results](results/), with a summary in [resul
 | `vision_cache_qwen35_9b_20260714.json` | `mlx-community/Qwen3.5-9B-MLX-4bit` | same | 12 | 100% | 17.44x |
 | `cold_vision_qwen3vl_8b_postfusion_20260715.json` | `mlx-community/Qwen3-VL-8B-Instruct-4bit` | unique-image TextVQA, 35% visual retention | 10 | 70% normalized output equality; 80%/80% task match | 1.70x |
 
-Resident-server latency is tracked separately in `resident_qwen25_3b_20260713.json`. On the same M1 Max, five warm forced 64-token requests reached a 0.657-second median wall time and 97.5 end-to-end tok/s. Five short streaming chats reached a 0.298-second median time to first text and 0.358-second median total latency. These requests used native fallback with zero accepted draft tokens, so they measure warm serving rather than the context speculation algorithm.
+The latest text generalization check is the Llama 3.2 artifact, not the favorable Qwen code fixture. Code and policy subsets reached 1.33x and 1.23x medians with 3/3 exact outputs; the JSON subset reached 1.35x but only 2/3 exact outputs. The suite-wide median was 1.008x because four fixture families accepted no useful drafts. A cache-disabled control restored 9/9 equality on code, JSON, and policy, but its 0.207x median made it roughly 4.8x slower than native generation. These results are why cache-enabled MLX text drafting remains experimental.
 
-The default code path accepted a median 51 of 64 tokens and reduced logical target forwards by 76.6%. One-token re-entry broadens coverage to copied RAG answers, accepting a median 30 tokens. The current repeated medians are below 2x and remain workload-specific. Older `strict` and 9B artifacts compared against synchronous or cache-disabled baselines and remain available only as diagnostics; they do not establish an improvement over optimized `mlx-lm` or Ollama.
+Resident serving is measured separately. In `chat_latency_llama32_3b_20260717.json`, seven warm, alternating-order requests reached 0.679s median wall time and 144.00 decode tok/s through MachBoost versus 0.803s and 96.65 tok/s through Ollama. MachBoost was 1.18x faster end to end and 1.49x faster in reported decode throughput, while Ollama delivered first text sooner (0.198s versus 0.247s). The runtimes use different 4-bit model files and prompt tokenizations, and MachBoost accepted no context drafts, so this is a backend/serving comparison rather than an algorithmic or quality result.
+
+The Qwen2.5 code path accepted a median 51 of 64 tokens and reduced logical target forwards by 76.6%. One-token re-entry broadened coverage to copied RAG answers, accepting a median 30 tokens. Those medians remain below 2x and workload-specific. Older `strict` and 9B artifacts compared against synchronous or cache-disabled baselines and remain diagnostics only; they do not establish an improvement over optimized `mlx-lm` or Ollama.
 
 The visual artifact compares 12 uncached requests with 12 accelerated requests on the same resident Qwen2.5-VL 3B model. Median wall time fell from 2.818 seconds uncached to 0.152 seconds on the accelerated path; median paired speedup was 18.33x and median TTFT speedup was 19.45x. All paired outputs and expected fixture answers matched. Eleven of 12 accelerated rows reused a 1,018-token visual prefix. The remaining row deliberately repeated the priming prompt, so it only reused projected image features and reached 1.33x. These are warm repeated-image results on one machine and model, not a claim about first-view latency, decode throughput, changed images, or arbitrary visual workloads.
 
 The cross-model artifact `vision_cache_qwen_matrix_20260714.json` applies the same image, prompts, resident-process policy, generation settings, and alternating pair order to six Qwen models. Across 72 pairs, both modes answer every fixture correctly. The median of the six model-level paired medians is 13.51x, ranging from 5.14x to 17.44x. Literal output equality is 95.83%: the only drift is three Qwen3.5 0.8B rows that differ by a semicolon inside a JSON fence while returning the same expected answer. The median reusable-prefix pair is 12.96x. Qwen3-VL's three genuine no-prefix cache controls have a 0.99x median, confirming that cache reuse alone does not improve first-view work. Every Qwen3.5 row uses a guarded whole-state checkpoint, including the repeated priming prompt. Qwen3.6 is excluded because its official releases are 28B and 36B total parameters. Variant names are not always total multimodal size: Qwen3-VL-8B is listed as 9B total and Qwen3.5-9B as 10B total.
 
-The first-view artifact `cold_vision_qwen3vl_8b_postfusion_20260715.json` instead uses 10 unique public TextVQA images, disables both visual and prompt caches, alternates pair order, and excludes a held-out warm-up. Adaptive post-fusion compression retains a median 35.12% of visual states after layer 3. Median wall time falls from 4.078 to 2.368 seconds; aggregate speedup is 1.67x and median paired speedup is 1.70x. Both paths match an accepted dataset answer on 80% of rows, but normalized output equality is 70% and literal equality is 50%. This is a quality-neutral task-score pilot on one model and machine, not exact decoding evidence or a universal first-view claim.
+The first-view artifact `cold_vision_qwen3vl_8b_postfusion_20260715.json` instead uses 10 unique public TextVQA images, disables both visual and prompt caches, alternates pair order, and excludes a held-out warm-up. Adaptive post-fusion compression retains a median 35.12% of visual states after layer 3. Median wall time falls from 4.078 to 2.368 seconds; aggregate speedup is 1.67x and median paired speedup is 1.70x. Both paths match an accepted dataset answer on 80% of rows, but normalized output equality is 70% and literal equality is 50%. Equal aggregate task score in this small pilot is not quality-equivalence evidence or a universal first-view result.
 
 The research paper source and PDF are included in [paper](paper/). Keeping `paper/` and `results/` in the public repository is intentional: they make the claims auditable. They are not imported by the package at runtime.
 
@@ -475,7 +486,30 @@ python3 scripts/backend_bench_matrix.py \
   --output results/local/mlx_native_reentry.json
 ```
 
-The harness includes prompt processing in both paths, alternates baseline-first and boosted-first ordering, uses fresh nonces, and records environment provenance. For historical comparison with Hugging Face prompt lookup:
+The harness includes prompt processing in both paths, alternates baseline-first and boosted-first ordering, uses fresh nonces, and records environment provenance. Rerun the broader Llama context audit and the serving comparison with:
+
+```sh
+python3 scripts/backend_bench_matrix.py \
+  --backends mlx \
+  --mlx-model mlx-community/Llama-3.2-3B-Instruct-4bit \
+  --fixtures policy,json,rag,code,repo_quote,creative_open,short_answer \
+  --repeat 3 \
+  --max-new-tokens 64 \
+  --source-mode context \
+  --output results/local/llama32-context.json
+
+machboost bench llama3.2:3b \
+  --engine both \
+  --ollama-model llama3.2:3b \
+  --runs 7 \
+  --warmups 2 \
+  --max-tokens 64 \
+  --json
+```
+
+The first command tests MachBoost's context path against native `mlx-lm`. The second compares warm serving runtimes and does not exercise context drafting.
+
+For historical comparison with Hugging Face prompt lookup:
 
 ```sh
 python3 scripts/hf_prompt_lookup_compare.py \
@@ -575,7 +609,7 @@ python3 -m unittest discover -s tests
 go test ./...
 ```
 
-On macOS 26 or newer, use Go 1.24 or newer for `go test ./...`; earlier Go linkers do not emit the Mach-O `LC_UUID` command that modern `dyld` requires.
+CI uses Go 1.24 on current macOS runners. The older Go 1.17 toolchain can build the module, but its test binaries may be rejected by macOS 26 `dyld` because they lack the required Mach-O `LC_UUID` command.
 
 Check packaging:
 
@@ -602,7 +636,7 @@ MachBoost v1 does not:
 - upload telemetry
 - modify model weights
 
-It only accelerates paths where the backend can verify candidate tokens against the target model.
+Text drafting requires verifier access to the target model. Repeated-image reuse and approximate visual compression follow separate, explicitly documented contracts.
 
 ## License
 
