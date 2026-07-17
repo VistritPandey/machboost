@@ -22,6 +22,10 @@ class FakeStats:
     accepted_draft_tokens: int = 2
     accepted_draft_spans: int = 1
     rejected_candidates: int = 0
+    prompt_tokens: int = 12
+    prompt_eval_seconds: float = 0.1
+    generation_seconds: float = 0.2
+    time_to_first_token_seconds: float = 0.12
 
 
 class FakeService:
@@ -181,7 +185,15 @@ class RuntimeManagerTests(unittest.TestCase):
         self.assertEqual(first.text, "hello world")
         self.assertEqual(second.load_duration_s, 0.0)
         self.assertEqual(manager.ps()[0]["requests"], 2)
-        self.assertEqual(manager.ps()[0]["keep_alive_seconds"], -1.0)
+        self.assertEqual(manager.ps()[0]["keep_alive_seconds"], 300.0)
+        metrics = first.ollama_metrics()
+        self.assertEqual(metrics["prompt_eval_count"], 12)
+        self.assertEqual(metrics["prompt_eval_duration"], 100_000_000)
+        self.assertEqual(metrics["eval_duration"], 200_000_000)
+        self.assertEqual(
+            metrics["machboost"]["time_to_first_token_seconds"],
+            0.12,
+        )
         self.assertEqual(manager.stop("mlx-community/example"), 1)
         self.assertEqual(manager.ps(), [])
 
@@ -194,6 +206,44 @@ class RuntimeManagerTests(unittest.TestCase):
         self.assertEqual(len(manager.ps()), 1)
         clock.advance(2.0)
         self.assertEqual(manager.ps(), [])
+
+    def test_expiry_waits_for_active_model_lock(self):
+        clock = FakeClock()
+        manager = RuntimeManager(loader=lambda config: FakeAccelerator(), clock=clock)
+        entry, _ = manager.get_or_load("mlx-community/example", keep_alive="1s")
+        locked = threading.Event()
+        release = threading.Event()
+
+        def hold_model_lock():
+            with entry.lock:
+                locked.set()
+                release.wait(timeout=2.0)
+
+        thread = threading.Thread(target=hold_model_lock)
+        thread.start()
+        try:
+            self.assertTrue(locked.wait(timeout=1.0))
+            clock.advance(2.0)
+            self.assertEqual(manager.evict_expired(), 0)
+        finally:
+            release.set()
+            thread.join(timeout=2.0)
+
+        self.assertEqual(manager.evict_expired(), 1)
+
+    def test_compile_warmup_runs_once_without_counting_as_request(self):
+        manager = RuntimeManager(loader=lambda config: FakeAccelerator())
+        entry, _ = manager.get_or_load("mlx-community/example")
+
+        _, first_performed = manager.warm(entry)
+        second_duration, second_performed = manager.warm(entry)
+
+        self.assertTrue(first_performed)
+        self.assertFalse(second_performed)
+        self.assertEqual(second_duration, 0.0)
+        self.assertEqual(entry.warmups, 1)
+        self.assertEqual(entry.requests, 0)
+        self.assertEqual(entry.accelerator.chat_calls[0][1], 1)
 
     def test_model_configuration_separates_context_indexes(self):
         loaded = []
@@ -300,6 +350,22 @@ class HTTPServerTests(unittest.TestCase):
         self.assertEqual(response["instance"]["keep_alive_seconds"], 3600.0)
         self.assertEqual(self.loaded[0][1].chat_calls, [])
         self.assertEqual(self.loaded[0][1].generate_calls, [])
+
+    def test_load_endpoint_can_compile_warm_text_model(self):
+        _, _, body = self.request(
+            "/api/load",
+            {
+                "model": "qwen2.5:3b",
+                "keep_alive": "5m",
+                "warmup": True,
+                "options": {"backend": "mlx"},
+            },
+        )
+
+        response = json.loads(body)
+        self.assertTrue(response["warmup_performed"])
+        self.assertEqual(response["instance"]["warmups"], 1)
+        self.assertEqual(self.loaded[0][1].chat_calls[0][1], 1)
 
     def test_ollama_chat_streams_ndjson_chunks(self):
         _, headers, body = self.request(
