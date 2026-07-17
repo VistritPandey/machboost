@@ -33,7 +33,12 @@ def main() -> None:
         raise FileNotFoundError(image)
 
     client, _ = ensure_server(args.endpoint)
-    client.load(args.model, options={"vision_cache_size": 20}, keep_alive="forever")
+    client.load(
+        args.model,
+        options={"vision_cache_size": 20},
+        keep_alive="5m",
+        warmup=True,
+    )
 
     for prompt in args.prompt:
         response = ask(client, args.model, image, prompt, max_tokens=args.max_tokens)
@@ -61,7 +66,7 @@ def ask(
         [{"role": "user", "content": prompt}],
         images=[str(image)],
         options={"temperature": 0.0, "num_predict": max_tokens},
-        keep_alive="forever",
+        keep_alive="5m",
         stream=False,
     )
     if not isinstance(response, dict):
