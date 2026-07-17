@@ -1,4 +1,4 @@
-__version__ = "0.5.0"
+__version__ = "0.5.1"
 
 from .accelerator import Accelerator, AcceleratorResult, CalibrationResult
 from .bench import (
@@ -19,6 +19,7 @@ from .core import (
     machboost,
 )
 from .client import MachBoostAPIError, MachBoostClient, ensure_server
+from .latency import LATENCY_SCHEMA, benchmark_chat_latency
 from .adapters.mlx_vlm import MLXVLMAccelerator, VisionRunStats
 from .models import ModelAlias, ModelResolution, resolve_model
 from .server import RuntimeManager
@@ -37,6 +38,7 @@ __all__ = [
     "CorpusDrafter",
     "GateDecision",
     "GatePolicy",
+    "LATENCY_SCHEMA",
     "MachBoost",
     "MachBoostAPIError",
     "MachBoostClient",
@@ -53,6 +55,7 @@ __all__ = [
     "VisionRunStats",
     "benchmark",
     "benchmark_cases",
+    "benchmark_chat_latency",
     "ensure_server",
     "machboost",
     "resolve_model",
