@@ -144,7 +144,7 @@ class OllamaHTTPAdapter:
         *,
         endpoint: Optional[str] = None,
         timeout: float = 120.0,
-        keep_alive: Any = -1,
+        keep_alive: Any = "5m",
         default_options: Optional[Mapping[str, Any]] = None,
         opener: Optional[Callable[..., Any]] = None,
     ) -> None:
