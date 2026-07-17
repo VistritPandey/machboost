@@ -3,6 +3,7 @@ from __future__ import annotations
 import gc
 import json
 import re
+import sys
 import threading
 import time
 import uuid
@@ -19,7 +20,7 @@ from .vision_auto import load_vision_calibration
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 11435
-DEFAULT_KEEP_ALIVE = -1.0
+DEFAULT_KEEP_ALIVE = 300.0
 
 
 def select_backend(model: str, backend: str = "auto") -> str:
@@ -71,6 +72,8 @@ class LoadedModel:
     keep_alive: float
     load_duration_s: float
     requests: int = 0
+    warmups: int = 0
+    warmup_duration_s: float = 0.0
 
     def __post_init__(self) -> None:
         self.lock = threading.RLock()
@@ -93,7 +96,9 @@ class LoadedModel:
             "expires_in_seconds": None if expires_at is None else max(0.0, expires_at - now),
             "keep_alive_seconds": self.keep_alive,
             "load_duration_seconds": self.load_duration_s,
+            "warmup_duration_seconds": self.warmup_duration_s,
             "requests": self.requests,
+            "warmups": self.warmups,
             "context_paths": list(self.config.context_paths),
             "boost_enabled": self.config.boost_enabled,
         }
@@ -112,6 +117,10 @@ class GenerationResult:
     stats: dict[str, Any]
     load_duration_s: float
     total_duration_s: float
+    prompt_eval_count: int = 0
+    prompt_eval_duration_s: float = 0.0
+    eval_duration_s: float = 0.0
+    time_to_first_token_s: Optional[float] = None
 
     def ollama_metrics(self) -> dict[str, Any]:
         generated = int(self.stats.get("generated_tokens", 0))
@@ -120,11 +129,16 @@ class GenerationResult:
             "done_reason": "stop",
             "total_duration": int(self.total_duration_s * 1_000_000_000),
             "load_duration": int(self.load_duration_s * 1_000_000_000),
+            "prompt_eval_count": self.prompt_eval_count,
+            "prompt_eval_duration": int(
+                self.prompt_eval_duration_s * 1_000_000_000
+            ),
             "eval_count": generated,
-            "eval_duration": int(max(0.0, self.total_duration_s - self.load_duration_s) * 1_000_000_000),
+            "eval_duration": int(self.eval_duration_s * 1_000_000_000),
             "machboost": {
                 "backend": self.backend,
                 "stats": self.stats,
+                "time_to_first_token_seconds": self.time_to_first_token_s,
             },
         }
 
@@ -176,6 +190,28 @@ class RuntimeManager:
             self._models[config] = entry
             return entry, load_duration
 
+    def warm(self, entry: LoadedModel) -> tuple[float, bool]:
+        if entry.config.backend.endswith("-vlm"):
+            return 0.0, False
+        with entry.lock:
+            if entry.warmups > 0:
+                entry.last_used_at = self.clock()
+                return 0.0, False
+            started = self.clock()
+            entry.accelerator.generate_chat(
+                [
+                    {"role": "system", "content": "Answer concisely."},
+                    {"role": "user", "content": "hi"},
+                ],
+                max_tokens=1,
+            )
+            finished = self.clock()
+            duration = max(0.0, finished - started)
+            entry.warmups += 1
+            entry.warmup_duration_s = duration
+            entry.last_used_at = finished
+            return duration, True
+
     def chat(
         self,
         model: str,
@@ -190,13 +226,22 @@ class RuntimeManager:
         entry, load_duration = self.get_or_load(model, options=options, keep_alive=keep_alive)
         max_tokens = int(options.get("num_predict", options.get("max_tokens", 128)))
         started = self.clock()
+        first_emit_at: Optional[float] = None
+
+        def timed_emit(text: str) -> None:
+            nonlocal first_emit_at
+            if text and first_emit_at is None:
+                first_emit_at = self.clock()
+            if emit is not None:
+                emit(text)
+
         with entry.lock:
             if entry.config.backend.endswith("-vlm"):
                 text, stats = entry.accelerator.generate_chat(
                     messages,
                     max_tokens=max_tokens,
                     context=context,
-                    on_text=emit,
+                    on_text=timed_emit if emit is not None else None,
                     use_vision_cache=not bool(options.get("no_vision_cache", False)),
                     temperature=float(options.get("temperature", 0.0)),
                     cold_vision_mode=str(options.get("cold_vision", "off")),
@@ -216,17 +261,31 @@ class RuntimeManager:
                     messages,
                     max_tokens=max_tokens,
                     context=context,
-                    on_text=emit,
+                    on_text=timed_emit if emit is not None else None,
                 )
             entry.requests += 1
             entry.last_used_at = self.clock()
+        finished = self.clock()
+        stats = stats_dict(stats)
+        request_duration = max(0.0, finished - started)
+        ttft = stats.get("time_to_first_token_seconds")
+        if ttft is None and first_emit_at is not None:
+            ttft = max(0.0, first_emit_at - started)
+        prompt_eval_duration = float(stats.get("prompt_eval_seconds") or 0.0)
+        eval_duration = float(stats.get("generation_seconds") or 0.0)
+        if eval_duration <= 0:
+            eval_duration = max(0.0, request_duration - prompt_eval_duration)
         return GenerationResult(
             model=model,
             backend=entry.config.backend,
             text=text,
-            stats=stats_dict(stats),
+            stats=stats,
             load_duration_s=load_duration,
-            total_duration_s=max(0.0, self.clock() - started + load_duration),
+            total_duration_s=request_duration + load_duration,
+            prompt_eval_count=int(stats.get("prompt_tokens") or 0),
+            prompt_eval_duration_s=prompt_eval_duration,
+            eval_duration_s=eval_duration,
+            time_to_first_token_s=ttft,
         )
 
     def generate(
@@ -244,13 +303,22 @@ class RuntimeManager:
         entry, load_duration = self.get_or_load(model, options=options, keep_alive=keep_alive)
         max_tokens = int(options.get("num_predict", options.get("max_tokens", 128)))
         started = self.clock()
+        first_emit_at: Optional[float] = None
+
+        def timed_emit(text: str) -> None:
+            nonlocal first_emit_at
+            if text and first_emit_at is None:
+                first_emit_at = self.clock()
+            if emit is not None:
+                emit(text)
+
         with entry.lock:
             if entry.config.backend.endswith("-vlm"):
                 text, stats = entry.accelerator.generate(
                     prompt,
                     max_tokens=max_tokens,
                     context=context,
-                    on_text=emit,
+                    on_text=timed_emit if emit is not None else None,
                     images=images,
                     use_vision_cache=not bool(options.get("no_vision_cache", False)),
                     temperature=float(options.get("temperature", 0.0)),
@@ -271,17 +339,31 @@ class RuntimeManager:
                     prompt,
                     max_tokens=max_tokens,
                     context=context,
-                    on_text=emit,
+                    on_text=timed_emit if emit is not None else None,
                 )
             entry.requests += 1
             entry.last_used_at = self.clock()
+        finished = self.clock()
+        stats = stats_dict(stats)
+        request_duration = max(0.0, finished - started)
+        ttft = stats.get("time_to_first_token_seconds")
+        if ttft is None and first_emit_at is not None:
+            ttft = max(0.0, first_emit_at - started)
+        prompt_eval_duration = float(stats.get("prompt_eval_seconds") or 0.0)
+        eval_duration = float(stats.get("generation_seconds") or 0.0)
+        if eval_duration <= 0:
+            eval_duration = max(0.0, request_duration - prompt_eval_duration)
         return GenerationResult(
             model=model,
             backend=entry.config.backend,
             text=text,
-            stats=stats_dict(stats),
+            stats=stats,
             load_duration_s=load_duration,
-            total_duration_s=max(0.0, self.clock() - started + load_duration),
+            total_duration_s=request_duration + load_duration,
+            prompt_eval_count=int(stats.get("prompt_tokens") or 0),
+            prompt_eval_duration_s=prompt_eval_duration,
+            eval_duration_s=eval_duration,
+            time_to_first_token_s=ttft,
         )
 
     def pull(self, model: str, *, revision: Optional[str] = None) -> dict[str, Any]:
@@ -310,20 +392,25 @@ class RuntimeManager:
             ]
             entries = [self._models.pop(config) for config in configs]
         for entry in entries:
-            release_accelerator(entry.accelerator)
+            with entry.lock:
+                release_accelerator(entry.accelerator)
         return len(entries)
 
     def evict_expired(self) -> int:
         now = self.clock()
+        entries: list[LoadedModel] = []
         with self._lock:
-            configs = [
-                config
-                for config, entry in self._models.items()
-                if entry.expires_at is not None and entry.expires_at <= now
-            ]
-            entries = [self._models.pop(config) for config in configs]
+            for config, entry in list(self._models.items()):
+                if entry.expires_at is None or entry.expires_at > now:
+                    continue
+                if not entry.lock.acquire(blocking=False):
+                    continue
+                entries.append(self._models.pop(config))
         for entry in entries:
-            release_accelerator(entry.accelerator)
+            try:
+                release_accelerator(entry.accelerator)
+            finally:
+                entry.lock.release()
         return len(entries)
 
     def ps(self) -> list[dict[str, Any]]:
@@ -405,12 +492,12 @@ def release_accelerator(accelerator: Any) -> None:
             reset_cache()
     del accelerator
     gc.collect()
-    try:
-        import mlx.core as mx
-
-        mx.clear_cache()
-    except (AttributeError, ImportError):
-        pass
+    mx = sys.modules.get("mlx.core")
+    if mx is not None:
+        try:
+            mx.clear_cache()
+        except (AttributeError, RuntimeError):
+            pass
 
 
 def stats_dict(stats: Any) -> dict[str, Any]:
@@ -433,8 +520,21 @@ class MachBoostHTTPServer(ThreadingHTTPServer):
     def __init__(self, server_address, manager: Optional[RuntimeManager] = None) -> None:
         self.manager = manager or RuntimeManager()
         super().__init__(server_address, MachBoostRequestHandler)
+        self._reaper_stop = threading.Event()
+        self._reaper = threading.Thread(
+            target=self._reap_expired_models,
+            name="machboost-model-reaper",
+            daemon=True,
+        )
+        self._reaper.start()
+
+    def _reap_expired_models(self) -> None:
+        while not self._reaper_stop.wait(1.0):
+            self.manager.evict_expired()
 
     def server_close(self) -> None:
+        self._reaper_stop.set()
+        self._reaper.join(timeout=2.0)
         self.manager.close()
         super().server_close()
 
@@ -497,11 +597,17 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                     options=dict(payload.get("options") or {}),
                     keep_alive=payload.get("keep_alive"),
                 )
+                warmup_duration = 0.0
+                warmed = False
+                if bool(payload.get("warmup", False)):
+                    warmup_duration, warmed = self.runtime.warm(entry)
                 self.send_json(
                     {
                         "status": "success",
                         "model": model,
                         "load_duration_seconds": load_duration,
+                        "warmup_duration_seconds": warmup_duration,
+                        "warmup_performed": warmed,
                         "instance": entry.to_dict(),
                     }
                 )
