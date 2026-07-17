@@ -58,7 +58,8 @@ class MachBoostClient:
         model: str,
         *,
         options: Optional[dict[str, Any]] = None,
-        keep_alive: Any = "forever",
+        keep_alive: Any = "5m",
+        warmup: bool = False,
     ) -> dict[str, Any]:
         return self.post(
             "/api/load",
@@ -66,6 +67,7 @@ class MachBoostClient:
                 "model": model,
                 "options": dict(options or {}),
                 "keep_alive": keep_alive,
+                "warmup": bool(warmup),
             },
         )
 
@@ -218,14 +220,38 @@ def ensure_server(
     timeout: float = 30.0,
     log_path: Optional[Path] = None,
 ) -> tuple[MachBoostClient, bool]:
-    client = MachBoostClient(endpoint, timeout=max(1.0, timeout))
-    if client.is_healthy():
-        return client, False
+    from . import __version__
 
+    client = MachBoostClient(endpoint, timeout=max(1.0, timeout))
     parsed = urlparse(client.endpoint)
     host = parsed.hostname or DEFAULT_HOST
     port = parsed.port or DEFAULT_PORT
-    if host not in {"127.0.0.1", "localhost", "::1"}:
+    is_local = host in {"127.0.0.1", "localhost", "::1"}
+
+    try:
+        health = client.health()
+    except MachBoostAPIError:
+        health = {}
+    if health.get("status") == "ok":
+        running_version = str(health.get("version") or "unknown")
+        if running_version == __version__:
+            return client, False
+        if not is_local:
+            raise MachBoostAPIError(
+                f"MachBoost server version {running_version} does not match client {__version__}"
+            )
+        client.shutdown()
+        shutdown_deadline = time.monotonic() + min(5.0, timeout)
+        while time.monotonic() < shutdown_deadline:
+            if not client.is_healthy():
+                break
+            time.sleep(0.05)
+        else:
+            raise MachBoostAPIError(
+                f"stale MachBoost server {running_version} did not shut down"
+            )
+
+    if not is_local:
         raise MachBoostAPIError(f"refusing to auto-start a server for non-local endpoint {client.endpoint!r}")
 
     cache_dir = Path.home() / ".cache" / "machboost"
@@ -258,7 +284,14 @@ def ensure_server(
 
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if client.is_healthy():
+        try:
+            started_health = client.health()
+        except MachBoostAPIError:
+            started_health = {}
+        if (
+            started_health.get("status") == "ok"
+            and str(started_health.get("version") or "unknown") == __version__
+        ):
             return client, True
         return_code = process.poll()
         if return_code is not None:
