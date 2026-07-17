@@ -96,7 +96,7 @@ class OllamaAdapterTest(unittest.TestCase):
         self.assertEqual(payload["model"], "qwen2.5:3b")
         self.assertEqual(payload["prompt"], "hello")
         self.assertFalse(payload["stream"])
-        self.assertEqual(payload["keep_alive"], -1)
+        self.assertEqual(payload["keep_alive"], "5m")
         self.assertEqual(payload["options"], {"num_ctx": 2048, "temperature": 0.0, "num_predict": 16})
 
     def test_benchmark_sets_token_and_context_options(self):
