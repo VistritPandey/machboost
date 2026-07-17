@@ -46,8 +46,9 @@ Future native targets:
 MachBoost 0.2 added a long-running control plane around the native adapters. Version 0.3 extends it to visual models. It:
 
 - loads each model once and retains it in unified memory
+- compiles the text generation path with a one-token warmup before interactive use
 - streams generated text without re-decoding the entire prefix per token
-- applies finite or indefinite model keep-alive policies
+- applies finite or indefinite model keep-alive policies with background expiry
 - serializes generation per model while serving independent models concurrently
 - exposes both Ollama-compatible and OpenAI-compatible HTTP endpoints
 - supports explicit preload, inspection, stop, and shutdown operations
@@ -243,7 +244,7 @@ text, stats = accel.generate(prompt, max_tokens=128)
 from machboost import MachBoostClient
 
 client = MachBoostClient()
-client.load("qwen2.5:3b", keep_alive="forever")
+client.load("qwen2.5:3b", keep_alive="5m", warmup=True)
 
 for event in client.chat(
     "qwen2.5:3b",
@@ -255,7 +256,7 @@ for event in client.chat(
 For visual input, attach image paths to the request and use a VLM alias:
 
 ```python
-client.load("qwen2.5-vl:3b", keep_alive="forever")
+client.load("qwen2.5-vl:3b", keep_alive="5m")
 
 response = client.chat(
     "qwen2.5-vl:3b",
@@ -288,15 +289,18 @@ The Python package exposes a resident native model runner:
 ```sh
 machboost list
 machboost pull qwen2.5:3b
-machboost warm qwen2.5:3b --keep-alive forever
-machboost run qwen2.5:3b --context ./docs --show-stats
+machboost warm qwen2.5:3b --keep-alive 5m
+machboost run qwen2.5:3b --context ./docs --verbose
 machboost run qwen2.5-vl:3b --image ./image.png --show-stats
 machboost complete qwen2.5-coder:3b --file ./prompt.txt
+machboost bench qwen2.5:3b --ollama-model qwen2.5:3b --runs 3
 machboost ps
 machboost stop qwen2.5:3b
 ```
 
-`machboost list` reports cached Hugging Face and MLX models plus portable short aliases. `machboost run MODEL` auto-starts the local server, resolves the best available backend, loads the model when needed, builds a draft corpus from local context files or directories, and opens an interactive streaming chat. Leaving chat does not unload the model. Use `--direct` for the earlier one-process behavior.
+`machboost list` reports cached Hugging Face and MLX models plus portable short aliases. `machboost run MODEL` auto-starts the local server, resolves the best available backend, loads and compile-warms text models, builds a draft corpus from local context files or directories, and then opens an interactive streaming chat. The header reports weight load, compile warmup, and total wall time separately. The default idle lifetime is five minutes, enforced by a background reaper. `Ctrl-C` cancels the current reply, `/bye` exits while retaining the idle window, and `Ctrl-D` or `/unload` unloads the model immediately. Use `--direct` for the earlier one-process behavior.
+
+`machboost bench` measures client-observed time to first text, wall time, prompt evaluation, and decode throughput. It uses a unique prompt nonce per request and alternates which runtime executes first in each two-engine round. It can compare the native MachBoost runtime with Ollama. The comparison is architecture-oriented rather than file-identical because MLX and Ollama may use different conversion and quantization formats.
 
 The package also exposes lightweight install checks:
 
