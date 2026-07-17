@@ -25,7 +25,17 @@ python3 examples/python/resident_client_demo.py \
   --max-tokens 128
 ```
 
-The resident client demo starts the local MachBoost server when needed, preloads the selected model, streams the response, and leaves the model in memory for the next request. Pass one or more `--context PATH` arguments to enable local-context drafting. Use `machboost ps`, `machboost stop MODEL`, and `machboost shutdown` to manage the runtime.
+The resident client demo starts the local MachBoost server when needed, loads and compile-warms the selected text model, streams the response, and leaves the model in memory for the five-minute default idle window. Pass one or more `--context PATH` arguments to enable local-context drafting. Use `machboost ps`, `machboost stop MODEL`, and `machboost shutdown` to manage the runtime.
+
+Warm chat latency comparison:
+
+```sh
+python3 examples/python/chat_latency_benchmark.py llama3.2:3b \
+  --ollama-model llama3.2:3b \
+  --runs 3
+```
+
+The benchmark records client time to first text, wall time, backend prompt evaluation, decode throughput, and normalized exact-output equality. Each request receives a unique nonce to avoid exact repeated-prompt cache hits. Ollama and MLX may use different converted or quantized files, so interpret the output as a runtime comparison.
 
 Repeated-image visual chat:
 
