@@ -16,12 +16,24 @@ from . import __version__, machboost
 from .accelerator import Accelerator
 from .adapters.ollama import OllamaHTTPAdapter, OllamaHTTPError
 from .client import MachBoostAPIError, MachBoostClient, ensure_server
+from .latency import benchmark_chat_latency
 from .models import alias_rows, resolve_model
 from .server import DEFAULT_HOST, DEFAULT_PORT, serve as serve_runtime
 from .video import TemporalVideoSampler, VideoSelection
 from .vision_auto import VISION_TOKEN_REQUEST_MODES, load_vision_calibration
 
 DEFAULT_CHAT_SYSTEM = "Answer directly and concisely. Do not reveal hidden reasoning."
+CHAT_HELP = """Commands:
+  /? or /help       show this help
+  /clear            reset chat history
+  /image PATH       attach an image
+  /video PATH       attach sampled video frames
+  /images           list attached images
+  /clear-images     remove attached images
+  /unload           unload this model and exit
+  /bye or /exit     exit and keep the model warm until its idle timeout
+
+Ctrl-C stops the current reply. Ctrl-D unloads the model and exits."""
 
 
 @dataclass(frozen=True)
@@ -810,11 +822,30 @@ def run_resident_chat(
 ) -> int:
     output_stream = output_stream or sys.stdout
     error_stream = error_stream or sys.stderr
+    session_started = time.perf_counter()
     try:
         client = connect_resident(args, error_stream=error_stream)
     except MachBoostAPIError as exc:
         print(f"machboost server error: {exc}", file=error_stream)
         return 2
+
+    print(f"loading {args.model}...", file=error_stream, flush=True)
+    try:
+        preload = client.load(
+            args.model,
+            options=native_server_options(args),
+            keep_alive=args.keep_alive,
+            warmup=True,
+        )
+    except MachBoostAPIError as exc:
+        print(f"machboost load error: {exc}", file=error_stream)
+        return 2
+    preload_wall = time.perf_counter() - session_started
+    instance = preload.get("instance") or {}
+    backend = str(instance.get("backend") or "unknown")
+    resolved_model = str(instance.get("model") or args.model)
+    model_load = float(preload.get("load_duration_seconds") or 0.0)
+    warmup_duration = float(preload.get("warmup_duration_seconds") or 0.0)
 
     try:
         active_images, has_video_frames = prepare_visual_inputs(args, stream=error_stream)
@@ -822,28 +853,39 @@ def run_resident_chat(
         print(f"video input error: {exc}", file=error_stream)
         return 2
     turns: list[dict[str, str]] = []
-    print(f"machboost run: {args.model}", file=output_stream)
-    print(f"server: {client.endpoint} (model stays warm until stop or shutdown)", file=output_stream)
-    print("Type /bye, /exit, or /quit to leave. Type /clear to reset chat history.", file=output_stream)
+    state = f"load {model_load:.2f}s" if model_load > 0 else "resident"
+    if warmup_duration > 0:
+        state += f" | compile {warmup_duration:.2f}s"
+    print(f"MachBoost {args.model} [{backend}]", file=output_stream)
     print(
-        "Use /image PATH, /video PATH, /images, or /clear-images to manage visual inputs.",
+        f"{state} | wall {preload_wall:.2f}s | keep alive {args.keep_alive} | /? help",
         file=output_stream,
     )
+    if resolved_model != args.model and args.show_stats:
+        print(f"model: {resolved_model}", file=output_stream)
+    print("", file=output_stream)
 
     while True:
         try:
-            user_text = input_func(">>> ")
+            user_text = input_func("you> ")
         except EOFError:
             print("", file=output_stream)
+            unload_resident_model(client, args.model, stream=output_stream)
             return 0
         except KeyboardInterrupt:
             print("", file=output_stream)
-            return 130
+            continue
 
         command = user_text.strip()
         if not command:
             continue
         if command in {"/bye", "/exit", "/quit"}:
+            return 0
+        if command in {"/?", "/help"}:
+            print(CHAT_HELP, file=output_stream)
+            continue
+        if command == "/unload":
+            unload_resident_model(client, args.model, stream=output_stream)
             return 0
         if command == "/clear":
             turns = []
@@ -881,6 +923,8 @@ def run_resident_chat(
         response_parts: list[str] = []
         final_row: dict = {}
         started = time.perf_counter()
+        rows = None
+        print("assistant> ", end="", flush=True, file=output_stream)
         try:
             request_options = {
                 "options": native_server_options(args),
@@ -899,19 +943,37 @@ def run_resident_chat(
                 if row.get("done"):
                     final_row = row
         except KeyboardInterrupt:
-            print("", file=output_stream)
+            close = getattr(rows, "close", None)
+            if callable(close):
+                close()
+            print("\n[generation stopped]", file=output_stream)
             turns.pop()
-            return 130
+            continue
         except MachBoostAPIError as exc:
             turns.pop()
             print(f"\ngeneration error: {exc}", file=error_stream)
-            return 2
+            continue
 
         print("", flush=True, file=output_stream)
         response = "".join(response_parts).strip()
         if args.show_stats:
             print_resident_stats(final_row, time.perf_counter() - started, stream=output_stream)
         turns.append({"role": "assistant", "content": response})
+
+
+def unload_resident_model(
+    client: MachBoostClient,
+    model: str,
+    *,
+    stream=None,
+) -> None:
+    stream = stream or sys.stdout
+    try:
+        result = client.stop(model)
+    except MachBoostAPIError as exc:
+        print(f"unload warning: {exc}", file=stream)
+        return
+    print(f"unloaded {int(result.get('unloaded') or 0)} model instance(s)", file=stream)
 
 
 def run_resident_completion(args: argparse.Namespace, *, output_stream=None, error_stream=None) -> int:
@@ -990,7 +1052,18 @@ def print_resident_stats(row: dict, elapsed_s: float, *, stream=None) -> None:
     metrics = row.get("machboost") or {}
     stats = metrics.get("stats") or {}
     generated = int(row.get("eval_count") or stats.get("generated_tokens") or 0)
-    rate = generated / elapsed_s if elapsed_s > 0 else 0.0
+    total_s = float(row.get("total_duration") or 0) / 1_000_000_000 or elapsed_s
+    load_s = float(row.get("load_duration") or 0) / 1_000_000_000
+    prompt_count = int(row.get("prompt_eval_count") or stats.get("prompt_tokens") or 0)
+    prompt_s = float(row.get("prompt_eval_duration") or 0) / 1_000_000_000
+    eval_s = float(row.get("eval_duration") or 0) / 1_000_000_000
+    if eval_s <= 0:
+        eval_s = max(0.0, elapsed_s - load_s - prompt_s)
+    rate = generated / eval_s if eval_s > 0 else 0.0
+    prompt_rate = prompt_count / prompt_s if prompt_s > 0 else 0.0
+    ttft = metrics.get("time_to_first_token_seconds")
+    if ttft is None:
+        ttft = stats.get("time_to_first_token_seconds")
     cache_state = ""
     if int(stats.get("image_count") or 0) > 0:
         cache_state = (
@@ -1012,13 +1085,22 @@ def print_resident_stats(row: dict, elapsed_s: float, *, stream=None) -> None:
                 f" vision_tokens={post_fusion.get('mode', 'unknown')}"
                 f":{float(post_fusion.get('actual_visual_retention_ratio') or 0.0):.0%}"
             )
+    print(f"total duration:       {total_s:.3f}s", file=stream)
+    print(f"load duration:        {load_s:.3f}s", file=stream)
+    if ttft is not None:
+        print(f"time to first token:  {float(ttft):.3f}s", file=stream)
+    print(f"prompt eval count:    {prompt_count} token(s)", file=stream)
+    print(f"prompt eval duration: {prompt_s:.3f}s", file=stream)
+    print(f"prompt eval rate:     {prompt_rate:.2f} tokens/s", file=stream)
+    print(f"eval count:           {generated} token(s)", file=stream)
+    print(f"eval duration:        {eval_s:.3f}s", file=stream)
+    print(f"eval rate:            {rate:.2f} tokens/s", file=stream)
     print(
-        "stats: "
-        f"elapsed={elapsed_s:.2f}s "
-        f"tokens_per_second={rate:.2f} "
+        "machboost: "
+        f"backend={metrics.get('backend', 'unknown')} "
         f"accepted={int(stats.get('accepted_draft_tokens') or 0)} "
-        f"target_calls={int(stats.get('target_calls') or 0)}/{int(stats.get('baseline_target_calls') or 0)} "
-        f"backend={metrics.get('backend', 'unknown')}"
+        f"target_calls={int(stats.get('target_calls') or 0)}/"
+        f"{int(stats.get('baseline_target_calls') or 0)}"
         f"{cache_state}",
         file=stream,
     )
@@ -1028,7 +1110,10 @@ def run_serve(args: argparse.Namespace, *, output_stream=None, error_stream=None
     output_stream = output_stream or sys.stdout
     error_stream = error_stream or sys.stderr
     print(f"MachBoost server listening on http://{args.host}:{args.port}", file=output_stream)
-    print("Models remain loaded until `machboost stop`, `machboost shutdown`, or process exit.", file=output_stream)
+    print(
+        "Models unload after their keep-alive or via `machboost stop`/`machboost shutdown`.",
+        file=output_stream,
+    )
     try:
         serve_runtime(args.host, args.port)
     except KeyboardInterrupt:
@@ -1056,23 +1141,116 @@ def run_pull(args: argparse.Namespace, *, output_stream=None, error_stream=None)
 def run_warm(args: argparse.Namespace, *, output_stream=None, error_stream=None) -> int:
     output_stream = output_stream or sys.stdout
     error_stream = error_stream or sys.stderr
+    started = time.perf_counter()
     try:
         client = connect_resident(args, error_stream=error_stream)
+        print(f"loading {args.model}...", file=error_stream, flush=True)
         result = client.load(
             args.model,
             options=native_server_options(args),
             keep_alive=args.keep_alive,
+            warmup=True,
         )
         instance = result["instance"]
+        wall = time.perf_counter() - started
+        load_duration = float(result["load_duration_seconds"])
+        warmup_duration = float(result.get("warmup_duration_seconds") or 0.0)
+        state = "loaded" if load_duration > 0 else "already resident"
         print(
-            f"loaded {instance['model']} on {instance['backend']} in "
-            f"{result['load_duration_seconds']:.2f}s; keep_alive={args.keep_alive}",
+            f"{state} {instance['model']} on {instance['backend']}; "
+            f"model_load={load_duration:.2f}s compile_warmup={warmup_duration:.2f}s "
+            f"wall={wall:.2f}s "
+            f"keep_alive={args.keep_alive}",
             file=output_stream,
         )
         return 0
     except MachBoostAPIError as exc:
         print(f"machboost warm error: {exc}", file=error_stream)
         return 2
+
+
+def run_latency_bench(
+    args: argparse.Namespace,
+    *,
+    output_stream=None,
+    error_stream=None,
+) -> int:
+    output_stream = output_stream or sys.stdout
+    error_stream = error_stream or sys.stderr
+    client = None
+    try:
+        if args.engine in {"machboost", "both"}:
+            client = connect_resident(args, error_stream=error_stream)
+        artifact = benchmark_chat_latency(
+            args.model,
+            prompt=args.prompt,
+            system=args.system or DEFAULT_CHAT_SYSTEM,
+            runs=args.runs,
+            warmups=args.warmups,
+            max_tokens=args.max_tokens,
+            engine=args.engine,
+            backend=args.backend,
+            keep_alive=args.keep_alive,
+            machboost_client=client,
+            ollama_model=args.ollama_model,
+            ollama_endpoint=args.ollama_endpoint,
+            timeout=args.timeout,
+        )
+    except (MachBoostAPIError, OllamaHTTPError, OSError, ValueError) as exc:
+        print(f"machboost bench error: {exc}", file=error_stream)
+        return 2
+    if args.json:
+        print(json.dumps(artifact, indent=2), file=output_stream)
+    else:
+        print_latency_benchmark(artifact, stream=output_stream)
+    return 0
+
+
+def print_latency_benchmark(artifact: dict, *, stream=None) -> None:
+    stream = stream or sys.stdout
+    config = artifact["config"]
+    print(
+        f"chat latency: {config['runs']} measured run(s), "
+        f"{config['warmups']} warmup(s), max {config['max_tokens']} tokens",
+        file=stream,
+    )
+    for engine, data in artifact["engines"].items():
+        summary = data["summary"]
+        print(
+            f"{engine}: model={data['resolved_model']} backend={data['backend']}",
+            file=stream,
+        )
+        if data.get("load_wall_seconds") is not None:
+            print(
+                f"  preload wall={float(data['load_wall_seconds']):.3f}s "
+                f"model_load={float(data['model_load_seconds']):.3f}s "
+                f"compile={float(data.get('compile_warmup_seconds') or 0.0):.3f}s",
+                file=stream,
+            )
+        print(
+            f"  median wall={summary['median_wall_seconds']:.3f}s "
+            f"ttft={summary['median_client_ttft_seconds']:.3f}s "
+            f"decode={summary['median_tokens_per_second']:.2f} tokens/s",
+            file=stream,
+        )
+        for row in data["rows"]:
+            print(
+                f"  run {row['run']}: wall={row['wall_seconds']:.3f}s "
+                f"ttft={float(row['client_ttft_seconds'] or 0.0):.3f}s "
+                f"tokens={row['eval_count']} rate={row['tokens_per_second']:.2f}",
+                file=stream,
+            )
+    comparison = artifact.get("comparison")
+    if comparison:
+        print(
+            "comparison: "
+            f"MachBoost wall={comparison['machboost_total_speedup_vs_ollama']:.3f}x "
+            f"TTFT={comparison['machboost_ttft_speedup_vs_ollama']:.3f}x "
+            f"output_equal={'yes' if comparison['median_output_equal'] else 'no'} "
+            "relative to Ollama",
+            file=stream,
+        )
+    print("note: plain chat uses the native backend when no draft context is supplied", file=stream)
 
 
 def run_ps(args: argparse.Namespace, *, output_stream=None, error_stream=None) -> int:
@@ -1171,6 +1349,35 @@ def build_parser() -> argparse.ArgumentParser:
     complete.add_argument("prompt", nargs="?", help="Prompt text. Reads stdin when omitted.")
     complete.add_argument("--file", help="Read the completion prompt from a UTF-8 text file.")
 
+    bench = subcommands.add_parser(
+        "bench",
+        help="Measure warm chat latency and optionally compare with Ollama.",
+    )
+    bench.add_argument("model", help="MachBoost model alias or repository.")
+    bench.add_argument(
+        "--engine",
+        choices=["machboost", "ollama", "both"],
+        default="both",
+    )
+    bench.add_argument("--ollama-model", help="Ollama model name; defaults to MODEL.")
+    bench.add_argument("--ollama-endpoint", help="Ollama server URL.")
+    bench.add_argument(
+        "--prompt",
+        default="Reply to this greeting naturally in one short sentence: hey",
+    )
+    bench.add_argument("--system", default="")
+    bench.add_argument("--runs", type=int, default=3)
+    bench.add_argument("--warmups", type=int, default=1)
+    bench.add_argument("--max-tokens", type=int, default=32)
+    bench.add_argument(
+        "--backend",
+        choices=["auto", "mlx", "hf"],
+        default="auto",
+    )
+    bench.add_argument("--keep-alive", default="5m")
+    bench.add_argument("--json", action="store_true")
+    add_server_connection_arguments(bench, include_autostart=True)
+
     warm = subcommands.add_parser("warm", help="Preload a native model into resident memory.")
     add_native_run_arguments(warm)
 
@@ -1237,7 +1444,13 @@ def add_native_run_arguments(parser: argparse.ArgumentParser) -> None:
         help="MLX experimental: generate this many native seed tokens before context re-entry.",
     )
     parser.add_argument("--system", default="", help="Optional system message.")
-    parser.add_argument("--show-stats", action="store_true", help="Print MachBoost draft/verify stats after replies.")
+    parser.add_argument(
+        "--show-stats",
+        "--verbose",
+        dest="show_stats",
+        action="store_true",
+        help="Print load, first-token, prompt, decode, and MachBoost timings.",
+    )
     parser.add_argument("--no-boost", action="store_true", help="Run the serial baseline path.")
     parser.add_argument("--strict", action="store_true", help="MLX only: disable prompt cache for strict evidence mode.")
     parser.add_argument("--lazy", action="store_true", help="MLX only: use lazy model loading.")
@@ -1300,7 +1513,11 @@ def add_native_run_arguments(parser: argparse.ArgumentParser) -> None:
         help="Path to a machboost.vision_calibration.v1 JSON policy artifact.",
     )
     parser.add_argument("--direct", action="store_true", help="Load in this process instead of using the resident server.")
-    parser.add_argument("--keep-alive", default="forever", help="Resident lifetime, for example forever, 10m, or 1h.")
+    parser.add_argument(
+        "--keep-alive",
+        default="5m",
+        help="Idle resident lifetime, for example 5m, 1h, or forever.",
+    )
     add_server_connection_arguments(parser, include_autostart=True)
 
 
@@ -1373,6 +1590,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return run_native_chat(args) if args.direct else run_resident_chat(args)
     if args.command == "complete":
         return run_resident_completion(args)
+    if args.command == "bench":
+        return run_latency_bench(args)
     if args.command == "serve":
         return run_serve(args)
     if args.command == "warm":
