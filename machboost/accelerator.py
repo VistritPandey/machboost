@@ -377,6 +377,12 @@ class Accelerator:
             tokens = measurement.tokens
             target_calls = measurement.target_calls
 
+        native_metrics = getattr(self.service, "last_native_metrics", {})
+        if callable(native_metrics):
+            native_metrics = native_metrics()
+        if not isinstance(native_metrics, dict):
+            native_metrics = {}
+
         if (
             on_tokens is not None
             and not native_text_streaming
@@ -394,6 +400,16 @@ class Accelerator:
             accepted_draft_tokens=0,
             accepted_draft_spans=0,
             rejected_candidates=0,
+            prompt_tokens=int(native_metrics.get("prompt_tokens") or len(prompt_tokens)),
+            prompt_eval_seconds=float(
+                native_metrics.get("prompt_eval_seconds") or 0.0
+            ),
+            generation_seconds=float(
+                native_metrics.get("generation_seconds") or 0.0
+            ),
+            time_to_first_token_seconds=native_metrics.get(
+                "time_to_first_token_seconds"
+            ),
         )
         text = truncate_at_stop_strings(self.service.decode(tokens), stop_strings)
         return AcceleratorResult(text=text, tokens=tokens, stats=stats)
@@ -562,7 +578,6 @@ class ChatTextStreamer:
         self.emit = emit
         self.stop_strings = tuple(stop for stop in stop_strings if stop)
         self.prefixes = ("Assistant:", "assistant:")
-        self.max_stop_len = max([len(stop) for stop in self.stop_strings] + [1])
         self.buffer = ""
         self.started = False
         self.stopped = False
@@ -572,6 +587,8 @@ class ChatTextStreamer:
             return
         self.buffer += text
         self._strip_leading_role_prefix()
+        if not self.started:
+            return
         self._emit_safe_text()
 
     def finish(self) -> None:
@@ -606,12 +623,23 @@ class ChatTextStreamer:
             self.stopped = True
             return
 
-        keep = max(0, self.max_stop_len - 1)
+        keep = trailing_stop_prefix_length(self.buffer, self.stop_strings)
         safe_len = len(self.buffer) - keep
         if safe_len <= 0:
             return
         self.emit(self.buffer[:safe_len])
         self.buffer = self.buffer[safe_len:]
+
+
+def trailing_stop_prefix_length(text: str, stop_strings: Iterable[str]) -> int:
+    longest = 0
+    for stop in stop_strings:
+        upper = min(len(text), max(0, len(stop) - 1))
+        for length in range(upper, 0, -1):
+            if text.endswith(stop[:length]):
+                longest = max(longest, length)
+                break
+    return longest
 
 
 class TokenTextStreamer:
