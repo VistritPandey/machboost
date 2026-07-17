@@ -4,7 +4,7 @@
 
 MachBoost 0.5.1 has its own resident Hugging Face/MLX runtime and exposes an Ollama-compatible HTTP surface. That compatibility lets existing clients use a MachBoost-owned decode path; it does not make an external Ollama process faster.
 
-An installed Ollama runtime can still be a real native target for MachBoost, but not through Ollama's public HTTP API alone. That integration point is inside the model runner, where tokenization, logits, sampling state, KV cache state, accepted-prefix commits, and rollback are available.
+An installed Ollama runtime could become a native MachBoost target, but not through Ollama's public HTTP API alone. The required integration point is inside the model runner, where tokenization, logits, sampling state, KV cache state, accepted-prefix commits, and rollback are available.
 
 The product-facing commands are native:
 
@@ -23,9 +23,11 @@ The default idle keep-alive is five minutes. `machboost run` preloads before sho
 machboost bench llama3.2:3b --ollama-model llama3.2:3b --runs 3 --warmups 1
 ```
 
-This reports client time to first text and backend throughput with unique request nonces. It is not a file-identical comparison when the MLX and Ollama quantizations differ.
+This reports client time to first text and backend throughput with unique request nonces and alternating execution order. It is not a file-identical comparison when the MLX and Ollama templates, conversions, or quantizations differ, and it does not exercise MachBoost context drafting.
 
-The local Ollama checkout already contains several relevant hooks:
+The July 17 Llama 3.2 3B artifact records 0.679s median wall time and 144.00 decode tok/s for resident MachBoost/MLX, versus 0.803s and 96.65 tok/s for Ollama. Ollama reached first text sooner, at 0.198s versus 0.247s. Treat those numbers as one-machine runtime selection evidence, not proof that the MachBoost algorithm accelerated Ollama or that the two model files have equal quality.
+
+Ollama's current `main` branch and the local source archive contain several relevant hooks:
 
 - GGUF models are routed to the `llama-server` subprocess.
 - MLX-format models are routed to Ollama's Go/MLX runner.
@@ -33,11 +35,11 @@ The local Ollama checkout already contains several relevant hooks:
 - llama-server launch arguments already support MTP/draft-model speculative decoding.
 - The MLX runner already has a `drafter` abstraction, accepted-prefix validation, sampler commits, cache snapshots, rollback, and adaptive draft-depth control.
 
-This means the Ollama path should be an adapter layer over existing runner hooks, plus a new MachBoost candidate source. It should not be a black-box HTTP wrapper promising speedups it cannot verify.
+This makes a native runner patch technically plausible: a MachBoost candidate source could reuse existing validation and rollback machinery. The current package does not include that patch, so the external Ollama integration remains a compatibility wrapper without MachBoost acceleration.
 
 ## Source Map
 
-Paths below are from the Ollama repository root.
+Paths below are from the Ollama repository root and were rechecked against official `main` on July 17, 2026. Ollama internals are not a stable public API; verify the linked source again before building a patch.
 
 | Area | File | Relevant behavior |
 |---|---|---|
@@ -49,7 +51,7 @@ Paths below are from the Ollama repository root.
 | Draft detection | `llm/llama_server.go` | Auto-enables MTP when the GGUF has embedded MTP draft metadata. |
 | MLX load path | `x/mlxrunner/runner.go` | Loads target model and optional draft model, then creates the persistent speculation subsystem. |
 | MLX decode loop | `x/mlxrunner/pipeline.go` | Selects speculative vs plain decoder and owns streaming, stopping, and token accounting. |
-| MLX drafter contract | `x/mlxrunner/speculate.go` | Defines `drafter` with `propose`, `committed`, `finish`, and `flush`. |
+| MLX drafter contract | [`x/mlxrunner/speculate.go`](https://github.com/ollama/ollama/blob/main/x/mlxrunner/speculate.go) | Defines the current `drafter` lifecycle (`propose`, `committed`, `settle`, and `close`). |
 | MLX verifier | `x/mlxrunner/speculate.go` | Fuses current token plus candidates, validates candidate tokens against target distributions, commits the accepted prefix, and rolls back rejected cache writes. |
 | MLX MTP drafter | `x/mlxrunner/mtp.go` | Implements the current draft source using MTP/draft heads. |
 | MLX depth policy | `x/mlxrunner/speculate_depth.go` | Learns validation cost and acceptance rates, then chooses draft depth adaptively. |
@@ -65,7 +67,7 @@ MachBoost owns the model and decode loop in this mode. Supported endpoints inclu
 - `/api/pull`, `/api/load`, `/api/stop`, and `/api/shutdown`
 - streaming and non-streaming `/api/chat` and `/api/generate`
 
-The same process also exposes OpenAI-compatible `/v1/models`, `/v1/chat/completions`, and `/v1/completions` endpoints. This is protocol compatibility, not a claim of complete Ollama feature parity. Model creation, copying, deletion, embeddings, and multimodal inputs remain outside the 0.2 surface.
+The same process also exposes OpenAI-compatible `/v1/models`, `/v1/chat/completions`, and `/v1/completions` endpoints. This is protocol compatibility, not complete Ollama feature parity. MachBoost 0.5.1 supports image content on chat/generate requests when the selected backend is MLX-VLM, but it does not implement Ollama model creation, copy, deletion, embeddings, tool calling, or thinking-field semantics.
 
 ### External Ollama HTTP Wrapper
 
@@ -73,11 +75,10 @@ Useful for:
 
 - Benchmarking.
 - Diagnostics.
-- Setting options like `draft_num_predict`.
-- Choosing prompts and context.
+- Sending ordinary generation options supported by the wrapper/API.
+- Choosing prompts and chat history.
 - Pulling missing models through `/api/pull`.
 - Interactive chat through streaming `/api/chat`.
-- Recording acceptance-like proxy metrics when available.
 
 Not enough for:
 
@@ -97,7 +98,7 @@ The flow mirrors the common `ollama run MODEL` experience against an external Ol
 
 ### GGUF / llama-server Track
 
-Best short-term path:
+Best short-term path for Ollama-supported speculation:
 
 1. Detect whether a model has embedded MTP or a separate draft model.
 2. Set or recommend `draft_num_predict`.
@@ -108,7 +109,7 @@ Custom MachBoost corpus drafting for GGUF needs a llama.cpp/llama-server patch o
 
 ### MLX Runner Track
 
-Best native path:
+Proposed native MachBoost path:
 
 1. Add a MachBoost drafter that implements Ollama's existing `drafter` interface.
 2. Feed it local-context candidate tokens instead of MTP head predictions.
@@ -116,7 +117,7 @@ Best native path:
 4. Add an opt-in request option or environment flag for development.
 5. Emit structured stats for benchmark comparison.
 
-This is the fastest path to proving the generic MachBoost algorithm inside Ollama without re-solving cache safety.
+This is the most direct integration route identified so far. It still requires a maintained Ollama fork or accepted upstream extension, plus output and throughput tests against Ollama's own plain decoder.
 
 ## Proposed Adapter Shape
 
@@ -167,7 +168,7 @@ The same conceptual interface can back the Hugging Face prototype, MLX, and futu
 
 ## Product Guidance
 
-For public users, the default is now the standalone resident MachBoost server. It gives clients familiar streaming APIs without mutating an installed Ollama app. A future native Ollama integration should ship one of:
+For public users, the supported path is the standalone resident MachBoost server. It gives clients familiar streaming APIs without mutating an installed Ollama app. A future native Ollama integration should ship one of:
 
 - A documented fork for research builds.
 - A patch file users apply to a known Ollama commit.
