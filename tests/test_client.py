@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+from machboost import __version__
 from machboost.client import MachBoostAPIError, MachBoostClient, default_endpoint, ensure_server
 from machboost.server import MachBoostHTTPServer, RuntimeManager
 
@@ -141,7 +142,13 @@ class BootstrapTests(unittest.TestCase):
             home = Path(tmp)
             with (
                 patch("machboost.client.Path.home", return_value=home),
-                patch("machboost.client.MachBoostClient.is_healthy", side_effect=[False, True]),
+                patch(
+                    "machboost.client.MachBoostClient.health",
+                    side_effect=[
+                        MachBoostAPIError("not running"),
+                        {"status": "ok", "version": __version__},
+                    ],
+                ),
                 patch("machboost.client.subprocess.Popen", return_value=process) as popen,
             ):
                 client, started = ensure_server(
@@ -156,9 +163,49 @@ class BootstrapTests(unittest.TestCase):
             self.assertEqual((home / ".cache" / "machboost" / "server.pid").read_text(), "4321\n")
 
     def test_ensure_server_does_not_auto_start_remote_endpoint(self):
-        with patch("machboost.client.MachBoostClient.is_healthy", return_value=False):
+        with patch(
+            "machboost.client.MachBoostClient.health",
+            side_effect=MachBoostAPIError("not running"),
+        ):
             with self.assertRaisesRegex(MachBoostAPIError, "non-local"):
                 ensure_server("http://example.com:11435", timeout=0.1)
+
+    def test_ensure_server_reuses_matching_resident_version(self):
+        with patch(
+            "machboost.client.MachBoostClient.health",
+            return_value={"status": "ok", "version": __version__},
+        ):
+            client, started = ensure_server("http://127.0.0.1:11435")
+
+        self.assertFalse(started)
+        self.assertEqual(client.endpoint, "http://127.0.0.1:11435")
+
+    def test_ensure_server_restarts_stale_local_version(self):
+        process = Mock(pid=4321)
+        process.poll.return_value = None
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            with (
+                patch("machboost.client.Path.home", return_value=home),
+                patch(
+                    "machboost.client.MachBoostClient.health",
+                    side_effect=[
+                        {"status": "ok", "version": "0.5.0"},
+                        {"status": "ok", "version": __version__},
+                    ],
+                ),
+                patch("machboost.client.MachBoostClient.shutdown") as shutdown,
+                patch("machboost.client.MachBoostClient.is_healthy", return_value=False),
+                patch("machboost.client.subprocess.Popen", return_value=process),
+            ):
+                _, started = ensure_server(
+                    "http://127.0.0.1:11435",
+                    timeout=1.0,
+                    log_path=home / "server.log",
+                )
+
+        self.assertTrue(started)
+        shutdown.assert_called_once_with()
 
 
 if __name__ == "__main__":
