@@ -1,6 +1,6 @@
 # MachBoost Acceleration Layer
 
-MachBoost is a backend-aware local inference acceleration layer. Text generation can draft candidate tokens from nearby context and ask the target runtime to verify them before committing them. Visual question answering can reuse deterministic work derived from an unchanged image.
+MachBoost is a backend-aware local inference package with three distinct optimization contracts. Text generation can draft candidate tokens from nearby context and ask the target runtime to verify them before committing them. Repeated-image question answering can reuse process-local work derived from unchanged image bytes. Experimental first-view Qwen3-VL compression is approximate and is evaluated separately.
 
 The central question is:
 
@@ -12,7 +12,7 @@ For visual workloads, the corresponding question is whether the exact image byte
 
 ## Non-Goals
 
-- No quality tradeoff.
+- No hidden quality tradeoff: exactness and task-score results are reported separately, and approximate paths are opt-in.
 - No quantization requirement.
 - No global system mutation.
 - No hosted service dependency.
@@ -22,7 +22,7 @@ For visual workloads, the corresponding question is whether the exact image byte
 
 ### Native Acceleration
 
-This is where real speedups happen. The runtime must expose enough internals to:
+This is where algorithmic text speedups are possible. The runtime must expose enough internals to:
 
 - tokenize and detokenize text
 - compute next-token logits or greedy decisions
@@ -43,7 +43,7 @@ Future native targets:
 
 ### Resident Runtime
 
-MachBoost 0.2 added a long-running control plane around the native adapters. Version 0.3 extends it to visual models. It:
+MachBoost 0.2 added a long-running control plane around the native adapters, and later releases extended it to visual models. In 0.5.1 it:
 
 - loads each model once and retains it in unified memory
 - compiles the text generation path with a one-token warmup before interactive use
@@ -184,7 +184,11 @@ Current behavior:
 - residual-token fallback on mismatch where supported
 - MLX strict/stateless mode for clean evidence runs
 
-Important limitation: sampling-compatible verification is not claimed in v1. Current public evidence is for greedy decoding and exact token equality.
+Important limitations:
+
+- Sampling-compatible corpus verification is not claimed. Current text evidence uses greedy decoding.
+- Verification of a proposed block does not by itself prove that every later token will remain identical when batched and serial cache trajectories use different floating-point reduction paths.
+- A July 2026 Llama 3.2 3B audit matched 20 of 21 cache-enabled pairs. Cache-disabled strict mode matched 9 of 9 tested pairs but was about 4.8x slower than native generation. Cache-enabled MLX drafting therefore remains experimental and should be enabled only after model/workload calibration.
 
 ### Policy Gate
 
@@ -300,7 +304,7 @@ machboost stop qwen2.5:3b
 
 `machboost list` reports cached Hugging Face and MLX models plus portable short aliases. `machboost run MODEL` auto-starts the local server, resolves the best available backend, loads and compile-warms text models, builds a draft corpus from local context files or directories, and then opens an interactive streaming chat. The header reports weight load, compile warmup, and total wall time separately. The default idle lifetime is five minutes, enforced by a background reaper. `Ctrl-C` cancels the current reply, `/bye` exits while retaining the idle window, and `Ctrl-D` or `/unload` unloads the model immediately. Use `--direct` for the earlier one-process behavior.
 
-`machboost bench` measures client-observed time to first text, wall time, prompt evaluation, and decode throughput. It uses a unique prompt nonce per request and alternates which runtime executes first in each two-engine round. It can compare the native MachBoost runtime with Ollama. The comparison is architecture-oriented rather than file-identical because MLX and Ollama may use different conversion and quantization formats.
+`machboost bench` measures client-observed time to first text, wall time, prompt evaluation, and decode throughput. It uses a unique prompt nonce per request and alternates which runtime executes first in each two-engine round. It can compare the native MachBoost runtime with Ollama. That comparison measures serving/runtime suitability, not context drafting, and is not file-identical because MLX and Ollama may use different templates, conversions, and quantization formats.
 
 The package also exposes lightweight install checks:
 
@@ -329,14 +333,22 @@ go run ./cmd/machboost bench command -- sleep 1
 
 | Backend | Resident serving | Native speculation | Status |
 |---|---:|---:|---|
-| Hugging Face | yes | yes | native adapter, streaming server, and benchmarks exist |
-| MLX / `mlx-lm` | yes | yes | native adapter, fast text streaming, and strict evidence mode exist |
+| Hugging Face | yes | yes | native adapter, streaming server, and research benchmarks exist |
+| MLX / `mlx-lm` | yes | experimental | native adapter, fast text streaming, cache-enabled drafting, and slower strict controls exist |
 | MLX-VLM | yes | repeated-image reuse and approximate first-view compression | image/video-frame chat, streaming, policy calibration, and paired benchmarks exist |
 | Custom Python service | caller-owned | yes, if verifier exists | supported through `machboost(...)` |
 | External Ollama HTTP | already resident | no | compatibility wrapper and benchmarks only |
 | llama.cpp | planned | possible | needs verifier/KV hooks or patch |
 
-Protocol compatibility does not imply full feature parity. MachBoost does not yet provide Ollama model creation/copy/deletion or embeddings. Image input is supported for Ollama-style chat/generate requests and OpenAI-style content parts when the selected backend is MLX-VLM. Video is accepted by the MachBoost CLI and expanded into image frames before the request.
+Protocol compatibility does not imply full feature parity. MachBoost does not provide Ollama model creation, copy, deletion, embeddings, tool calling, or thinking-field semantics. Image input is supported for Ollama-style chat/generate requests and OpenAI-style content parts when the selected backend is MLX-VLM. Video is accepted by the MachBoost CLI and expanded into image frames before the request.
+
+## Text And Serving Evidence
+
+The latest cache-enabled text audit is `results/llama32_3b_mlx_context_benchmark_20260716.json`: 21 Llama 3.2 3B pairs across seven fixture families produced a 1.008x aggregate median and 95.24% exact output equality. Code and policy were exact in all three repeats and reached 1.33x and 1.23x medians. One of three JSON rows diverged. RAG, repo quote, creative, and short-answer fixtures accepted no useful drafts and stayed near native speed.
+
+The cache-disabled control `results/llama32_3b_mlx_context_strict_benchmark_20260716.json` matched all nine tested code, JSON, and policy pairs, but its 0.207x median was about 4.8x slower than native generation. It is an exactness diagnostic, not a performance mode.
+
+Serving is independent of the drafting algorithm. In `results/chat_latency_llama32_3b_20260717.json`, seven warm alternating-order requests reached 0.679 seconds median wall time and 144.00 decode tok/s through MachBoost, versus 0.803 seconds and 96.65 tok/s through Ollama. Ollama reached first text sooner: 0.198 seconds versus 0.247 seconds. The model family and 4-bit class match, but the model files, templates, and token counts do not; no algorithmic or quality claim follows from the ratio.
 
 ## Visual Evidence
 
@@ -405,7 +417,7 @@ Status: done for 0.2.
 Next targets:
 
 - repeated larger-model evaluations
-- cache-enabled MLX exactness work
+- cache-enabled MLX exactness and cache-trajectory work
 - llama.cpp verifier hook investigation
 - Ollama MLX runner patch or fork
 
@@ -435,9 +447,9 @@ Remaining work:
 
 ## Product Principle
 
-MachBoost should feel boring:
+MachBoost should be predictable:
 
-- If an exact path can help, it preserves exact output.
+- An exact path is enabled only after model- and workload-specific output checks pass.
 - If an approximate visual path is requested, it reports the applied policy and measured quality boundary.
-- If it cannot help, it stays out of the way.
+- If it cannot help, it falls back to the backend's native generator and reports that decision; resident-server overhead may still remain.
 - It always leaves an audit trail explaining what happened.
