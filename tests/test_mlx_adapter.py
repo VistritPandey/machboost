@@ -258,6 +258,50 @@ class MLXAdapterTest(unittest.TestCase):
         self.assertEqual(token_chunks, [])
         self.assertTrue(service.supports_native_text_streaming)
 
+    def test_native_mlx_stream_records_backend_timings(self):
+        mlx_lm = ModuleType("mlx_lm")
+
+        def stream_generate(model, tokenizer, prompt, *, max_tokens):
+            yield SimpleNamespace(
+                token=1,
+                text="hello",
+                prompt_tokens=10,
+                prompt_tps=50.0,
+                generation_tokens=1,
+                generation_tps=20.0,
+            )
+            yield SimpleNamespace(
+                token=2,
+                text=" world",
+                prompt_tokens=10,
+                prompt_tps=50.0,
+                generation_tokens=2,
+                generation_tps=20.0,
+            )
+
+        mlx_lm.stream_generate = stream_generate
+        service = MLXCausalLMService(object(), object())
+
+        with (
+            patch.dict("sys.modules", {"mlx_lm": mlx_lm}),
+            patch(
+                "machboost.adapters.mlx.time.perf_counter",
+                side_effect=[10.0, 10.2, 10.5],
+            ),
+        ):
+            service.generate_tokens((100,), max_tokens=2)
+
+        self.assertEqual(service.last_native_metrics["prompt_tokens"], 10)
+        self.assertAlmostEqual(
+            service.last_native_metrics["prompt_eval_seconds"], 0.2
+        )
+        self.assertAlmostEqual(
+            service.last_native_metrics["generation_seconds"], 0.1
+        )
+        self.assertAlmostEqual(
+            service.last_native_metrics["time_to_first_token_seconds"], 0.2
+        )
+
     def test_cached_verify_commits_accepted_candidate(self):
         prompt = (100, 101, 102)
         service = cache_service((1, 2, 3, 4, 5), prompt_len=len(prompt))
