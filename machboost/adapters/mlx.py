@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import time
 from typing import Callable, Iterable, Optional, Sequence, Tuple
 
 from machboost.core import Token, TokenSeq
@@ -39,6 +40,7 @@ class MLXCausalLMService:
         self._cache_prefix: Tuple[Token, ...] = ()
         self._cache_logits = None
         self._cache_supported: Optional[bool] = None
+        self._last_native_metrics: dict[str, float | int | None] = {}
         if hasattr(self.model, "eval"):
             self.model.eval()
 
@@ -191,24 +193,64 @@ class MLXCausalLMService:
             raise ImportError("Install MLX support with `pip install machboost[mlx]`.") from exc
 
         self.reset_cache()
+        self._last_native_metrics = {}
         stop_set = {int(token) for token in stop_tokens or ()}
         generated: list[Token] = []
-        for response in stream_generate(
-            self.model,
-            self.tokenizer,
-            [int(token) for token in prompt_tokens],
-            max_tokens=max_tokens,
-        ):
-            token = int(response.token)
-            if on_text is not None and response.text:
-                on_text(str(response.text))
-            if token in stop_set:
-                break
-            generated.append(token)
-            self.forward_calls += 1
-            if on_tokens is not None and on_text is None:
-                on_tokens((token,))
+        started = time.perf_counter()
+        first_token_at: Optional[float] = None
+        last_response = None
+        try:
+            for response in stream_generate(
+                self.model,
+                self.tokenizer,
+                [int(token) for token in prompt_tokens],
+                max_tokens=max_tokens,
+            ):
+                last_response = response
+                token = int(response.token)
+                if token not in stop_set and first_token_at is None:
+                    first_token_at = time.perf_counter()
+                text = str(getattr(response, "text", "") or "")
+                if on_text is not None and text:
+                    on_text(text)
+                if token in stop_set:
+                    break
+                generated.append(token)
+                self.forward_calls += 1
+                if on_tokens is not None and on_text is None:
+                    on_tokens((token,))
+        finally:
+            elapsed = max(0.0, time.perf_counter() - started)
+            prompt_count = int(
+                getattr(last_response, "prompt_tokens", 0) or len(prompt_tokens)
+            )
+            generation_count = int(
+                getattr(last_response, "generation_tokens", 0) or len(generated)
+            )
+            prompt_tps = float(getattr(last_response, "prompt_tps", 0.0) or 0.0)
+            generation_tps = float(
+                getattr(last_response, "generation_tps", 0.0) or 0.0
+            )
+            ttft = None if first_token_at is None else first_token_at - started
+            prompt_seconds = prompt_count / prompt_tps if prompt_tps > 0 else (ttft or 0.0)
+            generation_seconds = (
+                generation_count / generation_tps
+                if generation_tps > 0
+                else max(0.0, elapsed - (ttft or 0.0))
+            )
+            self._last_native_metrics = {
+                "prompt_tokens": prompt_count,
+                "prompt_eval_seconds": prompt_seconds,
+                "generation_seconds": generation_seconds,
+                "time_to_first_token_seconds": ttft,
+                "prompt_tokens_per_second": prompt_tps,
+                "generation_tokens_per_second": generation_tps,
+            }
         return tuple(generated)
+
+    @property
+    def last_native_metrics(self) -> dict[str, float | int | None]:
+        return dict(self._last_native_metrics)
 
     @property
     def supports_native_text_streaming(self) -> bool:
