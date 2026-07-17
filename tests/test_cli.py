@@ -233,7 +233,9 @@ class CLITests(unittest.TestCase):
         self.assertIn("backend=mlx", output.getvalue())
         self.assertEqual(client.chat_calls[0][2]["context_paths"], ["docs"])
         self.assertEqual(client.chat_calls[0][2]["ngram"], 3)
-        self.assertEqual(client.chat_calls[0][3], "forever")
+        self.assertEqual(client.chat_calls[0][3], "5m")
+        self.assertEqual(client.load_calls[0][2], "5m")
+        self.assertTrue(client.load_calls[0][3])
 
     def test_resident_completion_streams_raw_output(self):
         output = io.StringIO()
@@ -280,14 +282,102 @@ class CLITests(unittest.TestCase):
 
         self.assertEqual(code, 0)
         self.assertIn("mlx-community/Qwen2.5-3B-Instruct-4bit", output.getvalue())
+        self.assertIn("model_load=1.25s", output.getvalue())
+        self.assertIn("compile_warmup=0.50s", output.getvalue())
+        self.assertIn("wall=", output.getvalue())
         self.assertEqual(client.load_calls[0][2], "2h")
+        self.assertTrue(client.load_calls[0][3])
+
+    def test_bench_command_prints_latency_summary(self):
+        output = io.StringIO()
+        client = FakeResidentClient()
+        artifact = {
+            "config": {"runs": 1, "warmups": 1, "max_tokens": 8},
+            "engines": {
+                "machboost": {
+                    "resolved_model": "mlx-community/example",
+                    "backend": "mlx",
+                    "load_wall_seconds": 0.1,
+                    "model_load_seconds": 0.0,
+                    "summary": {
+                        "median_wall_seconds": 0.5,
+                        "median_client_ttft_seconds": 0.2,
+                        "median_tokens_per_second": 20.0,
+                    },
+                    "rows": [
+                        {
+                            "run": 1,
+                            "wall_seconds": 0.5,
+                            "client_ttft_seconds": 0.2,
+                            "eval_count": 4,
+                            "tokens_per_second": 20.0,
+                        }
+                    ],
+                }
+            },
+            "comparison": {
+                "machboost_total_speedup_vs_ollama": 1.5,
+                "machboost_ttft_speedup_vs_ollama": 2.0,
+                "median_output_equal": True,
+            },
+        }
+
+        with (
+            patch.object(cli, "connect_resident", return_value=client),
+            patch.object(cli, "benchmark_chat_latency", return_value=artifact),
+        ):
+            code = cli.run_latency_bench(
+                cli.build_parser().parse_args(
+                    ["bench", "qwen2.5:3b", "--engine", "machboost"]
+                ),
+                output_stream=output,
+            )
+
+        self.assertEqual(code, 0)
+        self.assertIn("median wall=0.500s", output.getvalue())
+        self.assertIn("output_equal=yes", output.getvalue())
 
     def test_chat_command_uses_native_resident_arguments(self):
         args = cli.build_parser().parse_args(["chat", "mlx-community/example", "--backend", "mlx"])
 
         self.assertEqual(args.command, "chat")
         self.assertEqual(args.backend, "mlx")
-        self.assertEqual(args.keep_alive, "forever")
+        self.assertEqual(args.keep_alive, "5m")
+
+    def test_verbose_alias_enables_resident_timings(self):
+        args = cli.build_parser().parse_args(["run", "qwen2.5:3b", "--verbose"])
+
+        self.assertTrue(args.show_stats)
+
+    def test_control_d_unloads_resident_model(self):
+        output = io.StringIO()
+        client = FakeResidentClient()
+
+        with patch.object(cli, "connect_resident", return_value=client):
+            code = cli.run_resident_chat(
+                cli.build_parser().parse_args(["run", "qwen2.5:3b"]),
+                input_func=lambda prompt: (_ for _ in ()).throw(EOFError()),
+                output_stream=output,
+            )
+
+        self.assertEqual(code, 0)
+        self.assertEqual(client.stop_calls, ["qwen2.5:3b"])
+        self.assertIn("unloaded 1 model instance", output.getvalue())
+
+    def test_control_c_stops_reply_and_keeps_chat_open(self):
+        output = io.StringIO()
+        prompts = iter(["hello", "/bye"])
+        client = InterruptingResidentClient()
+
+        with patch.object(cli, "connect_resident", return_value=client):
+            code = cli.run_resident_chat(
+                cli.build_parser().parse_args(["run", "qwen2.5:3b"]),
+                input_func=lambda prompt: next(prompts),
+                output_stream=output,
+            )
+
+        self.assertEqual(code, 0)
+        self.assertIn("generation stopped", output.getvalue())
 
     def test_resident_visual_chat_forwards_images_and_cache_options(self):
         output = io.StringIO()
@@ -519,6 +609,7 @@ class FakeResidentClient:
         self.chat_calls = []
         self.generate_calls = []
         self.load_calls = []
+        self.stop_calls = []
 
     def is_healthy(self):
         return True
@@ -588,16 +679,32 @@ class FakeResidentClient:
             }
         ]
 
-    def load(self, model, *, options, keep_alive):
-        self.load_calls.append((model, options, keep_alive))
+    def load(self, model, *, options, keep_alive, warmup=False):
+        self.load_calls.append((model, options, keep_alive, warmup))
         return {
             "status": "success",
             "load_duration_seconds": 1.25,
+            "warmup_duration_seconds": 0.5 if warmup else 0.0,
             "instance": {
                 "model": "mlx-community/Qwen2.5-3B-Instruct-4bit",
                 "backend": "mlx",
             },
         }
+
+    def stop(self, model):
+        self.stop_calls.append(model)
+        return {"unloaded": 1}
+
+
+class InterruptingResidentClient(FakeResidentClient):
+    def chat(self, model, messages, *, options, keep_alive, stream, images=None):
+        self.chat_calls.append((model, messages, options, keep_alive, stream, images))
+
+        def rows():
+            raise KeyboardInterrupt
+            yield None
+
+        return rows()
 
 
 def write_cached_model(cache_dir, model_id, config):
