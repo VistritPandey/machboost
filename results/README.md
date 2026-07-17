@@ -2,7 +2,62 @@
 
 This directory stores public benchmark artifacts for MachBoost text and visual acceleration paths.
 
-## Version 0.5 Evaluation Status, July 16 2026
+## Evidence Contracts
+
+The artifacts measure different mechanisms and should not be combined into one headline speedup:
+
+- **Serving/runtime:** warm model residency, client latency, and backend throughput. These rows do not exercise context drafting unless context is explicitly supplied.
+- **Context-backed text:** paired native and drafted generation using one model conversion. Exact output equality is required for an exact-path claim.
+- **Repeated-image reuse:** later questions over identical image bytes after an explicit prime. These are not first-view results.
+- **First-view visual compression:** new images with caches disabled. This path is approximate, so task score and output equality are reported separately.
+- **Video frame selection:** preprocessing/frame-count evidence only until a completed VLM task benchmark is committed.
+
+Results below are single-machine experiments unless stated otherwise. Ratios of medians and medians of paired ratios are different statistics and are labeled separately.
+
+## Llama 3.2 Text Generalization Audit, July 16 2026
+
+Artifacts:
+
+- `llama32_3b_mlx_context_benchmark_20260716.json`
+- `llama32_3b_mlx_context_strict_benchmark_20260716.json`
+
+Model: `mlx-community/Llama-3.2-3B-Instruct-4bit`
+
+Hardware: Apple M1 Max, 32 GB unified memory
+
+Generation: greedy, 64 requested tokens, three repeats per fixture, alternating pair order, native `mlx-lm` baseline
+
+The cache-enabled suite covers seven fixture families and 21 pairs:
+
+| Fixture | Pairs | Exact output | Median speedup | Median accepted drafts |
+|---|---:|---:|---:|---:|
+| `code` | 3 | 100% | 1.325x | 47 |
+| `policy` | 3 | 100% | 1.234x | 34 |
+| `json` | 3 | 66.7% | 1.352x | 34 |
+| `rag` | 3 | 100% | 0.998x | 0 |
+| `repo_quote` | 3 | 100% | 0.980x | 0 |
+| `creative_open` | 3 | 100% | 1.004x | 0 |
+| `short_answer` | 3 | 100% | 1.007x | 0 |
+| **Overall** | **21** | **95.24%** | **1.008x** | **0** |
+
+One JSON pair produced a different 64-token sequence after an identical stored preview. The artifact does not retain enough tail text to characterize the exact differing token, so no narrower explanation is claimed. The mismatch is consistent with batched verification and serial native generation leaving MLX cache state on different numerical trajectories, but the artifact does not establish a root cause.
+
+The cache-disabled strict control reruns code, policy, and JSON for nine pairs. It reaches 100% output equality but only a 0.207x median speedup, or roughly 4.8x slower than native generation. It is useful for diagnosing cache behavior, not for serving. Together, these artifacts make cache-enabled MLX text drafting experimental pending a cache-trajectory fix and broader exactness suite.
+
+## Warm Llama 3.2 Serving Comparison, July 17 2026
+
+Artifact: `chat_latency_llama32_3b_20260717.json`
+
+The harness sends two warmups and seven measured requests, adds a unique system-message nonce to each round, and alternates which runtime executes first. Both use the Llama 3.2 3B family and 4-bit files, but MachBoost resolves to an MLX conversion while Ollama uses its own model artifact and prompt rendering.
+
+| Runtime | Median wall | Median client TTFT | Median decode rate | Median output tokens |
+|---|---:|---:|---:|---:|
+| MachBoost resident MLX | 0.679s | 0.247s | 144.00 tok/s | 60 |
+| Ollama 0.31.2 | 0.803s | 0.198s | 96.65 tok/s | 59 |
+
+MachBoost is 1.18x faster by median wall time and 1.49x faster by reported decode throughput; Ollama reaches first text 1.25x sooner. MachBoost uses native fallback with no draft context in this benchmark. Cross-runtime outputs differ, as expected for non-identical files and prompt tokenization. This is a serving/backend comparison, not an algorithmic speedup or model-quality result.
+
+## First-View Evaluation Status, July 16 2026
 
 Version 0.5 adds a shared-baseline post-fusion ablation runner, paired bootstrap confidence intervals, deterministic random controls, workload-aware automatic policies, offline calibration gates, and a uniform-versus-temporal video harness. These tools do not replace the committed evidence below until complete artifacts are reviewed and added to this directory.
 
@@ -112,7 +167,7 @@ python3 -m scripts.benchmark_vision_cache \
 
 This experiment measures warm repeated-image question answering on one machine, model, image, and short-answer workload. It does not measure first-view acceleration, changed images, long-form decode speed, other VLM architectures, video, or concurrent clients. The prompt-throughput value is effective throughput: MLX-VLM reports the full logical prompt length while the accelerated request computes only the unmatched suffix.
 
-## Current Native-Baseline Evidence, July 13 2026
+## Qwen2.5 Native-Baseline Evidence, July 13 2026
 
 Artifacts:
 
@@ -149,9 +204,9 @@ Settings: 1-gram context lookup, 32-token drafts, one native seed token before r
 | `rag` | adaptive context verifier | 100% | 1.58x | 88.92 | 140.09 |
 | `creative_open` | native fallback | 100% | 1.08x | 94.25 | 101.57 |
 
-Re-entry broadens useful coverage: RAG accepts a median 30 draft tokens after one native seed and reduces logical target forwards by 43.8%. A longer 3-token re-entry probe produced one mismatch in a separate 15-row exploratory run, so re-entry is opt-in in 0.1.4.
+Re-entry broadens useful coverage: RAG accepts a median 30 draft tokens after one native seed and reduces logical target forwards by 43.8%. A longer 3-token re-entry probe produced one mismatch in a separate 15-row exploratory run, so re-entry remains opt-in in 0.5.1.
 
-The current repeated default result is close to, but below, 2x. This is not a universal acceleration result. The implementation fuses verifier continuation with the next draft block, rewinds the MLX KV cache in place, matches native MLX prompt prefill, and resumes native asynchronous decoding when context candidates end.
+This favorable repeated result is close to, but below, 2x. It is not a universal acceleration result and should be read alongside the newer Llama 3.2 audit above. The implementation fuses verifier continuation with the next draft block, rewinds the MLX KV cache in place, matches native MLX prompt prefill, and resumes native asynchronous decoding when context candidates end.
 
 ## Resident Server Evidence, July 13 2026
 
@@ -166,7 +221,7 @@ MachBoost 0.2.0 adds a resident HTTP server that keeps native MLX/Hugging Face m
 
 The first completion after loading took 0.973 seconds because the Metal execution path still required initialization; the next four took 0.650-0.663 seconds. Every row used native fallback with zero accepted draft tokens, so this experiment measures warm serving and corrected streaming detokenization rather than context-backed speculation.
 
-The historical Ollama same-family probe recorded a 0.883-second median total duration for the forced 64-token shape, versus 0.657 seconds for the resident MachBoost run, a 1.35x wall-time ratio. The repositories use different 4-bit formats and the runs were not interleaved, so this is a runtime-suitability observation rather than exact-weight or paper-grade superiority evidence.
+The historical Ollama same-family probe recorded a 0.883-second median total duration for the forced 64-token shape, versus 0.657 seconds for the resident MachBoost run, a 1.35x wall-time ratio. The repositories use different 4-bit formats and the runs were not interleaved, so the newer July 17 artifact above supersedes this probe for runtime comparison.
 
 ## Runtime Suitability Probe, July 13 2026
 
