@@ -35,7 +35,7 @@ python3 examples/python/chat_latency_benchmark.py llama3.2:3b \
   --runs 3
 ```
 
-The benchmark records client time to first text, wall time, backend prompt evaluation, decode throughput, and normalized exact-output equality. Each request receives a unique nonce to avoid exact repeated-prompt cache hits. Ollama and MLX may use different converted or quantized files, so interpret the output as a runtime comparison.
+The benchmark records client time to first text, wall time, backend prompt evaluation, and decode throughput. Each request receives a unique nonce, and two-engine runs alternate which runtime executes first. Ollama and MLX may use different templates, converted files, token counts, and quantization formats; cross-runtime output equality is recorded for visibility but is not an accuracy comparison.
 
 Repeated-image visual chat:
 
@@ -48,7 +48,7 @@ python3 examples/python/vision_client_demo.py \
   "Return only the displayed total."
 ```
 
-The visual client sends separate deterministic questions over one image and prints the resident backend's feature-cache hit, matching visual-prefix token count, and request latency. The second and later questions are the intended accelerated path.
+The visual client sends separate deterministic questions over one image and prints the resident backend's feature-cache hit, matching visual-prefix token count, and request latency. The second and later questions are eligible for repeated-image reuse; actual hits remain model- and prompt-dependent.
 
 Temporal video frame selection:
 
