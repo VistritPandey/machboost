@@ -2,7 +2,7 @@
 
 ## Summary
 
-MachBoost 0.2 has its own resident Hugging Face/MLX runtime and exposes an Ollama-compatible HTTP surface. That compatibility lets existing clients use a MachBoost-owned decode path; it does not make an external Ollama process faster.
+MachBoost 0.5.1 has its own resident Hugging Face/MLX runtime and exposes an Ollama-compatible HTTP surface. That compatibility lets existing clients use a MachBoost-owned decode path; it does not make an external Ollama process faster.
 
 An installed Ollama runtime can still be a real native target for MachBoost, but not through Ollama's public HTTP API alone. That integration point is inside the model runner, where tokenization, logits, sampling state, KV cache state, accepted-prefix commits, and rollback are available.
 
@@ -16,6 +16,14 @@ machboost complete qwen2.5-coder:3b "def fibonacci(n):"
 ```
 
 They auto-start the MachBoost server on `127.0.0.1:11435`, resolve short aliases to MLX on Apple Silicon when possible, and keep loaded models resident until their keep-alive expires or the user stops them.
+
+The default idle keep-alive is five minutes. `machboost run` preloads before showing its prompt, `Ctrl-C` cancels the active response, and `Ctrl-D` unloads the current model. Latency can be measured against Ollama with:
+
+```sh
+machboost bench llama3.2:3b --ollama-model llama3.2:3b --runs 3 --warmups 1
+```
+
+This reports client time to first text and backend throughput with unique request nonces. It is not a file-identical comparison when the MLX and Ollama quantizations differ.
 
 The local Ollama checkout already contains several relevant hooks:
 
