@@ -15,7 +15,7 @@ def main() -> None:
 
     client, started = ensure_server()
     assert isinstance(client, MachBoostClient)
-    loaded = client.load(args.model, keep_alive="forever")
+    loaded = client.load(args.model, keep_alive="5m", warmup=True)
     print(
         f"server={'started' if started else 'reused'} "
         f"model={loaded['instance']['model']}",
@@ -28,7 +28,7 @@ def main() -> None:
         [{"role": "user", "content": args.prompt}],
         context=args.context or None,
         options={"num_predict": args.max_tokens},
-        keep_alive="forever",
+        keep_alive="5m",
     )
     for event in events:
         final = event
