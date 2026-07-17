@@ -3,7 +3,13 @@ import unittest
 from pathlib import Path
 
 from machboost import Accelerator, AcceleratorResult, GatePolicy
-from machboost.accelerator import CalibrationResult, read_context_paths, resolve_context
+from machboost.accelerator import (
+    CHAT_STOP_STRINGS,
+    CalibrationResult,
+    ChatTextStreamer,
+    read_context_paths,
+    resolve_context,
+)
 
 
 class ScriptedService:
@@ -151,6 +157,14 @@ class PredecodedNativeService(NativeFallbackService):
 
 
 class AcceleratorTests(unittest.TestCase):
+    def test_chat_streamer_emits_safe_text_without_fixed_delay(self):
+        chunks = []
+        streamer = ChatTextStreamer(chunks.append, CHAT_STOP_STRINGS)
+
+        streamer.push("hello")
+
+        self.assertEqual("".join(chunks), "hello")
+
     def test_generate_result_uses_context_drafts(self):
         prompt = "Question: ship policy?\nAnswer: "
         completion = "Use the approved rollout checklist."
