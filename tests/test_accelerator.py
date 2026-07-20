@@ -329,6 +329,11 @@ class AcceleratorTests(unittest.TestCase):
     def test_resolve_context_keeps_literal_strings(self):
         self.assertEqual(resolve_context("literal context"), ["literal context"])
 
+    def test_resolve_context_keeps_long_literal_strings(self):
+        context = "release policy text " * 1_000
+
+        self.assertEqual(resolve_context(context), [context])
+
     def test_read_context_paths_skips_non_text_files(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
