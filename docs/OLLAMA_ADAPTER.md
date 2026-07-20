@@ -2,7 +2,7 @@
 
 ## Summary
 
-MachBoost 0.5.1 has its own resident Hugging Face/MLX runtime and exposes an Ollama-compatible HTTP surface. That compatibility lets existing clients use a MachBoost-owned decode path; it does not make an external Ollama process faster.
+MachBoost 0.5.2 has its own resident Hugging Face/MLX runtime and exposes an Ollama-compatible HTTP surface. That compatibility lets existing clients use a MachBoost-owned decode path; it does not make an external Ollama process faster.
 
 An installed Ollama runtime could become a native MachBoost target, but not through Ollama's public HTTP API alone. The required integration point is inside the model runner, where tokenization, logits, sampling state, KV cache state, accepted-prefix commits, and rollback are available.
 
@@ -67,7 +67,7 @@ MachBoost owns the model and decode loop in this mode. Supported endpoints inclu
 - `/api/pull`, `/api/load`, `/api/stop`, and `/api/shutdown`
 - streaming and non-streaming `/api/chat` and `/api/generate`
 
-The same process also exposes OpenAI-compatible `/v1/models`, `/v1/chat/completions`, and `/v1/completions` endpoints. This is protocol compatibility, not complete Ollama feature parity. MachBoost 0.5.1 supports image content on chat/generate requests when the selected backend is MLX-VLM, but it does not implement Ollama model creation, copy, deletion, embeddings, tool calling, or thinking-field semantics.
+The same process also exposes OpenAI-compatible `/v1/models`, `/v1/chat/completions`, and `/v1/completions` endpoints. This is protocol compatibility, not complete Ollama feature parity. MachBoost 0.5.2 supports image content on chat/generate requests when the selected backend is MLX-VLM, but it does not implement Ollama model creation, copy, deletion, embeddings, tool calling, or thinking-field semantics.
 
 ### External Ollama HTTP Wrapper
 
