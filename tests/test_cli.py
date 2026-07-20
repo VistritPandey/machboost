@@ -337,6 +337,95 @@ class CLITests(unittest.TestCase):
         self.assertIn("median wall=0.500s", output.getvalue())
         self.assertIn("output_equal=yes", output.getvalue())
 
+    def test_context_bench_uses_one_model_and_reports_valid_speedup(self):
+        output = io.StringIO()
+        error = io.StringIO()
+        accelerator = SimpleNamespace()
+        artifact = {
+            "config": {
+                "runs": 2,
+                "warmups": 0,
+                "max_tokens": 8,
+                "model": "mlx-community/example",
+                "backend": "mlx",
+            },
+            "summary": {
+                "valid": True,
+                "output_match_rate": 1.0,
+                "algorithm_engaged_rate": 1.0,
+                "median_native_wall_seconds": 1.0,
+                "median_machboost_wall_seconds": 0.5,
+                "median_speedup": 2.0,
+                "median_accepted_draft_tokens": 6.0,
+                "median_target_call_reduction": 0.75,
+            },
+            "rows": [
+                {
+                    "run": 1,
+                    "order": ["native", "machboost"],
+                    "speedup": 2.0,
+                    "output_match": True,
+                    "accepted_draft_tokens": 6,
+                    "native": {"wall_seconds": 1.0},
+                    "machboost": {"wall_seconds": 0.5},
+                }
+            ],
+        }
+        args = cli.build_parser().parse_args(
+            [
+                "bench-context",
+                "mlx-community/example",
+                "--backend",
+                "mlx",
+                "--prompt",
+                "Complete: ",
+                "--context-text",
+                "Complete: exact continuation",
+                "--runs",
+                "2",
+                "--warmups",
+                "0",
+            ]
+        )
+
+        with (
+            patch.object(cli.Accelerator, "from_mlx", return_value=accelerator) as load,
+            patch.object(cli, "benchmark_context_acceleration", return_value=artifact) as benchmark,
+        ):
+            code = cli.run_context_bench(
+                args,
+                output_stream=output,
+                error_stream=error,
+            )
+
+        self.assertEqual(code, 0)
+        self.assertIn("VALID same-model speedup: 2.000x", output.getvalue())
+        self.assertIn("loading 'mlx-community/example' once", error.getvalue())
+        self.assertEqual(load.call_count, 1)
+        self.assertEqual(
+            load.call_args.kwargs["context"],
+            ["Complete: exact continuation"],
+        )
+        self.assertEqual(benchmark.call_args.kwargs["runs"], 2)
+
+    def test_context_bench_rejects_missing_context_before_model_load(self):
+        error = io.StringIO()
+        args = cli.build_parser().parse_args(
+            [
+                "bench-context",
+                "qwen2.5:3b",
+                "--prompt",
+                "Complete: ",
+            ]
+        )
+
+        with patch.object(cli.Accelerator, "from_mlx") as load:
+            code = cli.run_context_bench(args, error_stream=error)
+
+        self.assertEqual(code, 2)
+        self.assertIn("provide --context", error.getvalue())
+        load.assert_not_called()
+
     def test_chat_command_uses_native_resident_arguments(self):
         args = cli.build_parser().parse_args(["chat", "mlx-community/example", "--backend", "mlx"])
 
