@@ -89,6 +89,19 @@ machboost bench llama3.2:3b --ollama-model llama3.2:3b --runs 3 --warmups 1
 
 The benchmark reports client-observed time to first text, wall time, backend prompt timing, and decode tokens per second. Two-engine runs alternate which runtime executes first in each round, and every round uses a fresh prompt nonce. Cross-runtime output equality is recorded but is not an accuracy test: MLX and Ollama can use different templates, conversions, and quantization formats. This command measures serving/runtime suitability, not MachBoost's context-drafting algorithm.
 
+Benchmark the actual MachBoost context algorithm against optimized native generation from the same loaded model:
+
+```sh
+machboost bench-context qwen2.5:3b \
+  --prompt-file ./completion-prompt.txt \
+  --context ./src \
+  --runs 6 \
+  --warmups 2 \
+  --max-tokens 64
+```
+
+`bench-context` alternates native-first and MachBoost-first pairs, requires an even measured-run count, and compares generated token IDs. Its aggregate speedup is invalidated if any pair differs. The report also shows accepted draft tokens and logical target-call reduction. A valid result with zero accepted drafts means the tested context did not engage the algorithm.
+
 Use full repository IDs when a model has no short alias. If the model is not cached, the selected backend may download it through its normal Hugging Face or MLX loader. Use `--local-files-only` with Hugging Face to require an existing cache.
 
 Stream a raw completion for an editor or code tool:
@@ -369,6 +382,7 @@ machboost run qwen3-vl:8b --image ./document.png --vision-tokens adaptive --visi
 machboost run qwen3-vl:8b --image ./chart.png --vision-tokens auto --vision-calibration ./vision-calibration.json
 machboost run qwen3-vl:8b --video ./clip.mp4 --video-fps 2 --video-max-frames 12
 machboost bench qwen2.5:3b --engine machboost --runs 5 --json
+machboost bench-context qwen2.5:3b --prompt-file ./prompt.txt --context ./src --runs 6
 ```
 
 `--reentry-probe-tokens` is experimental and disabled by default. `--direct` restores the one-process behavior for debugging. On Apple Silicon, a short alias prefers the MLX 4-bit model; explicit Hugging Face models default to `--device auto --dtype auto`, which selects MPS with float16 when available.
@@ -429,6 +443,7 @@ Public benchmark artifacts live in [results](results/), with methods and limitat
 |---|---|---:|---:|---:|---|
 | `mlx_native_default_qwen25_3b_20260713.json` | `mlx-community/Qwen2.5-3B-Instruct-4bit` | default code continuation | 5 | 100% | 1.96x |
 | `mlx_native_reentry_qwen25_3b_20260713.json` | same | experimental RAG re-entry | 5 | 100% | 1.58x |
+| `context_bench_llama32_3b_20260720.json` | `mlx-community/Llama-3.2-3B-Instruct-4bit` | same-model controlled code boundary | 6 | 100% exact output | 1.412x |
 | `llama32_3b_mlx_context_benchmark_20260716.json` | `mlx-community/Llama-3.2-3B-Instruct-4bit` | seven-fixture context suite | 21 | 95.24% exact output | 1.008x |
 | `vision_cache_qwen25_3b_20260714.json` | `mlx-community/Qwen2.5-VL-3B-Instruct-4bit` | repeated questions over one image | 12 | 100% | 18.33x |
 | `vision_cache_qwen3vl_2b_20260714.json` | `mlx-community/Qwen3-VL-2B-Instruct-4bit` | repeated questions over one image | 12 | 100% | 11.41x |
@@ -439,7 +454,7 @@ Public benchmark artifacts live in [results](results/), with methods and limitat
 | `vision_cache_qwen35_9b_20260714.json` | `mlx-community/Qwen3.5-9B-MLX-4bit` | same | 12 | 100% | 17.44x |
 | `cold_vision_qwen3vl_8b_postfusion_20260715.json` | `mlx-community/Qwen3-VL-8B-Instruct-4bit` | unique-image TextVQA, 35% visual retention | 10 | 70% normalized output equality; 80%/80% task match | 1.70x |
 
-The latest text generalization check is the Llama 3.2 artifact, not the favorable Qwen code fixture. Code and policy subsets reached 1.33x and 1.23x medians with 3/3 exact outputs; the JSON subset reached 1.35x but only 2/3 exact outputs. The suite-wide median was 1.008x because four fixture families accepted no useful drafts. A cache-disabled control restored 9/9 equality on code, JSON, and policy, but its 0.207x median made it roughly 4.8x slower than native generation. These results are why cache-enabled MLX text drafting remains experimental.
+The July 20 `bench-context` artifact is the cleanest packaged algorithm check: one loaded Llama 3.2 model, balanced execution order, six exact pairs, a 1.412x median, 32 accepted tokens, and 50% logical target-call reduction. It repeats one controlled code boundary and does not replace the broader generalization check. In that seven-fixture Llama audit, code and policy subsets reached 1.33x and 1.23x medians with 3/3 exact outputs; the JSON subset reached 1.35x but only 2/3 exact outputs. The suite-wide median was 1.008x because four fixture families accepted no useful drafts. A cache-disabled control restored 9/9 equality on code, JSON, and policy, but its 0.207x median made it roughly 4.8x slower than native generation. These results are why cache-enabled MLX text drafting remains experimental.
 
 Resident serving is measured separately. In `chat_latency_llama32_3b_20260717.json`, seven warm, alternating-order requests reached 0.679s median wall time and 144.00 decode tok/s through MachBoost versus 0.803s and 96.65 tok/s through Ollama. MachBoost was 1.18x faster end to end and 1.49x faster in reported decode throughput, while Ollama delivered first text sooner (0.198s versus 0.247s). The runtimes use different 4-bit model files and prompt tokenizations, and MachBoost accepted no context drafts, so this is a backend/serving comparison rather than an algorithmic or quality result.
 
