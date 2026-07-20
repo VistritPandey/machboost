@@ -14,6 +14,23 @@ The artifacts measure different mechanisms and should not be combined into one h
 
 Results below are single-machine experiments unless stated otherwise. Ratios of medians and medians of paired ratios are different statistics and are labeled separately.
 
+## Same-Model Context Benchmark, July 20 2026
+
+Artifact: `context_bench_llama32_3b_20260720.json`
+
+Model: `mlx-community/Llama-3.2-3B-Instruct-4bit`
+
+The `machboost bench-context` harness loads one model instance and compares optimized native `mlx-lm` generation with MachBoost context verification. Six measured 64-token pairs alternate execution order after two warm-up pairs. Every native and accelerated token sequence matches exactly.
+
+| Metric | Native | MachBoost |
+|---|---:|---:|
+| Median wall time | 0.640s | 0.451s |
+| Median paired speedup | - | 1.412x |
+| Median accepted draft tokens | 0 | 32 |
+| Median logical target-call reduction | - | 50.0% |
+
+This is a controlled code-continuation boundary repeated six times, not a six-prompt generalization suite. It proves that the packaged benchmark can isolate and measure the MachBoost algorithm without substituting Ollama or another model conversion. The broader seven-fixture audit below remains the better coverage result.
+
 ## Llama 3.2 Text Generalization Audit, July 16 2026
 
 Artifacts:
