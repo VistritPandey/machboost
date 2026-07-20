@@ -421,8 +421,12 @@ def resolve_context(context: Optional[Union[Iterable[str], str]], *, max_chars: 
     for item in _items(context):
         if remaining <= 0:
             break
-        path = Path(item).expanduser()
-        chunks = read_context_paths([str(path)], max_chars=remaining) if path.exists() else [item]
+        try:
+            path = Path(item).expanduser()
+            is_path = path.exists()
+        except (OSError, ValueError):
+            is_path = False
+        chunks = read_context_paths([str(path)], max_chars=remaining) if is_path else [item]
         for chunk in chunks:
             if remaining <= 0:
                 break
