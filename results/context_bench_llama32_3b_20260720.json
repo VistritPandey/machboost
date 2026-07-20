@@ -1,0 +1,246 @@
+{
+  "schema_version": "machboost.context_benchmark.v1",
+  "created_at": "2026-07-20T15:01:32.602050+00:00",
+  "config": {
+    "model": "mlx-community/Llama-3.2-3B-Instruct-4bit",
+    "backend": "mlx",
+    "prompt_sha256": "f783ea4c81cc5a20560d2d8d71a0196377c26ff04760cb9e5ed06ecffb831663",
+    "prompt_chars": 407,
+    "context_sha256": "9496312d784398359dd46e48e2754a90caeeef9d14e93841a1404e0b859102ce",
+    "context_chars": 253,
+    "runs": 6,
+    "warmups": 2,
+    "max_tokens": 64,
+    "execution_order": "balanced_alternating_pairs"
+  },
+  "summary": {
+    "runs": 6,
+    "valid": true,
+    "output_match_rate": 1.0,
+    "algorithm_engaged_rate": 1.0,
+    "median_native_wall_seconds": 0.64020110401907,
+    "median_machboost_wall_seconds": 0.4513957084855065,
+    "median_speedup": 1.4122634474842326,
+    "diagnostic_median_speedup": 1.4122634474842326,
+    "median_accepted_draft_tokens": 32.0,
+    "median_target_call_reduction": 0.5
+  },
+  "rows": [
+    {
+      "run": 1,
+      "order": [
+        "native",
+        "machboost"
+      ],
+      "output_match": true,
+      "first_mismatch_token_index": null,
+      "diagnostic_speedup": 1.4114562389989767,
+      "speedup": 1.4114562389989767,
+      "accepted_draft_tokens": 32,
+      "target_call_reduction": 0.5,
+      "native": {
+        "wall_seconds": 0.6430127079947852,
+        "generated_tokens": 64,
+        "tokens_per_second": 99.5314699138404,
+        "token_sha256": "7b5f037240c0a85f219c10b2cf6cc4783bc85acb83e4aad2303abb957d17f79b",
+        "output_preview": " f\"{row['backend']} | {row['model']} | {row['speedup']:.2f}x | {row['output_match']}\"\\n</source>\\n\\n# nonce: actual-machboost-test-r6\\ndef format_backend_row(ro",
+        "target_calls": 64,
+        "verify_calls": 0,
+        "accepted_draft_tokens": 0,
+        "accepted_draft_spans": 0
+      },
+      "machboost": {
+        "wall_seconds": 0.45556687499629334,
+        "generated_tokens": 64,
+        "tokens_per_second": 140.48431418662898,
+        "token_sha256": "7b5f037240c0a85f219c10b2cf6cc4783bc85acb83e4aad2303abb957d17f79b",
+        "output_preview": " f\"{row['backend']} | {row['model']} | {row['speedup']:.2f}x | {row['output_match']}\"\\n</source>\\n\\n# nonce: actual-machboost-test-r6\\ndef format_backend_row(ro",
+        "target_calls": 32,
+        "verify_calls": 3,
+        "accepted_draft_tokens": 32,
+        "accepted_draft_spans": 1
+      }
+    },
+    {
+      "run": 2,
+      "order": [
+        "machboost",
+        "native"
+      ],
+      "output_match": true,
+      "first_mismatch_token_index": null,
+      "diagnostic_speedup": 1.4093009847531603,
+      "speedup": 1.4093009847531603,
+      "accepted_draft_tokens": 32,
+      "target_call_reduction": 0.5,
+      "native": {
+        "wall_seconds": 0.6359921669936739,
+        "generated_tokens": 64,
+        "tokens_per_second": 100.63017018358435,
+        "token_sha256": "7b5f037240c0a85f219c10b2cf6cc4783bc85acb83e4aad2303abb957d17f79b",
+        "output_preview": " f\"{row['backend']} | {row['model']} | {row['speedup']:.2f}x | {row['output_match']}\"\\n</source>\\n\\n# nonce: actual-machboost-test-r6\\ndef format_backend_row(ro",
+        "target_calls": 64,
+        "verify_calls": 0,
+        "accepted_draft_tokens": 0,
+        "accepted_draft_spans": 0
+      },
+      "machboost": {
+        "wall_seconds": 0.451281999994535,
+        "generated_tokens": 64,
+        "tokens_per_second": 141.81819793560354,
+        "token_sha256": "7b5f037240c0a85f219c10b2cf6cc4783bc85acb83e4aad2303abb957d17f79b",
+        "output_preview": " f\"{row['backend']} | {row['model']} | {row['speedup']:.2f}x | {row['output_match']}\"\\n</source>\\n\\n# nonce: actual-machboost-test-r6\\ndef format_backend_row(ro",
+        "target_calls": 32,
+        "verify_calls": 3,
+        "accepted_draft_tokens": 32,
+        "accepted_draft_spans": 1
+      }
+    },
+    {
+      "run": 3,
+      "order": [
+        "native",
+        "machboost"
+      ],
+      "output_match": true,
+      "first_mismatch_token_index": null,
+      "diagnostic_speedup": 1.397076529892997,
+      "speedup": 1.397076529892997,
+      "accepted_draft_tokens": 32,
+      "target_call_reduction": 0.5,
+      "native": {
+        "wall_seconds": 0.6413783330353908,
+        "generated_tokens": 64,
+        "tokens_per_second": 99.78509828530257,
+        "token_sha256": "7b5f037240c0a85f219c10b2cf6cc4783bc85acb83e4aad2303abb957d17f79b",
+        "output_preview": " f\"{row['backend']} | {row['model']} | {row['speedup']:.2f}x | {row['output_match']}\"\\n</source>\\n\\n# nonce: actual-machboost-test-r6\\ndef format_backend_row(ro",
+        "target_calls": 64,
+        "verify_calls": 0,
+        "accepted_draft_tokens": 0,
+        "accepted_draft_spans": 0
+      },
+      "machboost": {
+        "wall_seconds": 0.45908604096621275,
+        "generated_tokens": 64,
+        "tokens_per_second": 139.40741884746217,
+        "token_sha256": "7b5f037240c0a85f219c10b2cf6cc4783bc85acb83e4aad2303abb957d17f79b",
+        "output_preview": " f\"{row['backend']} | {row['model']} | {row['speedup']:.2f}x | {row['output_match']}\"\\n</source>\\n\\n# nonce: actual-machboost-test-r6\\ndef format_backend_row(ro",
+        "target_calls": 32,
+        "verify_calls": 3,
+        "accepted_draft_tokens": 32,
+        "accepted_draft_spans": 1
+      }
+    },
+    {
+      "run": 4,
+      "order": [
+        "machboost",
+        "native"
+      ],
+      "output_match": true,
+      "first_mismatch_token_index": null,
+      "diagnostic_speedup": 1.4130706559694883,
+      "speedup": 1.4130706559694883,
+      "accepted_draft_tokens": 32,
+      "target_call_reduction": 0.5,
+      "native": {
+        "wall_seconds": 0.6343389579560608,
+        "generated_tokens": 64,
+        "tokens_per_second": 100.89243171540024,
+        "token_sha256": "7b5f037240c0a85f219c10b2cf6cc4783bc85acb83e4aad2303abb957d17f79b",
+        "output_preview": " f\"{row['backend']} | {row['model']} | {row['speedup']:.2f}x | {row['output_match']}\"\\n</source>\\n\\n# nonce: actual-machboost-test-r6\\ndef format_backend_row(ro",
+        "target_calls": 64,
+        "verify_calls": 0,
+        "accepted_draft_tokens": 0,
+        "accepted_draft_spans": 0
+      },
+      "machboost": {
+        "wall_seconds": 0.4489081669598818,
+        "generated_tokens": 64,
+        "tokens_per_second": 142.56813466643743,
+        "token_sha256": "7b5f037240c0a85f219c10b2cf6cc4783bc85acb83e4aad2303abb957d17f79b",
+        "output_preview": " f\"{row['backend']} | {row['model']} | {row['speedup']:.2f}x | {row['output_match']}\"\\n</source>\\n\\n# nonce: actual-machboost-test-r6\\ndef format_backend_row(ro",
+        "target_calls": 32,
+        "verify_calls": 3,
+        "accepted_draft_tokens": 32,
+        "accepted_draft_spans": 1
+      }
+    },
+    {
+      "run": 5,
+      "order": [
+        "native",
+        "machboost"
+      ],
+      "output_match": true,
+      "first_mismatch_token_index": null,
+      "diagnostic_speedup": 1.4153057521633932,
+      "speedup": 1.4153057521633932,
+      "accepted_draft_tokens": 32,
+      "target_call_reduction": 0.5,
+      "native": {
+        "wall_seconds": 0.6390238750027493,
+        "generated_tokens": 64,
+        "tokens_per_second": 100.1527525082293,
+        "token_sha256": "7b5f037240c0a85f219c10b2cf6cc4783bc85acb83e4aad2303abb957d17f79b",
+        "output_preview": " f\"{row['backend']} | {row['model']} | {row['speedup']:.2f}x | {row['output_match']}\"\\n</source>\\n\\n# nonce: actual-machboost-test-r6\\ndef format_backend_row(ro",
+        "target_calls": 64,
+        "verify_calls": 0,
+        "accepted_draft_tokens": 0,
+        "accepted_draft_spans": 0
+      },
+      "machboost": {
+        "wall_seconds": 0.45150941697647795,
+        "generated_tokens": 64,
+        "tokens_per_second": 141.74676671989363,
+        "token_sha256": "7b5f037240c0a85f219c10b2cf6cc4783bc85acb83e4aad2303abb957d17f79b",
+        "output_preview": " f\"{row['backend']} | {row['model']} | {row['speedup']:.2f}x | {row['output_match']}\"\\n</source>\\n\\n# nonce: actual-machboost-test-r6\\ndef format_backend_row(ro",
+        "target_calls": 32,
+        "verify_calls": 3,
+        "accepted_draft_tokens": 32,
+        "accepted_draft_spans": 1
+      }
+    },
+    {
+      "run": 6,
+      "order": [
+        "machboost",
+        "native"
+      ],
+      "output_match": true,
+      "first_mismatch_token_index": null,
+      "diagnostic_speedup": 1.5459535977609593,
+      "speedup": 1.5459535977609593,
+      "accepted_draft_tokens": 32,
+      "target_call_reduction": 0.5,
+      "native": {
+        "wall_seconds": 0.6902209999971092,
+        "generated_tokens": 64,
+        "tokens_per_second": 92.72392465640432,
+        "token_sha256": "7b5f037240c0a85f219c10b2cf6cc4783bc85acb83e4aad2303abb957d17f79b",
+        "output_preview": " f\"{row['backend']} | {row['model']} | {row['speedup']:.2f}x | {row['output_match']}\"\\n</source>\\n\\n# nonce: actual-machboost-test-r6\\ndef format_backend_row(ro",
+        "target_calls": 64,
+        "verify_calls": 0,
+        "accepted_draft_tokens": 0,
+        "accepted_draft_spans": 0
+      },
+      "machboost": {
+        "wall_seconds": 0.44646941602695733,
+        "generated_tokens": 64,
+        "tokens_per_second": 143.34688492108438,
+        "token_sha256": "7b5f037240c0a85f219c10b2cf6cc4783bc85acb83e4aad2303abb957d17f79b",
+        "output_preview": " f\"{row['backend']} | {row['model']} | {row['speedup']:.2f}x | {row['output_match']}\"\\n</source>\\n\\n# nonce: actual-machboost-test-r6\\ndef format_backend_row(ro",
+        "target_calls": 32,
+        "verify_calls": 3,
+        "accepted_draft_tokens": 32,
+        "accepted_draft_spans": 1
+      }
+    }
+  ],
+  "notes": [
+    "Native and MachBoost paths use the same loaded model instance and tokenization.",
+    "Measured pairs alternate execution order with equal native-first and MachBoost-first counts.",
+    "A speedup is valid only when every accelerated token sequence equals its native pair."
+  ],
+  "model_load_seconds": 6.072478874993976
+}
