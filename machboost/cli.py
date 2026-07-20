@@ -13,9 +13,10 @@ from pathlib import Path
 from typing import Optional, Sequence
 
 from . import __version__, machboost
-from .accelerator import Accelerator
+from .accelerator import Accelerator, read_context_paths, resolve_context
 from .adapters.ollama import OllamaHTTPAdapter, OllamaHTTPError
 from .client import MachBoostAPIError, MachBoostClient, ensure_server
+from .context_bench import benchmark_context_acceleration, context_fingerprint
 from .latency import benchmark_chat_latency
 from .models import alias_rows, resolve_model
 from .server import DEFAULT_HOST, DEFAULT_PORT, serve as serve_runtime
@@ -1206,6 +1207,146 @@ def run_latency_bench(
     return 0
 
 
+def run_context_bench(
+    args: argparse.Namespace,
+    *,
+    output_stream=None,
+    error_stream=None,
+) -> int:
+    output_stream = output_stream or sys.stdout
+    error_stream = error_stream or sys.stderr
+    try:
+        prompt = _context_benchmark_prompt(args)
+        contexts = resolve_context(
+            args.context_text,
+            max_chars=args.max_context_chars,
+        )
+        remaining = args.max_context_chars - sum(len(text) for text in contexts)
+        contexts += read_context_paths(args.context, max_chars=max(0, remaining))
+        if not contexts:
+            raise ValueError("provide --context PATH or --context-text TEXT")
+
+        resolution = resolve_model(args.model, args.backend)
+        if resolution.backend not in {"mlx", "hf"}:
+            raise ValueError("bench-context supports text MLX and Hugging Face models")
+        print(
+            f"loading {resolution.model!r} once for native and MachBoost paths...",
+            file=error_stream,
+            flush=True,
+        )
+        load_started = time.perf_counter()
+        common = {
+            "context": contexts,
+            "ngram": args.ngram,
+            "max_draft_tokens": args.max_draft_tokens,
+            "candidate_limit": args.candidate_limit,
+            "reentry_probe_tokens": args.reentry_probe_tokens,
+        }
+        if resolution.backend == "mlx":
+            accelerator = Accelerator.from_mlx(
+                resolution.model,
+                lazy=args.lazy,
+                cache_enabled=not args.strict,
+                **common,
+            )
+        else:
+            accelerator = Accelerator.from_huggingface(
+                resolution.model,
+                device=args.device,
+                local_files_only=args.local_files_only,
+                torch_dtype=torch_dtype_from_name(args.dtype),
+                **common,
+            )
+        load_seconds = time.perf_counter() - load_started
+        artifact = benchmark_context_acceleration(
+            accelerator,
+            prompt,
+            model=resolution.model,
+            backend=resolution.backend,
+            context_fingerprint=context_fingerprint(contexts),
+            context_chars=sum(len(text) for text in contexts),
+            runs=args.runs,
+            warmups=args.warmups,
+            max_tokens=args.max_tokens,
+        )
+        artifact["model_load_seconds"] = load_seconds
+    except Exception as exc:
+        print(f"machboost bench-context error: {exc}", file=error_stream)
+        return 2
+
+    if args.json:
+        print(json.dumps(artifact, indent=2), file=output_stream)
+    else:
+        print_context_benchmark(artifact, stream=output_stream)
+    if args.output:
+        output_path = Path(args.output).expanduser()
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(json.dumps(artifact, indent=2) + "\n", encoding="utf-8")
+        print(f"saved benchmark artifact to {output_path}", file=error_stream)
+    return 0 if artifact["summary"]["valid"] else 1
+
+
+def _context_benchmark_prompt(args: argparse.Namespace) -> str:
+    if args.prompt and args.prompt_file:
+        raise ValueError("use either --prompt or --prompt-file, not both")
+    if args.prompt_file:
+        return Path(args.prompt_file).expanduser().read_text(encoding="utf-8")
+    if args.prompt:
+        return args.prompt
+    raise ValueError("provide --prompt TEXT or --prompt-file PATH")
+
+
+def print_context_benchmark(artifact: dict, *, stream=None) -> None:
+    stream = stream or sys.stdout
+    config = artifact["config"]
+    summary = artifact["summary"]
+    print(
+        f"MachBoost context benchmark: {config['runs']} measured pair(s), "
+        f"{config['warmups']} warmup pair(s), max {config['max_tokens']} tokens",
+        file=stream,
+    )
+    print(
+        f"same model: {config['model']} ({config['backend']}); "
+        f"load={float(artifact.get('model_load_seconds') or 0.0):.3f}s",
+        file=stream,
+    )
+    for row in artifact["rows"]:
+        speedup = (
+            f"{float(row['speedup']):.3f}x"
+            if row["speedup"] is not None
+            else "invalid"
+        )
+        print(
+            f"  run {row['run']}: first={row['order'][0]} "
+            f"native={row['native']['wall_seconds']:.3f}s "
+            f"machboost={row['machboost']['wall_seconds']:.3f}s "
+            f"speedup={speedup} exact={'yes' if row['output_match'] else 'NO'} "
+            f"accepted={row['accepted_draft_tokens']}",
+            file=stream,
+        )
+    print(
+        f"summary: exact={summary['output_match_rate']:.1%} "
+        f"engaged={summary['algorithm_engaged_rate']:.1%} "
+        f"native={summary['median_native_wall_seconds']:.3f}s "
+        f"machboost={summary['median_machboost_wall_seconds']:.3f}s "
+        f"accepted={summary['median_accepted_draft_tokens']:.0f} "
+        f"target-call-reduction={summary['median_target_call_reduction']:.1%}",
+        file=stream,
+    )
+    if summary["valid"]:
+        print(
+            f"VALID same-model speedup: {summary['median_speedup']:.3f}x",
+            file=stream,
+        )
+        if summary["algorithm_engaged_rate"] == 0:
+            print("note: no draft tokens were accepted; the algorithm did not engage", file=stream)
+    else:
+        print(
+            "INVALID: at least one token sequence differed; no aggregate speedup is claimed",
+            file=stream,
+        )
+
+
 def print_latency_benchmark(artifact: dict, *, stream=None) -> None:
     stream = stream or sys.stdout
     config = artifact["config"]
@@ -1351,7 +1492,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     bench = subcommands.add_parser(
         "bench",
-        help="Measure warm chat latency and optionally compare with Ollama.",
+        help="Compare warm serving runtimes; this does not benchmark MachBoost acceleration.",
     )
     bench.add_argument("model", help="MachBoost model alias or repository.")
     bench.add_argument(
@@ -1377,6 +1518,42 @@ def build_parser() -> argparse.ArgumentParser:
     bench.add_argument("--keep-alive", default="5m")
     bench.add_argument("--json", action="store_true")
     add_server_connection_arguments(bench, include_autostart=True)
+
+    context_bench = subcommands.add_parser(
+        "bench-context",
+        help="Benchmark MachBoost context acceleration against same-model native generation.",
+    )
+    context_bench.add_argument("model", help="Text model alias or repository.")
+    context_bench.add_argument("--prompt", help="Raw completion prompt.")
+    context_bench.add_argument("--prompt-file", help="Read the raw completion prompt from a UTF-8 file.")
+    context_bench.add_argument(
+        "--context",
+        action="append",
+        default=[],
+        help="Context file or directory. Can be repeated.",
+    )
+    context_bench.add_argument(
+        "--context-text",
+        action="append",
+        default=[],
+        help="Inline draft context. Can be repeated.",
+    )
+    context_bench.add_argument("--max-context-chars", type=int, default=200_000)
+    context_bench.add_argument("--runs", type=int, default=6, help="Even number of measured pairs.")
+    context_bench.add_argument("--warmups", type=int, default=2)
+    context_bench.add_argument("--max-tokens", type=int, default=64)
+    context_bench.add_argument("--ngram", type=int, default=2)
+    context_bench.add_argument("--max-draft-tokens", type=int, default=32)
+    context_bench.add_argument("--candidate-limit", type=int, default=1)
+    context_bench.add_argument("--reentry-probe-tokens", type=int, default=0)
+    context_bench.add_argument("--backend", choices=["auto", "mlx", "hf"], default="auto")
+    context_bench.add_argument("--strict", action="store_true", help="MLX: disable prompt-cache reuse for a slow exactness control.")
+    context_bench.add_argument("--lazy", action="store_true")
+    context_bench.add_argument("--device", default="auto")
+    context_bench.add_argument("--dtype", choices=["auto", "float16", "bfloat16", "float32"], default="auto")
+    context_bench.add_argument("--local-files-only", action="store_true")
+    context_bench.add_argument("--json", action="store_true")
+    context_bench.add_argument("--output", help="Write the JSON artifact to this path.")
 
     warm = subcommands.add_parser("warm", help="Preload a native model into resident memory.")
     add_native_run_arguments(warm)
@@ -1592,6 +1769,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return run_resident_completion(args)
     if args.command == "bench":
         return run_latency_bench(args)
+    if args.command == "bench-context":
+        return run_context_bench(args)
     if args.command == "serve":
         return run_serve(args)
     if args.command == "warm":
