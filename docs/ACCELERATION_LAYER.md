@@ -43,7 +43,7 @@ Future native targets:
 
 ### Resident Runtime
 
-MachBoost 0.2 added a long-running control plane around the native adapters, and later releases extended it to visual models. In 0.5.1 it:
+MachBoost 0.2 added a long-running control plane around the native adapters, and later releases extended it to visual models. In 0.5.2 it:
 
 - loads each model once and retains it in unified memory
 - compiles the text generation path with a one-token warmup before interactive use
@@ -298,6 +298,7 @@ machboost run qwen2.5:3b --context ./docs --verbose
 machboost run qwen2.5-vl:3b --image ./image.png --show-stats
 machboost complete qwen2.5-coder:3b --file ./prompt.txt
 machboost bench qwen2.5:3b --ollama-model qwen2.5:3b --runs 3
+machboost bench-context qwen2.5:3b --prompt-file ./prompt.txt --context ./src --runs 6
 machboost ps
 machboost stop qwen2.5:3b
 ```
@@ -305,6 +306,8 @@ machboost stop qwen2.5:3b
 `machboost list` reports cached Hugging Face and MLX models plus portable short aliases. `machboost run MODEL` auto-starts the local server, resolves the best available backend, loads and compile-warms text models, builds a draft corpus from local context files or directories, and then opens an interactive streaming chat. The header reports weight load, compile warmup, and total wall time separately. The default idle lifetime is five minutes, enforced by a background reaper. `Ctrl-C` cancels the current reply, `/bye` exits while retaining the idle window, and `Ctrl-D` or `/unload` unloads the model immediately. Use `--direct` for the earlier one-process behavior.
 
 `machboost bench` measures client-observed time to first text, wall time, prompt evaluation, and decode throughput. It uses a unique prompt nonce per request and alternates which runtime executes first in each two-engine round. It can compare the native MachBoost runtime with Ollama. That comparison measures serving/runtime suitability, not context drafting, and is not file-identical because MLX and Ollama may use different templates, conversions, and quantization formats.
+
+`machboost bench-context` measures the MachBoost algorithm itself. It loads one model instance, alternates optimized native generation with context-backed verification, and compares the resulting token IDs. Measured run counts must be even so execution order is balanced. Any output mismatch invalidates the aggregate speedup instead of reporting a fast but behaviorally different result.
 
 The package also exposes lightweight install checks:
 
