@@ -9,12 +9,35 @@ The paths have different contracts. Plain chat delegates generation to the selec
 
 MachBoost does not upload telemetry, mutate global runtime settings, or change model weights. It does not claim universal speedups, file-identical equivalence across model conversions, or quality preservation for approximate visual compression.
 
+### Performance Contract
+
+MachBoost is not a universal `2x-8x` switch. A speedup measured on a context-backed completion or repeated image must not be applied to unrelated prompts, new images, different models, or different machines.
+
+For text, the accelerated path helps only when the model's next tokens are recoverable from caller-supplied local context and the target model accepts those draft tokens. The user's wording can be new; the likely answer or continuation must overlap useful text in retrieved documents, source code, templates, policies, logs, or other nearby material. A genuinely novel open-ended message normally falls back to native generation, where expected algorithmic speedup is about `1.0x` and the server layer can add latency.
+
+| Likely fit | Why it can help |
+|---|---|
+| RAG and internal knowledge assistants | Answers often quote or closely follow retrieved source passages. |
+| Repository-aware code completion | Generated code can continue patterns already present in the repository. |
+| Policy, checklist, and runbook assistants | Responses frequently reproduce stable approved wording. |
+| Config, JSON, and template generation | Outputs often contain predictable local structures and repeated fields. |
+| Repeated questions over the same image | Visual encoding and matching prompt-prefix work may be reusable. |
+
+| Usually not a fit | Expected behavior |
+|---|---|
+| A first-time greeting or unrelated unique question | Native generation; context drafting may not engage. |
+| Brainstorming, creative writing, or novel reasoning | Little recoverable continuation, so usually near native speed. |
+| A changed or first-seen image | Repeated-image cache does not apply. |
+| An external backend without verifier hooks | Wrapper and measurement only; no native MachBoost token verification. |
+
+Treat every workload as uncalibrated until it passes a same-model paired benchmark. `machboost bench-context` alternates execution order, checks generated token IDs, and withholds the aggregate speedup if any output differs. See [examples/python](examples/python/) for RAG, internal knowledge, code-continuation, and workload-evaluation examples.
+
 ### Current Status
 
 | Path | Current evidence | Product status |
 |---|---|---|
 | Plain resident text chat | Native MLX decode through a local server; no drafting without context | usable, with measurable server/streaming overhead versus direct `mlx-lm` |
-| Context-backed MLX text | up to 1.96x median on one favorable Qwen2.5 3B code fixture; latest Llama 3.2 3B suite was 1.008x aggregate with 20/21 exact pairs | experimental; calibrate per model and workload |
+| Context-backed MLX text | latest broad Llama 3.2 3B suite was 1.008x aggregate with 20/21 exact pairs; favorable controlled continuations can be materially faster | experimental; never generalize a fixture result beyond its workload |
 | Repeated unchanged image | 5.14x-17.44x model-level paired medians on one synthetic image and short extraction prompts | promising for repeated-image prefill; not a first-view or decode result |
 | New-image Qwen3-VL compression | 1.70x median on ten TextVQA rows, with 70% normalized output equality and equal 8/10 aggregate task scores | approximate, opt-in, and not quality-equivalence evidence |
 
@@ -600,9 +623,18 @@ python3 scripts/benchmark_video_frames.py ./clip.mp4 \
 
 ## Examples
 
-Runnable examples live in [examples/python](examples/python/):
+Runnable examples live in [examples/python](examples/python/). Start with the workload evaluator before enabling acceleration in an application:
 
 ```sh
+python3 examples/python/benchmark_context_workload.py \
+  --context ./docs \
+  --prompt "Continue the exact deployment checklist from the retrieved documentation:"
+python3 examples/python/rag_knowledge_bot.py \
+  --docs ./docs \
+  "What does the deployment policy require?"
+python3 examples/python/repository_completion.py \
+  --repo . \
+  --file ./machboost/context_bench.py
 python3 examples/python/verifier_service_demo.py
 python3 examples/python/black_box_service_demo.py
 python3 examples/python/accelerator_calibration_demo.py
@@ -613,7 +645,7 @@ python3 examples/python/video_sampler_demo.py ./clip.mp4
 python3 examples/python/ollama_adapter_demo.py
 ```
 
-The HF, MLX, and vision examples require the matching optional dependencies and locally available models.
+The context examples use MLX by default and accept `--backend hf` for Hugging Face. They print accepted draft tokens so a native fallback is visible. The workload evaluator compares both paths on one loaded model and refuses to report a valid aggregate speedup when outputs differ. The HF, MLX, and vision examples require the matching optional dependencies and locally available models.
 
 ## Development
 
