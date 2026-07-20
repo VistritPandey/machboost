@@ -6,6 +6,62 @@ Install the package before running examples:
 pip install -e .
 ```
 
+## Start With Your Workload
+
+MachBoost text acceleration is context-dependent. It can be useful when the expected answer or continuation overlaps retrieved documents, repository code, policies, templates, logs, or other local text. A unique user question can still qualify when its answer is grounded in that material. A genuinely novel answer usually does not qualify and should fall back to native generation.
+
+Run the same-model evaluator before enabling the accelerated path:
+
+```sh
+pip install -e ".[mlx]"
+python3 examples/python/benchmark_context_workload.py \
+  --model mlx-community/Llama-3.2-3B-Instruct-4bit \
+  --context ./docs \
+  --prompt "Continue the exact deployment checklist from the retrieved documentation:" \
+  --runs 6 \
+  --warmups 2
+```
+
+Add several representative `--prompt` or `--prompt-file` arguments. The script loads one model, alternates native-first and MachBoost-first execution, and compares token IDs. It reports a valid aggregate speedup only if every pair is exact. An engagement rate of zero means the context did not help; it is not evidence of acceleration.
+
+Test a unique-message control with the same context:
+
+```sh
+python3 examples/python/benchmark_context_workload.py \
+  --context ./docs \
+  --prompt "Invent a completely new bedtime story about a lighthouse."
+```
+
+This control will normally remain near native performance because the novel continuation is not recoverable from the documentation.
+
+## RAG And Internal Knowledge
+
+The knowledge-bot example performs a small keyword retrieval step, includes the selected passages in the model prompt, and also exposes those passages to MachBoost's verified drafter:
+
+```sh
+python3 examples/python/rag_knowledge_bot.py \
+  --docs ./docs \
+  --show-context \
+  "What does the release policy require before deployment?"
+```
+
+This shape fits internal policy assistants, support knowledge bases, runbook helpers, and extractive RAG. It is most eligible when the answer follows or quotes retrieved wording. The script prints accepted draft tokens and explicitly reports native fallback. Its lightweight retriever is educational, not a replacement for a production search or vector database.
+
+## Repository Completion
+
+Use source files other than the file being edited as draft context:
+
+```sh
+python3 examples/python/repository_completion.py \
+  --repo . \
+  --file ./machboost/context_bench.py \
+  --max-tokens 64
+```
+
+The target file is excluded from the context corpus to avoid reading text after the cursor. This is useful for repositories with repeated APIs, schemas, tests, and implementation patterns. A one-off algorithm with no nearby analogue may accept no drafts and use native generation.
+
+None of these examples establishes a universal `2x-8x` improvement. Results apply only to the measured model, context, prompts, settings, machine, and backend version.
+
 Dependency-free demos:
 
 ```sh
