@@ -101,7 +101,7 @@ final class MachBoostAPI: @unchecked Sendable {
     }
 
     func streamPull(model: String, requestID: String) -> AsyncThrowingStream<PullEvent, Error> {
-        struct PullRequest: Encodable {
+        struct PullRequest: Encodable, Sendable {
             let model: String
             let requestID: String
             let stream = true
@@ -119,7 +119,10 @@ final class MachBoostAPI: @unchecked Sendable {
         )
     }
 
-    private func stream<RequestBody: Encodable, Event: Decodable>(
+    private func stream<
+        RequestBody: Encodable & Sendable,
+        Event: Decodable & Sendable
+    >(
         path: String,
         body: RequestBody,
         event: Event.Type
