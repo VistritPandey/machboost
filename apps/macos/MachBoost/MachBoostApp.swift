@@ -31,7 +31,9 @@ struct MachBoostApp: App {
                 .environment(appState)
                 .task {
                     appDelegate.appState = appState
-                    await appState.start()
+                    if ProcessInfo.processInfo.environment["MACHBOOST_UI_TESTING"] != "1" {
+                        await appState.start()
+                    }
                 }
         }
         .modelContainer(modelContainer)
