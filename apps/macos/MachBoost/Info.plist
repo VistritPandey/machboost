@@ -37,5 +37,7 @@
 	<true/>
 	<key>SUFeedURL</key>
 	<string>https://github.com/VistritPandey/machboost/releases/latest/download/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>$(SPARKLE_PUBLIC_ED_KEY)</string>
 </dict>
 </plist>
