@@ -1,7 +1,17 @@
+import json
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
-from machboost.models import MODEL_ALIASES, alias_rows, model_targets, resolve_model
+from machboost.models import (
+    MODEL_ALIASES,
+    alias_rows,
+    catalog_rows,
+    model_targets,
+    preflight_model,
+    resolve_model,
+)
 
 
 class ModelCatalogTests(unittest.TestCase):
@@ -39,6 +49,56 @@ class ModelCatalogTests(unittest.TestCase):
 
         self.assertEqual([row["name"] for row in rows], sorted(MODEL_ALIASES))
         self.assertTrue(all(row["mlx"] or row["hf"] for row in rows))
+
+    def test_desktop_catalog_includes_capabilities_and_resource_guidance(self):
+        with (
+            patch("machboost.models.cached_repo_path", return_value=None),
+            patch("machboost.models.backend_available", return_value=True),
+        ):
+            rows = catalog_rows()
+
+        llama = next(row for row in rows if row["name"] == "llama3.2:3b")
+        vision = next(row for row in rows if row["name"] == "qwen3-vl:4b")
+        self.assertEqual(llama["capabilities"], ["chat", "completion"])
+        self.assertEqual(vision["capabilities"], ["chat", "vision"])
+        self.assertGreater(llama["download_size_gb"], 0)
+        self.assertTrue(vision["recommended"])
+        self.assertFalse(vision["cached"])
+
+    def test_preflight_reports_supported_local_mlx_architecture(self):
+        with tempfile.TemporaryDirectory() as directory:
+            Path(directory, "config.json").write_text(
+                json.dumps({"model_type": "qwen2"}),
+                encoding="utf-8",
+            )
+            with (
+                patch("machboost.models.backend_available", return_value=True),
+                patch("machboost.models._validate_mlx_architecture") as validate,
+            ):
+                result = preflight_model(directory, "mlx")
+
+        self.assertTrue(result["cached"])
+        self.assertTrue(result["supported"])
+        self.assertEqual(result["model_type"], "qwen2")
+        validate.assert_called_once()
+
+    def test_preflight_exposes_unsupported_architecture_reason(self):
+        with tempfile.TemporaryDirectory() as directory:
+            Path(directory, "config.json").write_text(
+                json.dumps({"model_type": "future_model"}),
+                encoding="utf-8",
+            )
+            with (
+                patch("machboost.models.backend_available", return_value=True),
+                patch(
+                    "machboost.models._validate_mlx_architecture",
+                    side_effect=ValueError("Model type future_model not supported"),
+                ),
+            ):
+                result = preflight_model(directory, "mlx")
+
+        self.assertFalse(result["supported"])
+        self.assertIn("not supported", result["reason"])
 
     def test_alias_targets_include_both_native_backends(self):
         self.assertEqual(
