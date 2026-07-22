@@ -87,6 +87,7 @@ final class MachBoostUITests: XCTestCase {
         app.launchEnvironment["MACHBOOST_UI_TESTING"] = "1"
         app.launchEnvironment["MACHBOOST_SOURCE_ROOT"] = repositoryRoot()
         app.launch()
+        app.activate()
         return app
     }
 
