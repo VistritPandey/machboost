@@ -33,6 +33,7 @@ struct MachBoostApp: App {
                     appDelegate.appState = appState
                     let environment = ProcessInfo.processInfo.environment
                     if
+                        environment["MACHBOOST_TESTING"] != "1",
                         environment["MACHBOOST_UI_TESTING"] != "1",
                         environment["XCTestConfigurationFilePath"] == nil
                     {
