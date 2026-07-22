@@ -266,6 +266,24 @@ final class MachBoostTests: XCTestCase {
         XCTAssertTrue(markdown.contains("Model: `qwen2.5:3b`"))
     }
 
+    @MainActor
+    func testDaemonStartsAndShutsDownFromSourceRuntime() async throws {
+        let manager = DaemonManager()
+        var configuration = ServerConfiguration()
+        configuration.port = 19_435
+        do {
+            try await manager.start(configuration: configuration, apiToken: nil)
+            XCTAssertEqual(manager.state, .running)
+            XCTAssertTrue(manager.ownsProcess)
+            await manager.shutdown(endpoint: configuration.endpoint, apiToken: nil)
+            XCTAssertEqual(manager.state, .stopped)
+            XCTAssertFalse(manager.ownsProcess)
+        } catch {
+            await manager.shutdown(endpoint: configuration.endpoint, apiToken: nil)
+            throw error
+        }
+    }
+
     private func mockSession(
         handler: @escaping (URLRequest) throws -> (HTTPURLResponse, Data)
     ) -> URLSession {
