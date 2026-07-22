@@ -90,7 +90,7 @@ final class MachBoostUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Choose your first model"].waitForExistence(timeout: 10))
         XCTAssertFalse(app.buttons["Continue"].exists)
 
-        let download = app.buttons["Download Qwen2.5 3B"]
+        let download = app.buttons["download-model-qwen2.5:3b"]
         XCTAssertTrue(download.waitForExistence(timeout: 3))
         download.click()
         let confirmation = app.sheets.buttons["Download"]
@@ -129,8 +129,8 @@ final class MachBoostUITests: XCTestCase {
         let response = app.staticTexts["Fixture response."]
         XCTAssertTrue(response.waitForExistence(timeout: 8))
 
-        response.rightClick()
-        let regenerate = app.menuItems["Regenerate"]
+        response.hover()
+        let regenerate = app.buttons["regenerate-response"]
         XCTAssertTrue(regenerate.waitForExistence(timeout: 2))
         regenerate.click()
         XCTAssertTrue(response.waitForNonExistence(timeout: 3))
@@ -157,8 +157,9 @@ final class MachBoostUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Settings"].waitForExistence(timeout: 10))
         app.staticTexts["Settings"].click()
 
-        XCTAssertTrue(app.checkBoxes["Launch MachBoost at login"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.checkBoxes["Automatically check for updates"].exists)
+        let controls = app.descendants(matching: .any)
+        XCTAssertTrue(controls["launch-at-login"].waitForExistence(timeout: 3))
+        XCTAssertTrue(controls["automatic-updates"].exists)
         XCTAssertTrue(app.buttons["Check for updates"].exists)
         XCTAssertTrue(app.staticTexts["Telemetry"].exists)
         XCTAssertTrue(app.staticTexts["Disabled"].exists)
