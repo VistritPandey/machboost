@@ -17,7 +17,24 @@ enum MachBoostAPIError: LocalizedError {
     }
 }
 
-final class MachBoostAPI: @unchecked Sendable {
+protocol MachBoostAPIProtocol: AnyObject, Sendable {
+    func catalog() async throws -> [CatalogModel]
+    func metrics() async throws -> ServerMetrics
+    func models() async throws -> [ModelInstance]
+    func preflight(model: String) async throws -> ModelPreflightResponse.Preflight
+    func stop(model: String?) async throws
+    func cancel(requestID: String) async throws -> Bool
+    func streamChat(_ request: ChatRequest) -> AsyncThrowingStream<ChatEvent, Error>
+    func streamPull(model: String, requestID: String) -> AsyncThrowingStream<PullEvent, Error>
+}
+
+extension MachBoostAPIProtocol {
+    func stop() async throws {
+        try await stop(model: nil)
+    }
+}
+
+final class MachBoostAPI: MachBoostAPIProtocol, @unchecked Sendable {
     private let endpoint: URL
     private let apiToken: String?
     private let session: URLSession
