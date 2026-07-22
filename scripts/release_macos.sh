@@ -73,9 +73,11 @@ hdiutil create \
   -ov \
   "$DMG"
 
-xcrun notarytool submit "$DMG" \
-  --keychain-profile "$MACHBOOST_NOTARY_PROFILE" \
-  --wait
+NOTARY_ARGUMENTS=(--keychain-profile "$MACHBOOST_NOTARY_PROFILE")
+if [[ -n "${MACHBOOST_RELEASE_KEYCHAIN:-}" ]]; then
+  NOTARY_ARGUMENTS+=(--keychain "$MACHBOOST_RELEASE_KEYCHAIN")
+fi
+xcrun notarytool submit "$DMG" "${NOTARY_ARGUMENTS[@]}" --wait
 xcrun stapler staple "$DMG"
 spctl --assess --type open --context context:primary-signature --verbose=2 "$DMG"
 shasum -a 256 "$DMG" > "$DMG.sha256"
