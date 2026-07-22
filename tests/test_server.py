@@ -13,6 +13,7 @@ from machboost.scheduler import RequestAdmissionError
 from machboost.server import (
     MachBoostHTTPServer,
     OperationRegistry,
+    RequestCancelled,
     RuntimeManager,
     parse_keep_alive,
 )
@@ -617,6 +618,75 @@ class HTTPServerTests(unittest.TestCase):
         rows = [json.loads(line) for line in body.splitlines()]
         self.assertTrue(rows)
         self.assertTrue(all(row["request_id"] == "desktop-chat-7" for row in rows))
+
+    def test_pull_stream_reports_progress_with_request_id(self):
+        def fake_pull(model, *, revision=None, progress=None, cancel_event=None):
+            self.assertEqual(model, "mlx-community/example")
+            self.assertEqual(revision, "main")
+            progress({"status": "downloading", "file": "weights.safetensors", "completed": 4, "total": 8})
+            return {"status": "success", "model": model, "path": "/tmp/example"}
+
+        with patch.object(self.server.manager, "pull", side_effect=fake_pull):
+            _, headers, body = self.request(
+                "/api/pull",
+                {
+                    "request_id": "desktop-pull-3",
+                    "model": "mlx-community/example",
+                    "revision": "main",
+                    "stream": True,
+                },
+            )
+
+        rows = [json.loads(line) for line in body.splitlines()]
+        self.assertEqual(headers.get_content_type(), "application/x-ndjson")
+        self.assertTrue(all(row["request_id"] == "desktop-pull-3" for row in rows))
+        self.assertEqual(rows[0]["completed"], 4)
+        self.assertTrue(rows[-1]["done"])
+        self.assertEqual(rows[-1]["status"], "success")
+
+    def test_cancel_stops_an_active_pull_stream(self):
+        started = threading.Event()
+        response_rows = []
+
+        def slow_pull(model, *, revision=None, progress=None, cancel_event=None):
+            progress({"status": "resolving", "model": model})
+            started.set()
+            while not cancel_event.wait(timeout=0.01):
+                pass
+            raise RequestCancelled("request cancelled")
+
+        def stream_request() -> None:
+            payload = json.dumps(
+                {
+                    "request_id": "cancel-pull",
+                    "model": "mlx-community/example",
+                    "stream": True,
+                }
+            ).encode("utf-8")
+            request = Request(
+                self.base_url + "/api/pull",
+                data=payload,
+                headers={"Content-Type": "application/json"},
+            )
+            with urlopen(request, timeout=3.0) as response:
+                response_rows.extend(
+                    json.loads(line) for line in response if line.strip()
+                )
+
+        with patch.object(self.server.manager, "pull", side_effect=slow_pull):
+            request_thread = threading.Thread(target=stream_request)
+            request_thread.start()
+            self.assertTrue(started.wait(timeout=1.0))
+            _, _, cancel_body = self.request(
+                "/api/cancel",
+                {"request_id": "cancel-pull"},
+            )
+            request_thread.join(timeout=2.0)
+
+        self.assertFalse(request_thread.is_alive())
+        self.assertTrue(json.loads(cancel_body)["cancelled"])
+        self.assertEqual(response_rows[-1]["status"], "cancelled")
+        self.assertTrue(response_rows[-1]["done"])
 
     def test_secured_server_requires_valid_bearer_token(self):
         manager = RuntimeManager(loader=lambda config: FakeAccelerator())
