@@ -68,6 +68,66 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertTrue(vision["recommended"])
         self.assertFalse(vision["cached"])
 
+    def test_desktop_catalog_discovers_compatible_custom_mlx_cache(self):
+        with tempfile.TemporaryDirectory() as directory:
+            snapshot = Path(
+                directory,
+                "models--acme--Custom-3B-MLX-4bit",
+                "snapshots",
+                "revision",
+            )
+            snapshot.mkdir(parents=True)
+            Path(snapshot, "config.json").write_text(
+                json.dumps({"model_type": "qwen2"}),
+                encoding="utf-8",
+            )
+            Path(snapshot, "weights.safetensors").write_bytes(b"weights")
+            with (
+                patch("machboost.models.cached_repo_path", return_value=None),
+                patch("machboost.models.backend_available", return_value=True),
+                patch("machboost.models._validate_mlx_architecture") as validate,
+            ):
+                rows = catalog_rows(cache_dirs=[Path(directory)])
+
+        custom = next(
+            row for row in rows if row["name"] == "acme/Custom-3B-MLX-4bit"
+        )
+        self.assertTrue(custom["cached"])
+        self.assertEqual(custom["backend"], "mlx")
+        self.assertEqual(custom["support"], "ready")
+        self.assertFalse(custom["tested"])
+        self.assertGreater(custom["disk_size_gb"], 0)
+        validate.assert_called_once()
+
+    def test_desktop_catalog_reports_unsupported_custom_architecture(self):
+        with tempfile.TemporaryDirectory() as directory:
+            snapshot = Path(
+                directory,
+                "models--acme--Future-MLX-4bit",
+                "snapshots",
+                "revision",
+            )
+            snapshot.mkdir(parents=True)
+            Path(snapshot, "config.json").write_text(
+                json.dumps({"model_type": "future_model"}),
+                encoding="utf-8",
+            )
+            with (
+                patch("machboost.models.cached_repo_path", return_value=None),
+                patch("machboost.models.backend_available", return_value=True),
+                patch(
+                    "machboost.models._validate_mlx_architecture",
+                    side_effect=ValueError("future_model is not supported"),
+                ),
+            ):
+                rows = catalog_rows(cache_dirs=[Path(directory)])
+
+        custom = next(
+            row for row in rows if row["name"] == "acme/Future-MLX-4bit"
+        )
+        self.assertEqual(custom["support"], "unsupported")
+        self.assertIn("not supported", custom["support_reason"])
+
     def test_preflight_reports_supported_local_mlx_architecture(self):
         with tempfile.TemporaryDirectory() as directory:
             Path(directory, "config.json").write_text(
