@@ -85,11 +85,94 @@ final class MachBoostUITests: XCTestCase {
     }
 
     @MainActor
-    private func launchApp() -> XCUIApplication {
+    func testFirstRunRequiresConfirmedModelDownload() {
+        let app = launchApp(environment: ["MACHBOOST_UI_TEST_NO_CACHED_MODELS": "1"])
+        XCTAssertTrue(app.staticTexts["Choose your first model"].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.buttons["Continue"].exists)
+
+        let download = app.buttons["Download Qwen2.5 3B"]
+        XCTAssertTrue(download.waitForExistence(timeout: 3))
+        download.click()
+        let confirmation = app.sheets.buttons["Download"]
+        XCTAssertTrue(confirmation.waitForExistence(timeout: 2))
+        confirmation.click()
+
+        let continueButton = app.buttons["Continue"]
+        XCTAssertTrue(continueButton.waitForExistence(timeout: 5))
+        continueButton.click()
+        XCTAssertTrue(app.staticTexts["Chats"].waitForExistence(timeout: 3))
+    }
+
+    @MainActor
+    func testVisionAndTextContextRemainPinnedAcrossPrompts() {
+        let app = launchApp(environment: [
+            "MACHBOOST_UI_TEST_MODEL": "qwen2.5-vl:3b",
+            "MACHBOOST_UI_TEST_ATTACHMENTS": "image,text",
+        ])
+        XCTAssertTrue(app.staticTexts["fixture-image.png"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["fixture-context.txt"].exists)
+
+        send("Inspect the attached material", in: app)
+        let responses = app.staticTexts.matching(
+            identifier: "Fixture context: 1 image, 1 file."
+        )
+        XCTAssertTrue(responses.firstMatch.waitForExistence(timeout: 8))
+
+        send("Now answer a separate follow-up", in: app)
+        XCTAssertTrue(responses.element(boundBy: 1).waitForExistence(timeout: 8))
+    }
+
+    @MainActor
+    func testResponseCanBeRegenerated() {
+        let app = launchApp()
+        send("Generate this response twice", in: app)
+        let response = app.staticTexts["Fixture response."]
+        XCTAssertTrue(response.waitForExistence(timeout: 8))
+
+        response.rightClick()
+        let regenerate = app.menuItems["Regenerate"]
+        XCTAssertTrue(regenerate.waitForExistence(timeout: 2))
+        regenerate.click()
+        XCTAssertTrue(response.waitForNonExistence(timeout: 3))
+        XCTAssertTrue(response.waitForExistence(timeout: 8))
+    }
+
+    @MainActor
+    func testConversationHistoryCanBeSearched() {
+        let app = launchApp()
+        let title = "Quarterly roadmap needle"
+        send(title, in: app)
+        XCTAssertTrue(app.staticTexts["Fixture response."].waitForExistence(timeout: 8))
+
+        let search = app.searchFields["Search chats"]
+        XCTAssertTrue(search.waitForExistence(timeout: 3))
+        focus(search)
+        search.typeText("roadmap needle")
+        XCTAssertTrue(app.staticTexts[title].firstMatch.waitForExistence(timeout: 3))
+    }
+
+    @MainActor
+    func testSettingsExposeLoginAndUpdateControls() {
+        let app = launchApp()
+        XCTAssertTrue(app.staticTexts["Settings"].waitForExistence(timeout: 10))
+        app.staticTexts["Settings"].click()
+
+        XCTAssertTrue(app.checkBoxes["Launch MachBoost at login"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.checkBoxes["Automatically check for updates"].exists)
+        XCTAssertTrue(app.buttons["Check for updates"].exists)
+        XCTAssertTrue(app.staticTexts["Telemetry"].exists)
+        XCTAssertTrue(app.staticTexts["Disabled"].exists)
+    }
+
+    @MainActor
+    private func launchApp(environment: [String: String] = [:]) -> XCUIApplication {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launchEnvironment["MACHBOOST_UI_TESTING"] = "1"
         app.launchEnvironment["MACHBOOST_SOURCE_ROOT"] = repositoryRoot()
+        for (key, value) in environment {
+            app.launchEnvironment[key] = value
+        }
         app.launch()
         app.activate()
         return app
@@ -107,5 +190,14 @@ final class MachBoostUITests: XCTestCase {
     @MainActor
     private func focus(_ element: XCUIElement) {
         element.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+    }
+
+    @MainActor
+    private func send(_ message: String, in app: XCUIApplication) {
+        let composer = app.textFields["Message MachBoost"]
+        XCTAssertTrue(composer.waitForExistence(timeout: 10))
+        focus(composer)
+        composer.typeText(message)
+        app.buttons["Send message"].click()
     }
 }
