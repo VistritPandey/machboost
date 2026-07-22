@@ -159,6 +159,7 @@ final class MachBoostTests: XCTestCase {
         configuration.lanEnabled = true
         XCTAssertEqual(configuration.bindHost, "0.0.0.0")
         XCTAssertEqual(configuration.endpoint.host, "127.0.0.1")
+        XCTAssertEqual(configuration.advertisedEndpoint.host, ProcessInfo.processInfo.hostName)
     }
 
     func testAuthenticatedCatalogRequestUsesBearerToken() async throws {
