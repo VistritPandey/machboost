@@ -1,11 +1,11 @@
 import Foundation
 
-enum MachBoostAPIError: LocalizedError {
+public enum MachBoostAPIError: LocalizedError {
     case invalidResponse
     case server(status: Int, message: String)
     case stream(String)
 
-    var errorDescription: String? {
+    public var errorDescription: String? {
         switch self {
         case .invalidResponse:
             "MachBoost returned an invalid response."
@@ -17,7 +17,7 @@ enum MachBoostAPIError: LocalizedError {
     }
 }
 
-protocol MachBoostAPIProtocol: AnyObject, Sendable {
+public protocol MachBoostAPIProtocol: AnyObject, Sendable {
     func catalog() async throws -> [CatalogModel]
     func metrics() async throws -> ServerMetrics
     func models() async throws -> [ModelInstance]
@@ -28,20 +28,20 @@ protocol MachBoostAPIProtocol: AnyObject, Sendable {
     func streamPull(model: String, requestID: String) -> AsyncThrowingStream<PullEvent, Error>
 }
 
-extension MachBoostAPIProtocol {
+public extension MachBoostAPIProtocol {
     func stop() async throws {
         try await stop(model: nil)
     }
 }
 
-final class MachBoostAPI: MachBoostAPIProtocol, @unchecked Sendable {
+public final class MachBoostAPI: MachBoostAPIProtocol, @unchecked Sendable {
     private let endpoint: URL
     private let apiToken: String?
     private let session: URLSession
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
 
-    init(endpoint: URL, apiToken: String? = nil, session: URLSession? = nil) {
+    public init(endpoint: URL, apiToken: String? = nil, session: URLSession? = nil) {
         self.endpoint = endpoint
         self.apiToken = apiToken
         if let session {
@@ -57,7 +57,7 @@ final class MachBoostAPI: MachBoostAPIProtocol, @unchecked Sendable {
         self.decoder = JSONDecoder()
     }
 
-    func health(timeoutInterval: TimeInterval = 1) async throws -> Bool {
+    public func health(timeoutInterval: TimeInterval = 1) async throws -> Bool {
         struct Health: Decodable { let status: String }
         var request = try request(
             path: "/healthz",
@@ -69,21 +69,21 @@ final class MachBoostAPI: MachBoostAPIProtocol, @unchecked Sendable {
         return health.status == "ok"
     }
 
-    func catalog() async throws -> [CatalogModel] {
+    public func catalog() async throws -> [CatalogModel] {
         let response: CatalogResponse = try await get("/api/catalog")
         return response.models
     }
 
-    func metrics() async throws -> ServerMetrics {
+    public func metrics() async throws -> ServerMetrics {
         try await get("/api/metrics")
     }
 
-    func models() async throws -> [ModelInstance] {
+    public func models() async throws -> [ModelInstance] {
         let response: ModelsResponse = try await get("/api/ps")
         return response.models
     }
 
-    func preflight(model: String) async throws -> ModelPreflightResponse.Preflight {
+    public func preflight(model: String) async throws -> ModelPreflightResponse.Preflight {
         let payload: [String: Any] = [
             "model": model,
             "backend": "auto",
@@ -97,16 +97,16 @@ final class MachBoostAPI: MachBoostAPIProtocol, @unchecked Sendable {
         return response.preflight
     }
 
-    func stop(model: String? = nil) async throws {
+    public func stop(model: String? = nil) async throws {
         let payload: [String: Any] = model.map { ["model": $0] } ?? [:]
         let _: EmptyResponse = try await post("/api/stop", jsonObject: payload)
     }
 
-    func shutdown() async throws {
+    public func shutdown() async throws {
         let _: EmptyResponse = try await post("/api/shutdown", jsonObject: [:])
     }
 
-    func cancel(requestID: String) async throws -> Bool {
+    public func cancel(requestID: String) async throws -> Bool {
         struct CancelResponse: Decodable { let cancelled: Bool }
         do {
             let response: CancelResponse = try await post(
@@ -119,11 +119,14 @@ final class MachBoostAPI: MachBoostAPIProtocol, @unchecked Sendable {
         }
     }
 
-    func streamChat(_ request: ChatRequest) -> AsyncThrowingStream<ChatEvent, Error> {
+    public func streamChat(_ request: ChatRequest) -> AsyncThrowingStream<ChatEvent, Error> {
         stream(path: "/api/chat", body: request, event: ChatEvent.self)
     }
 
-    func streamPull(model: String, requestID: String) -> AsyncThrowingStream<PullEvent, Error> {
+    public func streamPull(
+        model: String,
+        requestID: String
+    ) -> AsyncThrowingStream<PullEvent, Error> {
         struct PullRequest: Encodable, Sendable {
             let model: String
             let requestID: String
