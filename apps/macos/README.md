@@ -17,7 +17,8 @@ a separate MachBoost installation.
 - advanced MLX and MLX-VLM repository entry, with compatibility validation
   before download and automatic discovery after a compatible model is cached
 - one resident daemon for several models, bounded queues, optional replicas,
-  OpenAI-compatible and Ollama-compatible routes, and live metrics
+  OpenAI-compatible and Ollama-compatible routes, and live queue, latency,
+  throughput, and memory metrics
 - menu-bar lifecycle, optional launch at login, and Sparkle 2 updates
 - localhost serving by default; authenticated LAN serving is opt-in
 
