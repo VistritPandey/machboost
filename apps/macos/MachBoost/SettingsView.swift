@@ -13,8 +13,10 @@ struct SettingsView: View {
             Form {
                 Section("General") {
                     Toggle("Launch MachBoost at login", isOn: $launchAtLogin)
+                        .accessibilityIdentifier("launch-at-login")
                         .onChange(of: launchAtLogin, updateLoginItem)
                     Toggle("Automatically check for updates", isOn: $automaticUpdates)
+                        .accessibilityIdentifier("automatic-updates")
                         .onChange(of: automaticUpdates) {
                             updates.automaticallyChecksForUpdates = automaticUpdates
                         }
