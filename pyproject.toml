@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "machboost"
-version = "0.5.2"
+version = "0.6.0"
 description = "Resident local inference server with conditional text and visual acceleration."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -12,7 +12,7 @@ license = { text = "MIT" }
 authors = [
   { name = "Vistrit Pandey", email = "vistrit@blinkfire.com" }
 ]
-keywords = ["llm", "vlm", "inference", "speculative-decoding", "local-ai", "mlx", "huggingface", "ollama", "server"]
+keywords = ["llm", "vlm", "inference", "speculative-decoding", "local-ai", "mlx", "huggingface", "ollama", "server", "concurrency"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Intended Audience :: Developers",
