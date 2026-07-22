@@ -115,6 +115,43 @@ final class MachBoostTests: XCTestCase {
         AttachmentStore.remove(attachments[0])
     }
 
+    @MainActor
+    func testAttachmentCopiesAreConversationScopedAndDeduplicated() throws {
+        let configuration = ModelConfiguration(isStoredInMemoryOnly: true)
+        let container = try ModelContainer(
+            for: Conversation.self,
+            ChatMessage.self,
+            ChatAttachment.self,
+            configurations: configuration
+        )
+        let firstConversation = Conversation()
+        let secondConversation = Conversation()
+        container.mainContext.insert(firstConversation)
+        container.mainContext.insert(secondConversation)
+        let temporary = FileManager.default.temporaryDirectory
+            .appendingPathComponent("machboost-shared-\(UUID().uuidString).txt")
+        try Data("shared context".utf8).write(to: temporary)
+        defer { try? FileManager.default.removeItem(at: temporary) }
+
+        let first = try XCTUnwrap(
+            AttachmentStore.importURLs([temporary], conversation: firstConversation).first
+        )
+        firstConversation.attachments.append(first)
+        let duplicate = try AttachmentStore.importURLs(
+            [temporary],
+            conversation: firstConversation
+        )
+        let second = try XCTUnwrap(
+            AttachmentStore.importURLs([temporary], conversation: secondConversation).first
+        )
+
+        XCTAssertTrue(duplicate.isEmpty)
+        XCTAssertNotEqual(first.importedPath, second.importedPath)
+        AttachmentStore.remove(first)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: second.importedPath))
+        AttachmentStore.remove(second)
+    }
+
     func testServerConfigurationUsesLoopbackUntilLANIsEnabled() {
         var configuration = ServerConfiguration()
 
