@@ -47,13 +47,25 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.vistritpandey.MachBoostTests
+  MachBoostUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources:
+      - path: MachBoostUITests
+    dependencies:
+      - target: MachBoost
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.vistritpandey.MachBoostUITests
 schemes:
   MachBoost:
     build:
       targets:
         MachBoost: all
         MachBoostTests: [test]
+        MachBoostUITests: [test]
     test:
       gatherCoverageData: true
       targets:
         - MachBoostTests
+        - MachBoostUITests
