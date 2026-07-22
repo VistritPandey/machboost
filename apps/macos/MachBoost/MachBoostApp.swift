@@ -32,9 +32,10 @@ struct MachBoostApp: App {
                 .task {
                     appDelegate.appState = appState
                     let environment = ProcessInfo.processInfo.environment
-                    if
+                    if environment["MACHBOOST_UI_TESTING"] == "1" {
+                        await appState.startUITestMode()
+                    } else if
                         environment["MACHBOOST_TESTING"] != "1",
-                        environment["MACHBOOST_UI_TESTING"] != "1",
                         environment["XCTestConfigurationFilePath"] == nil
                     {
                         await appState.start()
