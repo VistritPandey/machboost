@@ -21,8 +21,10 @@ PY
 }
 
 PYTHON_RELEASE="$(read_manifest python.release)"
+PYTHON_VERSION="$(read_manifest python.version)"
 PYTHON_ASSET="$(read_manifest python.asset)"
 PYTHON_SHA256="$(read_manifest python.sha256)"
+MACHBOOST_VERSION="$(read_manifest packages.machboost)"
 PYTHON_URL="https://github.com/astral-sh/python-build-standalone/releases/download/${PYTHON_RELEASE}/${PYTHON_ASSET}"
 ARCHIVE="$CACHE/$PYTHON_ASSET"
 
@@ -75,16 +77,20 @@ SITE_PACKAGES="$("$PYTHON" -c 'import sysconfig; print(sysconfig.get_paths()["pu
   "$ROOT"
 
 find "$OUTPUT" -type d -name __pycache__ -prune -exec rm -rf {} +
-"$PYTHON" - <<'PY'
+"$PYTHON" - "$PYTHON_VERSION" "$MACHBOOST_VERSION" <<'PY'
 import json
 import platform
+import sys
 
 import machboost
 import mlx
 import mlx_lm
 import mlx_vlm
 
+expected_python, expected_machboost = sys.argv[1:]
 assert platform.machine() == "arm64"
+assert platform.python_version() == expected_python
+assert machboost.__version__ == expected_machboost
 print(json.dumps({
     "machboost": machboost.__version__,
     "python": platform.python_version(),
