@@ -42,6 +42,7 @@ jobs:
   macos-app:
     name: Native macOS app
     runs-on: macos-15
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -54,7 +55,7 @@ jobs:
       - name: Regenerate Xcode project
         working-directory: apps/macos
         run: xcodegen generate
-      - name: Run native unit and UI tests
+      - name: Run native unit tests
         env:
           MACHBOOST_SOURCE_ROOT: ${{ github.workspace }}
         run: |
@@ -63,6 +64,20 @@ jobs:
             -scheme MachBoost \
             -configuration Debug \
             -destination 'platform=macOS,arch=arm64' \
+            -only-testing:MachBoostTests \
+            CODE_SIGN_IDENTITY=- \
+            CODE_SIGN_STYLE=Manual \
+            DEVELOPMENT_TEAM=
+      - name: Run native UI tests
+        env:
+          MACHBOOST_SOURCE_ROOT: ${{ github.workspace }}
+        run: |
+          xcodebuild test \
+            -project apps/macos/MachBoost.xcodeproj \
+            -scheme MachBoost \
+            -configuration Debug \
+            -destination 'platform=macOS,arch=arm64' \
+            -only-testing:MachBoostUITests \
             CODE_SIGN_IDENTITY=- \
             CODE_SIGN_STYLE=Manual \
             DEVELOPMENT_TEAM=
