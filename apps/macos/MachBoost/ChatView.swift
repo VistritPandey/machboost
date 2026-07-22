@@ -101,10 +101,12 @@ struct ChatView: View {
     }
 
     private var messageList: some View {
-        ScrollViewReader { (proxy: ScrollViewProxy) in
+        let messages: [ChatMessage] = conversation.orderedMessages
+
+        return ScrollViewReader { (proxy: ScrollViewProxy) in
             ScrollView(.vertical, showsIndicators: true) {
                 LazyVStack(alignment: .leading, spacing: 2) {
-                    if conversation.orderedMessages.isEmpty {
+                    if messages.isEmpty {
                         ContentUnavailableView(
                             "Start a conversation",
                             systemImage: "bubble.left.and.text.bubble.right",
@@ -112,11 +114,13 @@ struct ChatView: View {
                         )
                         .frame(maxWidth: .infinity, minHeight: 360)
                     } else {
-                        ForEach(conversation.orderedMessages) { message in
+                        ForEach(messages, id: \.id) { message in
                             MessageRow(
                                 message: message,
                                 onEdit: { edit(message) },
-                                onRegenerate: message.role == .assistant ? regenerate : nil
+                                onRegenerate: message.role == .assistant
+                                    ? { regenerate() }
+                                    : nil
                             )
                             .id(message.id)
                         }
@@ -124,18 +128,18 @@ struct ChatView: View {
                 }
                 .padding(.vertical, 12)
             }
-            .onChange(of: conversation.messages.count, perform: { _ in
-                if let last = conversation.orderedMessages.last {
+            .onChange(of: messages.count, perform: { _ in
+                if let last = messages.last {
                     withAnimation(.easeOut(duration: 0.18)) {
-                        proxy.scrollTo(last.id, anchor: .bottom)
+                        proxy.scrollTo(last.id, anchor: UnitPoint.bottom)
                     }
                 }
             })
             .onChange(
-                of: conversation.orderedMessages.last?.content,
+                of: messages.last?.content,
                 perform: { _ in
-                    if let last = conversation.orderedMessages.last {
-                        proxy.scrollTo(last.id, anchor: .bottom)
+                    if let last = messages.last {
+                        proxy.scrollTo(last.id, anchor: UnitPoint.bottom)
                     }
                 }
             )
