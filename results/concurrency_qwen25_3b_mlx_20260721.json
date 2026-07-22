@@ -1,0 +1,68 @@
+{
+  "schema_version": "machboost.concurrency_comparison.v1",
+  "created_at": "2026-07-21",
+  "scope": "Single-machine comparison of one versus two isolated MachBoost text-model replicas. This is not a continuous-batching benchmark or a universal speedup claim.",
+  "machine": {
+    "platform": "macOS-26.5.2-arm64-arm-64bit-Mach-O",
+    "processor": "arm",
+    "python": "3.13.3"
+  },
+  "model": {
+    "requested": "qwen2.5:3b",
+    "resolved": "mlx-community/Qwen2.5-3B-Instruct-4bit",
+    "backend": "mlx"
+  },
+  "config": {
+    "mode": "generate",
+    "clients": 4,
+    "requests_per_round": 8,
+    "rounds": 3,
+    "measured_requests_per_configuration": 24,
+    "warmups": 2,
+    "max_tokens": 64,
+    "temperature": 0.0,
+    "output_comparison": "SHA-256 of generated UTF-8 text for matching deterministic request IDs"
+  },
+  "measurements": {
+    "one_replica": {
+      "successful_requests": 24,
+      "failed_requests": 0,
+      "measured_round_seconds": 16.314968584047165,
+      "requests_per_second": 1.471041753857086,
+      "aggregate_tokens_per_second": 94.1466722468535,
+      "generated_tokens": 1536,
+      "median_latency_seconds": 2.681283062993316,
+      "p95_latency_seconds": 2.7913319312239766,
+      "median_queue_wait_seconds": 1.9242582289734855,
+      "p95_queue_wait_seconds": 2.0138732348335906,
+      "median_time_to_first_token_seconds": 2.088727458525682,
+      "p95_time_to_first_token_seconds": 2.1834457562072203
+    },
+    "two_replicas": {
+      "successful_requests": 24,
+      "failed_requests": 0,
+      "measured_round_seconds": 15.980035250948276,
+      "requests_per_second": 1.5018740336368037,
+      "aggregate_tokens_per_second": 96.11993815275544,
+      "generated_tokens": 1536,
+      "median_latency_seconds": 2.4346141039859504,
+      "p95_latency_seconds": 3.1324057249730686,
+      "median_queue_wait_seconds": 0.9975865204760339,
+      "p95_queue_wait_seconds": 1.5166933455562683,
+      "median_time_to_first_token_seconds": 1.233800332993269,
+      "p95_time_to_first_token_seconds": 1.7525610830722143
+    }
+  },
+  "comparison": {
+    "requests_per_second_ratio_two_vs_one": 1.0209594864991938,
+    "aggregate_tokens_per_second_ratio_two_vs_one": 1.0209594864991938,
+    "median_latency_speedup_two_vs_one": 1.1013174772147747,
+    "p95_latency_speedup_two_vs_one": 0.8911144265157336,
+    "median_time_to_first_token_speedup_two_vs_one": 1.692921782131726,
+    "p95_time_to_first_token_speedup_two_vs_one": 1.245860002996113,
+    "median_queue_wait_reduction_factor": 1.9289136225049004,
+    "matching_output_hashes": 24,
+    "compared_output_hashes": 24
+  },
+  "interpretation": "Two replicas reduced queueing and median first-token latency, but duplicate MLX generation shared the same GPU. Aggregate throughput was nearly unchanged and p95 total latency worsened in this run. Benchmark the target machine and workload before increasing replicas."
+}
