@@ -7,8 +7,9 @@ final class AppState {
     private static let configurationKey = "machboost.server.configuration.v1"
 
     let daemon = DaemonManager()
+    private let usesUITestAPI: Bool
     private(set) var configuration: ServerConfiguration
-    private(set) var api: MachBoostAPI
+    private(set) var api: any MachBoostAPIProtocol
     private(set) var apiToken: String?
     private(set) var catalog: [CatalogModel] = []
     private(set) var loadedModels: [ModelInstance] = []
@@ -21,13 +22,25 @@ final class AppState {
     init() {
         let configuration = Self.loadConfiguration()
         let token = KeychainStore.token()
+        let usesUITestAPI = ProcessInfo.processInfo.environment["MACHBOOST_UI_TESTING"] == "1"
+        self.usesUITestAPI = usesUITestAPI
         self.configuration = configuration
         self.apiToken = token
+#if DEBUG
+        if usesUITestAPI {
+            let fixture = UITestMachBoostAPI()
+            self.api = fixture
+            self.catalog = fixture.catalogSnapshot()
+        } else {
+            self.api = MachBoostAPI(endpoint: configuration.endpoint, apiToken: token)
+        }
+#else
         self.api = MachBoostAPI(endpoint: configuration.endpoint, apiToken: token)
+#endif
     }
 
     var serverIsRunning: Bool {
-        daemon.state == .running
+        usesUITestAPI || daemon.state == .running
     }
 
     func start() async {
@@ -43,8 +56,13 @@ final class AppState {
         }
     }
 
+    func startUITestMode() async {
+        guard usesUITestAPI else { return }
+        await refreshAll()
+    }
+
     func refreshAll() async {
-        guard daemon.state == .running else { return }
+        guard serverIsRunning else { return }
         isRefreshing = true
         defer { isRefreshing = false }
         do {
@@ -64,7 +82,7 @@ final class AppState {
     }
 
     func refreshMetrics() async {
-        guard daemon.state == .running else { return }
+        guard serverIsRunning else { return }
         do {
             async let models = api.models()
             async let metrics = api.metrics()
@@ -187,6 +205,9 @@ final class AppState {
     }
 
     private func rebuildAPI() {
+#if DEBUG
+        guard !usesUITestAPI else { return }
+#endif
         api = MachBoostAPI(endpoint: configuration.endpoint, apiToken: apiToken)
     }
 
