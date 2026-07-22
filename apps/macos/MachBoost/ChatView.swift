@@ -102,7 +102,7 @@ struct ChatView: View {
 
     private var messageList: some View {
         ScrollViewReader { proxy in
-            ScrollView {
+            ScrollView(.vertical, showsIndicators: true) {
                 LazyVStack(alignment: .leading, spacing: 2) {
                     if conversation.orderedMessages.isEmpty {
                         ContentUnavailableView(
