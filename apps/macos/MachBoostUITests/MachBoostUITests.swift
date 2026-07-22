@@ -34,7 +34,7 @@ final class MachBoostUITests: XCTestCase {
         let composer = app.textFields["Message MachBoost"]
         XCTAssertTrue(composer.waitForExistence(timeout: 10))
 
-        composer.click()
+        focus(composer)
         composer.typeText("Hello from native UI automation")
         app.buttons["Send message"].click()
 
@@ -49,7 +49,7 @@ final class MachBoostUITests: XCTestCase {
         let composer = app.textFields["Message MachBoost"]
         XCTAssertTrue(composer.waitForExistence(timeout: 10))
 
-        composer.click()
+        focus(composer)
         composer.typeText("Stop this fixture response")
         app.buttons["Send message"].click()
         let stop = app.buttons["Stop generation"]
@@ -68,8 +68,9 @@ final class MachBoostUITests: XCTestCase {
         let download = app.buttons["Download Llama 3.2 1B"]
         XCTAssertTrue(download.waitForExistence(timeout: 3))
         download.click()
-        XCTAssertTrue(app.buttons["Download"].waitForExistence(timeout: 2))
-        app.buttons["Download"].click()
+        let confirmation = app.sheets.buttons["Download"]
+        XCTAssertTrue(confirmation.waitForExistence(timeout: 2))
+        confirmation.click()
 
         let finished = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "exists == false"),
@@ -96,5 +97,10 @@ final class MachBoostUITests: XCTestCase {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .path
+    }
+
+    @MainActor
+    private func focus(_ element: XCUIElement) {
+        element.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
     }
 }
