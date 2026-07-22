@@ -1,15 +1,23 @@
 from __future__ import annotations
 
 import os
+import io
 import tempfile
 import threading
 import unittest
 from dataclasses import dataclass
 from pathlib import Path
 from unittest.mock import Mock, patch
+from urllib.error import HTTPError
 
 from machboost import __version__
-from machboost.client import MachBoostAPIError, MachBoostClient, default_endpoint, ensure_server
+from machboost.client import (
+    MachBoostAPIError,
+    MachBoostClient,
+    api_error,
+    default_endpoint,
+    ensure_server,
+)
 from machboost.server import MachBoostHTTPServer, RuntimeManager
 
 
@@ -128,6 +136,31 @@ class ClientTests(unittest.TestCase):
 
         payload = post.call_args.args[1]
         self.assertEqual(payload["images"], "image-a")
+
+    def test_client_forwards_affinity_and_request_queue_timeout(self):
+        options = {"temperature": 0.0}
+        with patch.object(self.client, "post", return_value={"done": True}) as post:
+            self.client.chat(
+                "mlx-community/example",
+                [{"role": "user", "content": "hello"}],
+                options=options,
+                affinity_key="customer-42",
+                queue_timeout=1.5,
+                stream=False,
+            )
+
+        request_options = post.call_args.args[1]["options"]
+        self.assertEqual(request_options["affinity_key"], "customer-42")
+        self.assertEqual(request_options["queue_timeout"], 1.5)
+        self.assertEqual(options, {"temperature": 0.0})
+
+    def test_api_error_preserves_overload_status_and_code(self):
+        response = io.BytesIO(b'{"error":"model request queue is full","code":"queue_full"}')
+        error = api_error(HTTPError("http://localhost", 503, "busy", {}, response))
+
+        self.assertEqual(error.status, 503)
+        self.assertEqual(error.code, "queue_full")
+        self.assertIn("queue is full", str(error))
 
     def test_chat_rejects_images_without_messages(self):
         with self.assertRaisesRegex(ValueError, "at least one"):
