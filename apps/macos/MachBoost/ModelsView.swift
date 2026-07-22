@@ -209,16 +209,19 @@ private struct ModelRow: View {
                 Button(action: onCancel) {
                     Image(systemName: "xmark")
                 }
+                .accessibilityLabel("Cancel download for \(model.displayName)")
                 .help("Cancel download")
             } else if loaded {
                 Button(action: onUnload) {
                     Image(systemName: "eject")
                 }
+                .accessibilityLabel("Unload \(model.displayName)")
                 .help("Unload model")
             } else if !model.cached {
                 Button(action: onDownload) {
                     Image(systemName: "arrow.down.circle")
                 }
+                .accessibilityLabel("Download \(model.displayName)")
                 .help("Download model")
             }
         }
