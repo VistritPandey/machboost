@@ -209,7 +209,7 @@ struct RootView: View {
 
     private func export(_ conversation: Conversation) {
         let panel = NSSavePanel()
-        panel.allowedContentTypes = [.markdown]
+        panel.allowedContentTypes = [UTType(filenameExtension: "md") ?? .plainText]
         panel.nameFieldStringValue = "\(sanitized(conversation.title)).md"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         var lines = ["# \(conversation.title)", "", "Model: `\(conversation.model)`", ""]
