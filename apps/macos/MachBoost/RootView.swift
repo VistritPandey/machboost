@@ -55,6 +55,7 @@ struct RootView: View {
                     Image(systemName: "square.and.pencil")
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("New chat")
                 .help("New chat")
             }
             .padding(.horizontal, 12)
@@ -169,14 +170,58 @@ struct RootView: View {
     }
 
     private func newConversation() {
-        let defaultModel = appState.catalog.first(where: { $0.cached && $0.recommended })?.name
+        let defaultModel = uiTestModel
+            ?? appState.catalog.first(where: { $0.cached && $0.recommended })?.name
             ?? appState.catalog.first(where: \.cached)?.name
             ?? "llama3.2:3b"
         let conversation = Conversation(model: defaultModel)
         modelContext.insert(conversation)
+#if DEBUG
+        seedUITestAttachments(into: conversation)
+#endif
         try? modelContext.save()
         selection = .conversation(conversation.id)
     }
+
+    private var uiTestModel: String? {
+#if DEBUG
+        guard ProcessInfo.processInfo.environment["MACHBOOST_UI_TESTING"] == "1" else {
+            return nil
+        }
+        return ProcessInfo.processInfo.environment["MACHBOOST_UI_TEST_MODEL"]
+#else
+        return nil
+#endif
+    }
+
+#if DEBUG
+    private func seedUITestAttachments(into conversation: Conversation) {
+        guard ProcessInfo.processInfo.environment["MACHBOOST_UI_TESTING"] == "1" else {
+            return
+        }
+        let requested = Set(
+            ProcessInfo.processInfo.environment["MACHBOOST_UI_TEST_ATTACHMENTS", default: ""]
+                .split(separator: ",")
+                .map(String.init)
+        )
+        let fixtures: [(String, AttachmentKind, String)] = [
+            ("text", .text, "fixture-context.txt"),
+            ("image", .image, "fixture-image.png"),
+        ]
+        for (key, kind, name) in fixtures where requested.contains(key) {
+            let attachment = ChatAttachment(
+                kind: kind,
+                displayName: name,
+                importedPath: "/tmp/machboost-ui-fixture/\(name)",
+                sourcePath: "/tmp/machboost-ui-fixture/\(name)",
+                byteCount: 128,
+                conversation: conversation
+            )
+            modelContext.insert(attachment)
+            conversation.attachments.append(attachment)
+        }
+    }
+#endif
 
     private func beginRename(_ conversation: Conversation) {
         renaming = conversation
