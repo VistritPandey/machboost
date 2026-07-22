@@ -255,6 +255,7 @@ private struct ModelRow: View {
 
 struct ModelOnboardingView: View {
     @Environment(AppState.self) private var appState
+    @State private var pendingDownload: CatalogModel?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -271,6 +272,17 @@ struct ModelOnboardingView: View {
                         appState.showOnboarding = false
                     }
                     .buttonStyle(.borderedProminent)
+                } else if let recommendedModel {
+                    Button {
+                        pendingDownload = recommendedModel
+                    } label: {
+                        Label(
+                            "Download \(recommendedModel.displayName)",
+                            systemImage: "arrow.down.circle"
+                        )
+                    }
+                    .accessibilityIdentifier("onboarding-download-model")
+                    .buttonStyle(.borderedProminent)
                 }
             }
             .padding(20)
@@ -279,5 +291,33 @@ struct ModelOnboardingView: View {
         }
         .frame(minWidth: 760, minHeight: 600)
         .interactiveDismissDisabled(!appState.catalog.contains(where: \.cached))
+        .confirmationDialog(
+            "Download model?",
+            isPresented: Binding(
+                get: { pendingDownload != nil },
+                set: { if !$0 { pendingDownload = nil } }
+            )
+        ) {
+            Button("Download") {
+                let model = pendingDownload?.name
+                pendingDownload = nil
+                if let model {
+                    Task { await appState.pull(model: model) }
+                }
+            }
+            Button("Cancel", role: .cancel) {
+                pendingDownload = nil
+            }
+        } message: {
+            if let model = pendingDownload {
+                Text("Download \(model.displayName) from Hugging Face? Weights stay in your local cache.")
+            }
+        }
+    }
+
+    private var recommendedModel: CatalogModel? {
+        appState.catalog.first {
+            $0.recommended && !$0.cached && $0.support == "ready"
+        }
     }
 }
