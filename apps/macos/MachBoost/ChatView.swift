@@ -472,7 +472,9 @@ private struct MessageRow: View {
     }
 
     private var hasStats: Bool {
-        message.tokensPerSecond != nil || message.timeToFirstTokenSeconds != nil
+        message.tokensPerSecond != nil
+            || message.timeToFirstTokenSeconds != nil
+            || message.wasCancelled
     }
 
     private var stats: some View {
