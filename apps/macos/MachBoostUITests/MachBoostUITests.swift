@@ -1,17 +1,9 @@
 import XCTest
 
-@MainActor
 final class MachBoostUITests: XCTestCase {
-    private var app: XCUIApplication!
-
-    override func setUpWithError() throws {
-        continueAfterFailure = false
-        app = XCUIApplication()
-        app.launchEnvironment["MACHBOOST_SOURCE_ROOT"] = repositoryRoot()
-        app.launch()
-    }
-
+    @MainActor
     func testPrimaryWorkspaceAndNavigationAreReachable() {
+        let app = launchApp()
         XCTAssertTrue(app.staticTexts["MachBoost"].waitForExistence(timeout: 10))
 
         if app.buttons["Continue"].exists {
@@ -24,7 +16,9 @@ final class MachBoostUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Settings"].exists)
     }
 
+    @MainActor
     func testServerDeveloperSurfaceOpens() {
+        let app = launchApp()
         XCTAssertTrue(app.staticTexts["Server"].waitForExistence(timeout: 10))
         app.staticTexts["Server"].click()
         XCTAssertTrue(app.buttons["Developer"].waitForExistence(timeout: 3))
@@ -33,7 +27,16 @@ final class MachBoostUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["OpenAI Python"].exists)
     }
 
-    private func repositoryRoot() -> String {
+    @MainActor
+    private func launchApp() -> XCUIApplication {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchEnvironment["MACHBOOST_SOURCE_ROOT"] = repositoryRoot()
+        app.launch()
+        return app
+    }
+
+    nonisolated private func repositoryRoot() -> String {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
