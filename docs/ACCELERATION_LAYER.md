@@ -43,17 +43,23 @@ Future native targets:
 
 ### Resident Runtime
 
-MachBoost 0.2 added a long-running control plane around the native adapters, and later releases extended it to visual models. In 0.5.2 it:
+MachBoost 0.2 added a long-running control plane around the native adapters, and later releases extended it to visual models and bounded concurrent serving. It:
 
 - loads each model once and retains it in unified memory
 - compiles the text generation path with a one-token warmup before interactive use
 - streams generated text without re-decoding the entire prefix per token
 - applies finite or indefinite model keep-alive policies with background expiry
-- serializes generation per model while serving independent models concurrently
+- serves independent models concurrently and can load multiple isolated replicas of a text model
+- applies bounded FIFO admission with queue timeouts and HTTP `503` overload responses
+- reports active, queued, rejected, timed-out, and per-replica request metrics
 - exposes both Ollama-compatible and OpenAI-compatible HTTP endpoints
 - supports explicit preload, inspection, stop, and shutdown operations
 
 Resident serving removes repeated model-loading costs and makes MachBoost usable by editors, chat clients, scripts, and internal assistants. It is an operational latency improvement; it is separate from speculative token acceleration and should be measured separately.
+
+Text replicas own separate accelerator and mutable cache instances. This prevents one request's KV or verifier state from contaminating another request, at the cost of another model allocation in unified memory. An optional affinity key prefers the same available replica for related requests but falls back to another idle replica instead of introducing head-of-line blocking. Model stop and expiry close admission first, drain active work, and only then release accelerator resources.
+
+MLX-VLM remains at one replica. Its projected-feature and prompt-state caches are mutable, and its generation path has a process-wide safety lock. Concurrent visual requests therefore queue on one worker. MachBoost does not claim that replica concurrency is continuous batching: independent MLX replicas can contend for the same GPU, and increased replica count may improve queueing or first-token latency without materially improving aggregate decode throughput.
 
 ### Repeated-Image Acceleration
 
@@ -317,7 +323,16 @@ machboost self-test
 machboost version
 ```
 
-The native server listens on `http://127.0.0.1:11435` and implements Ollama-compatible chat, generate, model-listing, and lifecycle endpoints plus OpenAI-compatible chat and text completion endpoints. The external Ollama wrapper remains available separately:
+The native server listens on `http://127.0.0.1:11435` and implements Ollama-compatible chat, generate, model-listing, and lifecycle endpoints plus OpenAI-compatible chat and text completion endpoints. A concurrent text configuration can be started with:
+
+```sh
+machboost serve --replicas 2 --max-queue 64 --queue-timeout 120
+python3 scripts/benchmark_concurrency.py qwen2.5:3b --clients 4 --requests 8 --rounds 3
+```
+
+The server returns queue and replica metadata with each completed request and exposes aggregate scheduler state through `/api/ps`. A full queue produces HTTP `503` before NDJSON or SSE headers are emitted. The server has no authentication or TLS and must not be exposed directly to an untrusted network.
+
+The external Ollama wrapper remains available separately:
 
 ```sh
 machboost ollama run qwen2.5:3b
@@ -396,7 +411,7 @@ Status: done.
 
 ### P1: Package Layer
 
-Status: done for 0.2.
+Status: resident lifecycle done for 0.2; bounded replica serving added later.
 
 - Public Python API.
 - Optional backend extras.
@@ -413,6 +428,7 @@ Status: done for 0.2.
 - Model alias resolution and backend selection.
 - Pull, preload, inspect, unload, and shutdown lifecycle.
 - Ollama-compatible and OpenAI-compatible local APIs.
+- Isolated text replicas, bounded admission, overload responses, and scheduler metrics.
 - End-to-end resident latency evidence.
 
 ### P3: Runtime Expansion
@@ -443,10 +459,19 @@ Status: image path, first-view policy, and temporal frame adapter done for 0.5.
 Remaining work:
 
 - complete multi-dataset first-view evidence after the observed native MLX high-resolution stability failure is resolved
-- concurrent-session cache isolation and load testing
+- parallel VLM cache isolation and load testing; current visual serving queues on one worker
 - video task-level quality evidence on real benchmarks
 - query-aware temporal token selection and temporal feature reuse
 - non-Qwen post-fusion adapters
+
+### P5: Throughput Scheduling
+
+Next target:
+
+- integrate continuous batching for compatible MLX text models so concurrent requests share one weight copy and batched decode steps
+- compare replica scheduling, continuous batching, and the backend's native server under identical prompts and token limits
+- preserve context-verifier semantics for eligible requests while routing plain generation through the batch engine
+- add cancellation, per-tenant limits, and request deadlines before recommending internet-facing multi-tenant deployment
 
 ## Product Principle
 
