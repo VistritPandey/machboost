@@ -26,6 +26,7 @@ final class UITestMachBoostAPI: MachBoostAPIProtocol, @unchecked Sendable {
                     failed: 0,
                     generatedTokens: 2
                 ),
+                latencySeconds: .init(p50: 0.24, p95: 0.38),
                 generationTokensPerSecond: 42
             ),
             models: try await models(),
