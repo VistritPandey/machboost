@@ -22,6 +22,26 @@ settings:
     MARKETING_VERSION: 0.1.0
     SWIFT_VERSION: 6.0
 targets:
+  MachBoostDaemonClient:
+    type: framework
+    platform: macOS
+    sources:
+      - path: MachBoostDaemonClient
+    settings:
+      base:
+        DEFINES_MODULE: YES
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.vistritpandey.MachBoostDaemonClient
+  MachBoostPersistence:
+    type: framework
+    platform: macOS
+    sources:
+      - path: MachBoostPersistence
+    settings:
+      base:
+        DEFINES_MODULE: YES
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.vistritpandey.MachBoostPersistence
   MachBoost:
     type: application
     platform: macOS
@@ -36,6 +56,10 @@ targets:
         PRODUCT_NAME: MachBoost
         INFOPLIST_FILE: MachBoost/Info.plist
     dependencies:
+      - target: MachBoostDaemonClient
+        embed: true
+      - target: MachBoostPersistence
+        embed: true
       - package: Sparkle
   MachBoostTests:
     type: bundle.unit-test
