@@ -76,7 +76,7 @@ final class UITestMachBoostAPI: MachBoostAPIProtocol, @unchecked Sendable {
         AsyncThrowingStream { continuation in
             let task = Task<Void, Never> {
                 do {
-                    try await Task.sleep(for: .milliseconds(500))
+                    try await Task.sleep(for: .seconds(5))
                     if self.wasCancelled(request.requestID) {
                         continuation.yield(self.cancelledChatEvent(requestID: request.requestID))
                         continuation.finish()
