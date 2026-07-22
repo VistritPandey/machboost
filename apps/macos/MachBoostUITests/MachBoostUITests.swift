@@ -26,6 +26,10 @@ final class MachBoostUITests: XCTestCase {
         developerTab.click()
         XCTAssertTrue(app.staticTexts["Endpoint"].exists)
         XCTAssertTrue(app.staticTexts["OpenAI Python"].exists)
+        XCTAssertTrue(app.staticTexts["P50 latency"].exists)
+        XCTAssertTrue(app.staticTexts["240 ms"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["P95 latency"].exists)
+        XCTAssertTrue(app.staticTexts["380 ms"].exists)
     }
 
     @MainActor
