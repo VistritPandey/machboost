@@ -1,7 +1,7 @@
 import Foundation
 
-enum ConversationExporter {
-    static func markdown(_ conversation: Conversation) -> String {
+public enum ConversationExporter {
+    public static func markdown(_ conversation: Conversation) -> String {
         var lines = [
             "# \(conversation.title)",
             "",
@@ -23,7 +23,7 @@ enum ConversationExporter {
         return lines.joined(separator: "\n")
     }
 
-    static func fileName(for conversation: Conversation) -> String {
+    public static func fileName(for conversation: Conversation) -> String {
         let invalid = CharacterSet(charactersIn: "/:")
         let title = conversation.title
             .components(separatedBy: invalid)
