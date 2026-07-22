@@ -289,7 +289,10 @@ class CLITests(unittest.TestCase):
             ]
         )
 
-        with patch.object(cli, "serve_runtime") as serve_runtime:
+        with (
+            patch.dict("os.environ", {"MACHBOOST_API_TOKEN": "secret"}),
+            patch.object(cli, "serve_runtime") as serve_runtime,
+        ):
             code = cli.run_serve(args, output_stream=output, error_stream=errors)
 
         self.assertEqual(code, 0)
@@ -299,9 +302,27 @@ class CLITests(unittest.TestCase):
             replicas=3,
             max_queue=12,
             queue_timeout=7.5,
+            api_token="secret",
+            require_auth=True,
         )
         self.assertIn("Serving 3 replica(s)", output.getvalue())
-        self.assertIn("does not provide authentication", errors.getvalue())
+        self.assertIn("Bearer authentication", output.getvalue())
+        self.assertEqual(errors.getvalue(), "")
+
+    def test_serve_refuses_lan_bind_without_api_token(self):
+        output = io.StringIO()
+        errors = io.StringIO()
+        args = cli.build_parser().parse_args(["serve", "--host", "0.0.0.0"])
+
+        with (
+            patch.dict("os.environ", {}, clear=True),
+            patch.object(cli, "serve_runtime") as serve_runtime,
+        ):
+            code = cli.run_serve(args, output_stream=output, error_stream=errors)
+
+        self.assertEqual(code, 2)
+        serve_runtime.assert_not_called()
+        self.assertIn("MACHBOOST_API_TOKEN", errors.getvalue())
 
     def test_warm_preloads_model_through_resident_client(self):
         output = io.StringIO()
