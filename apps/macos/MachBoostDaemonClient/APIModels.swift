@@ -381,6 +381,16 @@ public struct ModelsResponse: Decodable, Sendable {
 
 public struct ServerMetrics: Decodable, Sendable {
     public struct Operations: Decodable, Sendable {
+        public struct Latency: Decodable, Sendable {
+            public let p50: Double
+            public let p95: Double
+
+            public init(p50: Double, p95: Double) {
+                self.p50 = p50
+                self.p95 = p95
+            }
+        }
+
         public struct Totals: Decodable, Sendable {
             public let started: Int
             public let completed: Int
@@ -413,21 +423,25 @@ public struct ServerMetrics: Decodable, Sendable {
 
         public let activeCount: Int
         public let totals: Totals
+        public let latencySeconds: Latency
         public let generationTokensPerSecond: Double
 
         public init(
             activeCount: Int,
             totals: Totals,
+            latencySeconds: Latency = .init(p50: 0, p95: 0),
             generationTokensPerSecond: Double
         ) {
             self.activeCount = activeCount
             self.totals = totals
+            self.latencySeconds = latencySeconds
             self.generationTokensPerSecond = generationTokensPerSecond
         }
 
         enum CodingKeys: String, CodingKey {
             case activeCount = "active_count"
             case totals
+            case latencySeconds = "latency_seconds"
             case generationTokensPerSecond = "generation_tokens_per_second"
         }
     }
