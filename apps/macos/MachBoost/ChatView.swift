@@ -33,6 +33,12 @@ struct ChatView: View {
             allowsMultipleSelection: true,
             onCompletion: importAttachments
         )
+        .onAppear {
+            selectAvailableModelIfNeeded()
+        }
+        .onChange(of: selectableModels.map(\.name), perform: { _ in
+            selectAvailableModelIfNeeded()
+        })
         .onDisappear {
             stop()
         }
@@ -252,6 +258,20 @@ struct ChatView: View {
     }
 
     private var isGenerating: Bool { activeRequestID != nil }
+
+    private func selectAvailableModelIfNeeded() {
+        guard
+            !selectableModels.contains(where: {
+                $0.name == conversation.model || $0.repository == conversation.model
+            }),
+            let model = selectableModels.first
+        else {
+            return
+        }
+        conversation.model = model.name
+        conversation.updatedAt = .now
+        try? modelContext.save()
+    }
 
     private func send() {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
