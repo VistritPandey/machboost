@@ -29,6 +29,20 @@ struct ServerView: View {
                 Spacer()
                 statusLabel
                 Button {
+                    Task {
+                        if appState.serverIsRunning {
+                            await appState.pauseServer()
+                        } else {
+                            await appState.resumeServer()
+                        }
+                    }
+                } label: {
+                    Label(
+                        appState.serverIsRunning ? "Pause" : "Resume",
+                        systemImage: appState.serverIsRunning ? "pause.fill" : "play.fill"
+                    )
+                }
+                Button {
                     Task { await appState.refreshMetrics() }
                 } label: {
                     Image(systemName: "arrow.clockwise")
@@ -81,7 +95,7 @@ struct ServerView: View {
                     .font(.headline)
                 Spacer()
                 Button {
-                    Task { await appState.pauseServing() }
+                    Task { await appState.unloadAllModels() }
                 } label: {
                     Label("Unload all", systemImage: "eject")
                 }
