@@ -19,7 +19,15 @@ from .client import MachBoostAPIError, MachBoostClient, ensure_server
 from .context_bench import benchmark_context_acceleration, context_fingerprint
 from .latency import benchmark_chat_latency
 from .models import alias_rows, resolve_model
-from .server import DEFAULT_HOST, DEFAULT_PORT, serve as serve_runtime
+from .server import (
+    DEFAULT_HOST,
+    DEFAULT_MAX_QUEUE,
+    DEFAULT_PORT,
+    DEFAULT_QUEUE_TIMEOUT,
+    DEFAULT_REPLICAS,
+    MAX_REPLICAS,
+    serve as serve_runtime,
+)
 from .video import TemporalVideoSampler, VideoSelection
 from .vision_auto import VISION_TOKEN_REQUEST_MODES, load_vision_calibration
 
@@ -1112,14 +1120,31 @@ def run_serve(args: argparse.Namespace, *, output_stream=None, error_stream=None
     error_stream = error_stream or sys.stderr
     print(f"MachBoost server listening on http://{args.host}:{args.port}", file=output_stream)
     print(
+        f"Serving {args.replicas} replica(s) per text model; "
+        f"queue={args.max_queue}, timeout={args.queue_timeout:g}s.",
+        file=output_stream,
+    )
+    print(
         "Models unload after their keep-alive or via `machboost stop`/`machboost shutdown`.",
         file=output_stream,
     )
+    if args.host not in {"127.0.0.1", "localhost", "::1"}:
+        print(
+            "Warning: MachBoost does not provide authentication or TLS. "
+            "Use a private network or authenticated reverse proxy.",
+            file=error_stream,
+        )
     try:
-        serve_runtime(args.host, args.port)
+        serve_runtime(
+            args.host,
+            args.port,
+            replicas=args.replicas,
+            max_queue=args.max_queue,
+            queue_timeout=args.queue_timeout,
+        )
     except KeyboardInterrupt:
         print("\nMachBoost server stopped.", file=error_stream)
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
         print(f"machboost serve error: {exc}", file=error_stream)
         return 2
     return 0
@@ -1412,11 +1437,19 @@ def run_ps(args: argparse.Namespace, *, output_stream=None, error_stream=None) -
     if not models:
         print("No resident models.", file=output_stream)
         return 0
-    print(f"{'NAME':<48} {'BACKEND':<8} {'REQUESTS':>8} {'IDLE':>9} {'KEEP ALIVE':>12}", file=output_stream)
+    print(
+        f"{'NAME':<44} {'BACKEND':<8} {'REQ':>6} {'REP':>4} "
+        f"{'ACTIVE':>6} {'QUEUE':>5} {'IDLE':>9} {'KEEP ALIVE':>12}",
+        file=output_stream,
+    )
     for model in models:
         keep_alive = "forever" if model["keep_alive_seconds"] < 0 else f"{model['keep_alive_seconds']:.0f}s"
+        scheduler = model.get("scheduler") or {}
         print(
-            f"{model['model']:<48} {model['backend']:<8} {model['requests']:>8} "
+            f"{model['model']:<44} {model['backend']:<8} {model['requests']:>6} "
+            f"{int(scheduler.get('replicas', 1)):>4} "
+            f"{int(scheduler.get('active_requests', 0)):>6} "
+            f"{int(scheduler.get('queued_requests', 0)):>5} "
             f"{model['idle_seconds']:>8.1f}s {keep_alive:>12}",
             file=output_stream,
         )
@@ -1561,6 +1594,26 @@ def build_parser() -> argparse.ArgumentParser:
     serve = subcommands.add_parser("serve", help="Start the resident MachBoost inference server.")
     serve.add_argument("--host", default=DEFAULT_HOST)
     serve.add_argument("--port", type=int, default=DEFAULT_PORT)
+    serve.add_argument(
+        "--replicas",
+        type=int,
+        choices=range(1, MAX_REPLICAS + 1),
+        default=DEFAULT_REPLICAS,
+        metavar=f"1-{MAX_REPLICAS}",
+        help="Independent accelerator instances per text model. Each replica uses additional memory.",
+    )
+    serve.add_argument(
+        "--max-queue",
+        type=int,
+        default=DEFAULT_MAX_QUEUE,
+        help="Maximum waiting requests per loaded model; zero rejects whenever all replicas are busy.",
+    )
+    serve.add_argument(
+        "--queue-timeout",
+        type=float,
+        default=DEFAULT_QUEUE_TIMEOUT,
+        help="Seconds a request may wait for a replica; negative waits indefinitely.",
+    )
 
     pull = subcommands.add_parser("pull", help="Download a Hugging Face or MLX model into the local cache.")
     pull.add_argument("model")
