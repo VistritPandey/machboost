@@ -14,6 +14,8 @@ a separate MachBoost installation.
   and delete
 - tested-model catalog, explicit downloads, architecture preflight, load state,
   memory guidance, cancellation, and unload controls
+- advanced MLX and MLX-VLM repository entry, with compatibility validation
+  before download and automatic discovery after a compatible model is cached
 - one resident daemon for several models, bounded queues, optional replicas,
   OpenAI-compatible and Ollama-compatible routes, and live metrics
 - menu-bar lifecycle, optional launch at login, and Sparkle 2 updates
@@ -67,7 +69,7 @@ by Git. The build verifies the architecture and imports MachBoost, MLX,
 
 The app normally binds the daemon to `127.0.0.1`. LAN mode binds to `0.0.0.0`,
 generates a bearer token locally, and stores it in Keychain. Every LAN endpoint
-except `/`, `/health`, and `/healthz` requires
+except `/health` and `/healthz` requires
 `Authorization: Bearer <token>`. The token is passed to the daemon through its
 process environment and is not placed in arguments or logs.
 
