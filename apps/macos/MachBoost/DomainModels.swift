@@ -185,13 +185,13 @@ struct CatalogModel: Codable, Identifiable, Hashable {
     }
 }
 
-struct APIChatMessage: Encodable {
+struct APIChatMessage: Encodable, Sendable {
     let role: String
     let content: String
     let images: [String]?
 }
 
-struct ChatRequest: Encodable {
+struct ChatRequest: Encodable, Sendable {
     let requestID: String
     let model: String
     let messages: [APIChatMessage]
@@ -200,7 +200,7 @@ struct ChatRequest: Encodable {
     let keepAlive = "forever"
     let options: Options
 
-    struct Options: Encodable {
+    struct Options: Encodable, Sendable {
         var maxTokens: Int
         var temperature: Double
         var affinityKey: String?
@@ -223,13 +223,13 @@ struct ChatRequest: Encodable {
     }
 }
 
-struct ChatEvent: Decodable {
-    struct Message: Decodable {
+struct ChatEvent: Decodable, Sendable {
+    struct Message: Decodable, Sendable {
         let role: String?
         let content: String
     }
 
-    struct MachBoost: Decodable {
+    struct MachBoost: Decodable, Sendable {
         let backend: String?
         let stats: GenerationStats?
         let timeToFirstTokenSeconds: Double?
@@ -264,7 +264,7 @@ struct ChatEvent: Decodable {
     }
 }
 
-struct GenerationStats: Decodable {
+struct GenerationStats: Decodable, Sendable {
     let generatedTokens: Int?
     let generationSeconds: Double?
     let promptTokens: Int?
@@ -276,7 +276,7 @@ struct GenerationStats: Decodable {
     }
 }
 
-struct PullEvent: Decodable {
+struct PullEvent: Decodable, Sendable {
     let requestID: String?
     let status: String?
     let file: String?
