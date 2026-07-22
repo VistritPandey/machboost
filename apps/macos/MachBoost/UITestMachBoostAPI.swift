@@ -77,6 +77,11 @@ final class UITestMachBoostAPI: MachBoostAPIProtocol, @unchecked Sendable {
         AsyncThrowingStream { continuation in
             let task = Task<Void, Never> {
                 do {
+                    let response = self.fixtureResponse(for: request)
+                    let splitIndex = response.index(
+                        response.startIndex,
+                        offsetBy: max(1, response.count / 2)
+                    )
                     try await Task.sleep(for: .seconds(5))
                     if self.wasCancelled(request.requestID) {
                         continuation.yield(self.cancelledChatEvent(requestID: request.requestID))
@@ -86,7 +91,7 @@ final class UITestMachBoostAPI: MachBoostAPIProtocol, @unchecked Sendable {
                     continuation.yield(
                         self.chatEvent(
                             requestID: request.requestID,
-                            content: "Fixture ",
+                            content: String(response[..<splitIndex]),
                             done: false
                         )
                     )
@@ -97,7 +102,7 @@ final class UITestMachBoostAPI: MachBoostAPIProtocol, @unchecked Sendable {
                         continuation.yield(
                             self.chatEvent(
                                 requestID: request.requestID,
-                                content: "response.",
+                                content: String(response[splitIndex...]),
                                 done: true
                             )
                         )
@@ -179,13 +184,16 @@ final class UITestMachBoostAPI: MachBoostAPIProtocol, @unchecked Sendable {
     }
 
     private func makeCatalog() -> [CatalogModel] {
+        let startsEmpty = ProcessInfo.processInfo.environment[
+            "MACHBOOST_UI_TEST_NO_CACHED_MODELS"
+        ] == "1"
         [
             model(
                 name: "qwen2.5:3b",
                 displayName: "Qwen2.5 3B",
                 repository: "mlx-community/Qwen2.5-3B-Instruct-4bit",
                 capabilities: ["chat", "completion"],
-                cached: true,
+                cached: !startsEmpty || downloadedModels.contains("qwen2.5:3b"),
                 recommended: true,
                 size: 1.9,
                 memory: 8
@@ -196,7 +204,7 @@ final class UITestMachBoostAPI: MachBoostAPIProtocol, @unchecked Sendable {
                 repository: "mlx-community/Qwen2.5-VL-3B-Instruct-4bit",
                 backend: "mlx-vlm",
                 capabilities: ["chat", "vision"],
-                cached: true,
+                cached: !startsEmpty || downloadedModels.contains("qwen2.5-vl:3b"),
                 recommended: true,
                 size: 2.4,
                 memory: 12
@@ -212,6 +220,15 @@ final class UITestMachBoostAPI: MachBoostAPIProtocol, @unchecked Sendable {
                 memory: 4
             ),
         ]
+    }
+
+    private func fixtureResponse(for request: ChatRequest) -> String {
+        let imageCount = request.messages.last?.images?.count ?? 0
+        let contextCount = request.context.count
+        guard imageCount > 0 || contextCount > 0 else {
+            return "Fixture response."
+        }
+        return "Fixture context: \(imageCount) image, \(contextCount) file."
     }
 
     private var cancelledRequestCount: Int {
