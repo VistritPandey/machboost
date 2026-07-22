@@ -8,6 +8,7 @@ from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
+from machboost.scheduler import RequestAdmissionError
 from machboost.server import MachBoostHTTPServer, RuntimeManager, parse_keep_alive
 
 
@@ -150,6 +151,42 @@ class FailingAccelerator(FakeAccelerator):
         raise RuntimeError("intentional streaming failure")
 
 
+class ConcurrencyProbe:
+    def __init__(self, target: int = 1) -> None:
+        self.target = target
+        self.lock = threading.Lock()
+        self.release = threading.Event()
+        self.target_entered = threading.Event()
+        self.active = 0
+        self.max_active = 0
+
+    def wait(self) -> None:
+        with self.lock:
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+            if self.active >= self.target:
+                self.target_entered.set()
+        try:
+            if not self.release.wait(timeout=3.0):
+                raise RuntimeError("test request was not released")
+        finally:
+            with self.lock:
+                self.active -= 1
+
+
+class BlockingAccelerator(FakeAccelerator):
+    def __init__(self, probe: ConcurrencyProbe) -> None:
+        super().__init__()
+        self.probe = probe
+
+    def generate_chat(self, messages, *, max_tokens, context=None, on_text=None):
+        self.chat_calls.append((messages, max_tokens, context))
+        self.probe.wait()
+        if on_text is not None:
+            on_text("hello world")
+        return "hello world", FakeStats()
+
+
 class FakeClock:
     def __init__(self) -> None:
         self.value = 100.0
@@ -264,6 +301,142 @@ class RuntimeManagerTests(unittest.TestCase):
         self.assertEqual(manager.stop("qwen2.5:3b"), 2)
         self.assertEqual(manager.ps(), [])
 
+    def test_two_text_replicas_execute_same_model_requests_concurrently(self):
+        probe = ConcurrencyProbe(target=2)
+        loaded = []
+        manager = RuntimeManager(
+            loader=lambda config: loaded.append(BlockingAccelerator(probe)) or loaded[-1],
+            replicas=2,
+        )
+        results = []
+        errors = []
+
+        def request() -> None:
+            try:
+                results.append(
+                    manager.chat(
+                        "mlx-community/example",
+                        [{"role": "user", "content": "hello"}],
+                    )
+                )
+            except Exception as exc:
+                errors.append(exc)
+
+        threads = [threading.Thread(target=request) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        try:
+            self.assertTrue(probe.target_entered.wait(timeout=2.0))
+            scheduler = manager.ps()[0]["scheduler"]
+            self.assertEqual(scheduler["active_requests"], 2)
+            self.assertEqual(scheduler["max_active_requests"], 2)
+        finally:
+            probe.release.set()
+            for thread in threads:
+                thread.join(timeout=2.0)
+
+        self.assertEqual(errors, [])
+        self.assertEqual(len(loaded), 2)
+        self.assertEqual(probe.max_active, 2)
+        self.assertEqual({result.scheduler["replica"] for result in results}, {0, 1})
+        self.assertTrue(all(result.scheduler["replicas"] == 2 for result in results))
+
+    def test_full_runtime_queue_rejects_without_waiting(self):
+        probe = ConcurrencyProbe()
+        manager = RuntimeManager(
+            loader=lambda config: BlockingAccelerator(probe),
+            max_queue=0,
+        )
+        first = threading.Thread(
+            target=lambda: manager.chat(
+                "mlx-community/example",
+                [{"role": "user", "content": "first"}],
+            )
+        )
+        first.start()
+        try:
+            self.assertTrue(probe.target_entered.wait(timeout=1.0))
+            with self.assertRaises(RequestAdmissionError) as raised:
+                manager.chat(
+                    "mlx-community/example",
+                    [{"role": "user", "content": "second"}],
+                )
+            self.assertEqual(raised.exception.reason, "queue_full")
+            self.assertEqual(manager.ps()[0]["scheduler"]["rejected_requests"], 1)
+        finally:
+            probe.release.set()
+            first.join(timeout=2.0)
+
+    def test_runtime_queue_timeout_is_visible(self):
+        probe = ConcurrencyProbe()
+        manager = RuntimeManager(
+            loader=lambda config: BlockingAccelerator(probe),
+            max_queue=1,
+            queue_timeout=0.02,
+        )
+        first = threading.Thread(
+            target=lambda: manager.chat(
+                "mlx-community/example",
+                [{"role": "user", "content": "first"}],
+            )
+        )
+        first.start()
+        try:
+            self.assertTrue(probe.target_entered.wait(timeout=1.0))
+            with self.assertRaises(RequestAdmissionError) as raised:
+                manager.chat(
+                    "mlx-community/example",
+                    [{"role": "user", "content": "second"}],
+                )
+            self.assertEqual(raised.exception.reason, "queue_timeout")
+            self.assertEqual(manager.ps()[0]["scheduler"]["timed_out_requests"], 1)
+        finally:
+            probe.release.set()
+            first.join(timeout=2.0)
+
+    def test_stop_waits_for_requests_and_releases_every_replica(self):
+        probe = ConcurrencyProbe()
+        loaded = []
+        manager = RuntimeManager(
+            loader=lambda config: loaded.append(BlockingAccelerator(probe)) or loaded[-1],
+            replicas=2,
+        )
+        request = threading.Thread(
+            target=lambda: manager.chat(
+                "mlx-community/example",
+                [{"role": "user", "content": "hello"}],
+            )
+        )
+        request.start()
+        self.assertTrue(probe.target_entered.wait(timeout=1.0))
+        stopped = []
+        stop_thread = threading.Thread(
+            target=lambda: stopped.append(manager.stop("mlx-community/example"))
+        )
+        stop_thread.start()
+        self.assertTrue(stop_thread.is_alive())
+
+        probe.release.set()
+        request.join(timeout=2.0)
+        stop_thread.join(timeout=2.0)
+
+        self.assertEqual(stopped, [1])
+        self.assertEqual([item.service.reset_calls for item in loaded], [1, 1])
+
+    def test_vlm_uses_one_safe_worker_when_text_server_has_multiple_replicas(self):
+        loaded = []
+        manager = RuntimeManager(
+            loader=lambda config: loaded.append(config) or FakeVisionAccelerator(),
+            replicas=2,
+        )
+
+        with patch("machboost.models.native_mlx_vlm_available", return_value=True):
+            entry, _ = manager.get_or_load("qwen2.5-vl:3b")
+
+        self.assertEqual(len(loaded), 1)
+        self.assertEqual(entry.config.replicas, 1)
+        self.assertEqual(entry.scheduler.snapshot()["replicas"], 1)
+
 
 class HTTPServerTests(unittest.TestCase):
     def setUp(self):
@@ -301,7 +474,9 @@ class HTTPServerTests(unittest.TestCase):
     def test_health_and_ps_endpoints(self):
         status, _, body = self.request("/healthz")
         self.assertEqual(status, 200)
-        self.assertEqual(json.loads(body)["status"], "ok")
+        health = json.loads(body)
+        self.assertEqual(health["status"], "ok")
+        self.assertEqual(health["serving"]["text_replicas"], 1)
 
         self.request(
             "/api/chat",
@@ -564,6 +739,67 @@ class HTTPServerTests(unittest.TestCase):
         row = json.loads(body)
         self.assertEqual(row["error"], "intentional streaming failure")
         self.assertTrue(row["done"])
+
+    def test_streaming_request_gets_http_503_when_queue_is_full(self):
+        probe = ConcurrencyProbe()
+        manager = RuntimeManager(
+            loader=lambda config: BlockingAccelerator(probe),
+            max_queue=0,
+        )
+        server = MachBoostHTTPServer(("127.0.0.1", 0), manager=manager)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        host, port = server.server_address
+        endpoint = f"http://{host}:{port}/api/chat"
+        first_done = threading.Event()
+
+        def first_request() -> None:
+            payload = json.dumps(
+                {
+                    "model": "mlx-community/example",
+                    "messages": [{"role": "user", "content": "first"}],
+                    "stream": False,
+                }
+            ).encode("utf-8")
+            request = Request(
+                endpoint,
+                data=payload,
+                headers={"Content-Type": "application/json"},
+            )
+            try:
+                with urlopen(request, timeout=3.0) as response:
+                    response.read()
+            finally:
+                first_done.set()
+
+        first = threading.Thread(target=first_request)
+        first.start()
+        try:
+            self.assertTrue(probe.target_entered.wait(timeout=1.0))
+            payload = json.dumps(
+                {
+                    "model": "mlx-community/example",
+                    "messages": [{"role": "user", "content": "second"}],
+                    "stream": True,
+                }
+            ).encode("utf-8")
+            request = Request(
+                endpoint,
+                data=payload,
+                headers={"Content-Type": "application/json"},
+            )
+            with self.assertRaises(HTTPError) as raised:
+                urlopen(request, timeout=2.0)
+            body = json.loads(raised.exception.read().decode("utf-8"))
+            self.assertEqual(raised.exception.code, 503)
+            self.assertEqual(body["code"], "queue_full")
+        finally:
+            probe.release.set()
+            first.join(timeout=2.0)
+            self.assertTrue(first_done.is_set())
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2.0)
 
     def test_shutdown_endpoint_stops_server_and_releases_models(self):
         self.request(
