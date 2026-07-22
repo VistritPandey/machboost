@@ -496,6 +496,7 @@ private struct MessageRow: View {
                     Image(systemName: "arrow.clockwise")
                 }
                 .accessibilityLabel("Regenerate response")
+                .accessibilityIdentifier("regenerate-response")
                 .help("Regenerate")
             }
         }
