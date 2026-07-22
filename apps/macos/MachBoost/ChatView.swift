@@ -67,6 +67,7 @@ struct ChatView: View {
                 Image(systemName: "slider.horizontal.3")
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Generation controls")
             .help("Generation controls")
             .popover(isPresented: $showsGenerationControls, arrowEdge: .bottom) {
                 generationControls
@@ -186,6 +187,7 @@ struct ChatView: View {
                     .frame(width: 28, height: 28)
             }
             .buttonStyle(.borderless)
+            .accessibilityLabel("Attach files")
             .help("Attach text, code, folder, or image")
 
             TextField("Message MachBoost", text: $draft, axis: .vertical)
@@ -213,6 +215,7 @@ struct ChatView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(.red)
+                .accessibilityLabel("Stop generation")
                 .help("Stop generation")
             } else {
                 Button {
@@ -223,6 +226,7 @@ struct ChatView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .accessibilityLabel("Send message")
                 .help("Send")
                 .keyboardShortcut(.return, modifiers: .command)
             }
@@ -446,17 +450,20 @@ private struct MessageRow: View {
             Button(action: copyMessage) {
                 Image(systemName: "doc.on.doc")
             }
+            .accessibilityLabel("Copy message")
             .help("Copy message")
             if message.role == .user {
                 Button(action: onEdit) {
                     Image(systemName: "pencil")
                 }
+                .accessibilityLabel("Edit and resend")
                 .help("Edit and resend")
             }
             if let onRegenerate {
                 Button(action: onRegenerate) {
                     Image(systemName: "arrow.clockwise")
                 }
+                .accessibilityLabel("Regenerate response")
                 .help("Regenerate")
             }
         }
