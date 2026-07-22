@@ -150,6 +150,18 @@ struct ServerView: View {
                     value: "\((appState.metrics?.operations.generationTokensPerSecond ?? 0).formatted(.number.precision(.fractionLength(1)))) tok/s",
                     systemImage: "gauge.medium"
                 )
+            }
+            GridRow {
+                MetricTile(
+                    title: "P50 latency",
+                    value: formatLatency(appState.metrics?.operations.latencySeconds.p50 ?? 0),
+                    systemImage: "timer"
+                )
+                MetricTile(
+                    title: "P95 latency",
+                    value: formatLatency(appState.metrics?.operations.latencySeconds.p95 ?? 0),
+                    systemImage: "hourglass"
+                )
                 MetricTile(
                     title: "Peak memory",
                     value: formatBytes(appState.metrics?.process.peakResidentMemoryBytes ?? 0),
@@ -323,6 +335,13 @@ struct ServerView: View {
 
     private func formatBytes(_ bytes: Int64) -> String {
         ByteCountFormatter.string(fromByteCount: bytes, countStyle: .memory)
+    }
+
+    private func formatLatency(_ seconds: Double) -> String {
+        if seconds < 1 {
+            return "\((seconds * 1_000).formatted(.number.precision(.fractionLength(0)))) ms"
+        }
+        return "\(seconds.formatted(.number.precision(.fractionLength(2)))) s"
     }
 }
 
