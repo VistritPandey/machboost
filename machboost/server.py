@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import gc
+import hmac
 import json
 import math
+import os
 import re
+import resource
 import sys
 import threading
 import time
 import uuid
+from collections import deque
 from dataclasses import asdict, dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -16,7 +20,7 @@ from urllib.parse import urlparse
 
 from . import __version__
 from .accelerator import Accelerator
-from .models import model_targets, resolve_model
+from .models import catalog_rows, model_targets, preflight_model, resolve_model
 from .scheduler import ReplicaPool, RequestAdmissionError
 from .vision_auto import load_vision_calibration
 
@@ -27,6 +31,124 @@ DEFAULT_REPLICAS = 1
 DEFAULT_MAX_QUEUE = 64
 DEFAULT_QUEUE_TIMEOUT = 300.0
 MAX_REPLICAS = 8
+MAX_REQUEST_ID_LENGTH = 128
+
+
+class RequestCancelled(RuntimeError):
+    pass
+
+
+@dataclass
+class ActiveOperation:
+    request_id: str
+    kind: str
+    model: str
+    started_at: float
+    cancel_event: threading.Event
+
+
+class OperationRegistry:
+    def __init__(
+        self,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+        history_size: int = 256,
+    ) -> None:
+        self.clock = clock
+        self._active: dict[str, ActiveOperation] = {}
+        self._history: deque[dict[str, Any]] = deque(maxlen=history_size)
+        self._lock = threading.RLock()
+        self._totals = {
+            "started": 0,
+            "completed": 0,
+            "cancelled": 0,
+            "failed": 0,
+            "generated_tokens": 0,
+        }
+
+    def begin(self, request_id: str, kind: str, model: str) -> ActiveOperation:
+        operation = ActiveOperation(
+            request_id=request_id,
+            kind=kind,
+            model=model,
+            started_at=self.clock(),
+            cancel_event=threading.Event(),
+        )
+        with self._lock:
+            if request_id in self._active:
+                raise ValueError(f"request_id is already active: {request_id}")
+            self._active[request_id] = operation
+            self._totals["started"] += 1
+        return operation
+
+    def finish(
+        self,
+        operation: ActiveOperation,
+        *,
+        status: str,
+        generated_tokens: int = 0,
+    ) -> None:
+        finished_at = self.clock()
+        with self._lock:
+            self._active.pop(operation.request_id, None)
+            if status not in {"completed", "cancelled", "failed"}:
+                raise ValueError(f"invalid operation status: {status}")
+            self._totals[status] += 1
+            self._totals["generated_tokens"] += max(0, int(generated_tokens))
+            self._history.append(
+                {
+                    "request_id": operation.request_id,
+                    "kind": operation.kind,
+                    "model": operation.model,
+                    "status": status,
+                    "duration_seconds": max(0.0, finished_at - operation.started_at),
+                    "generated_tokens": max(0, int(generated_tokens)),
+                }
+            )
+
+    def cancel(self, request_id: str) -> bool:
+        with self._lock:
+            operation = self._active.get(request_id)
+            if operation is None:
+                return False
+            operation.cancel_event.set()
+            return True
+
+    def snapshot(self) -> dict[str, Any]:
+        now = self.clock()
+        with self._lock:
+            active = [
+                {
+                    "request_id": operation.request_id,
+                    "kind": operation.kind,
+                    "model": operation.model,
+                    "elapsed_seconds": max(0.0, now - operation.started_at),
+                    "cancelling": operation.cancel_event.is_set(),
+                }
+                for operation in self._active.values()
+            ]
+            history = list(self._history)
+            totals = dict(self._totals)
+        durations = sorted(float(item["duration_seconds"]) for item in history)
+        completed_duration = sum(
+            float(item["duration_seconds"])
+            for item in history
+            if item["status"] == "completed"
+        )
+        return {
+            "active": active,
+            "active_count": len(active),
+            "totals": totals,
+            "latency_seconds": {
+                "p50": percentile(durations, 0.50),
+                "p95": percentile(durations, 0.95),
+            },
+            "generation_tokens_per_second": (
+                float(totals["generated_tokens"]) / completed_duration
+                if completed_duration > 0
+                else 0.0
+            ),
+        }
 
 
 def select_backend(model: str, backend: str = "auto") -> str:
@@ -195,6 +317,40 @@ class RuntimeManager:
         self.queue_timeout = queue_timeout
         self._models: dict[ModelConfig, LoadedModel] = {}
         self._lock = threading.RLock()
+        self.operations = OperationRegistry(clock=clock)
+
+    def run_operation(
+        self,
+        request_id: str,
+        kind: str,
+        model: str,
+        callback: Callable[[threading.Event], Any],
+    ) -> Any:
+        operation = self.operations.begin(request_id, kind, model)
+        try:
+            result = callback(operation.cancel_event)
+        except RequestCancelled:
+            self.operations.finish(operation, status="cancelled")
+            raise
+        except RequestAdmissionError as exc:
+            status = "cancelled" if exc.reason == "request_cancelled" else "failed"
+            self.operations.finish(operation, status=status)
+            if status == "cancelled":
+                raise RequestCancelled("request cancelled") from exc
+            raise
+        except Exception:
+            self.operations.finish(operation, status="failed")
+            raise
+        generated_tokens = 0
+        stats = getattr(result, "stats", None)
+        if isinstance(stats, dict):
+            generated_tokens = int(stats.get("generated_tokens") or 0)
+        self.operations.finish(
+            operation,
+            status="completed",
+            generated_tokens=generated_tokens,
+        )
+        return result
 
     def get_or_load(
         self,
@@ -272,15 +428,19 @@ class RuntimeManager:
         context: Optional[Iterable[str] | str] = None,
         emit: Optional[Callable[[str], None]] = None,
         on_admitted: Optional[Callable[[], None]] = None,
+        cancel_event: Optional[threading.Event] = None,
     ) -> GenerationResult:
+        check_cancelled(cancel_event)
         options = dict(options or {})
         entry, load_duration = self.get_or_load(model, options=options, keep_alive=keep_alive)
+        check_cancelled(cancel_event)
         max_tokens = int(options.get("num_predict", options.get("max_tokens", 128)))
         started = self.clock()
         first_emit_at: Optional[float] = None
 
         def timed_emit(text: str) -> None:
             nonlocal first_emit_at
+            check_cancelled(cancel_event)
             if text and first_emit_at is None:
                 first_emit_at = self.clock()
             if emit is not None:
@@ -293,7 +453,9 @@ class RuntimeManager:
         with entry.scheduler.slot(
             affinity_key=affinity_key,
             timeout=_optional_float(options.get("queue_timeout")),
+            cancel_event=cancel_event,
         ) as lease:
+            check_cancelled(cancel_event)
             if on_admitted is not None:
                 on_admitted()
             accelerator = lease.resource
@@ -302,7 +464,7 @@ class RuntimeManager:
                     messages,
                     max_tokens=max_tokens,
                     context=context,
-                    on_text=timed_emit if emit is not None else None,
+                    on_text=timed_emit if emit is not None or cancel_event is not None else None,
                     use_vision_cache=not bool(options.get("no_vision_cache", False)),
                     temperature=float(options.get("temperature", 0.0)),
                     cold_vision_mode=str(options.get("cold_vision", "off")),
@@ -322,8 +484,9 @@ class RuntimeManager:
                     messages,
                     max_tokens=max_tokens,
                     context=context,
-                    on_text=timed_emit if emit is not None else None,
+                    on_text=timed_emit if emit is not None or cancel_event is not None else None,
                 )
+            check_cancelled(cancel_event)
             with entry.lock:
                 entry.requests += 1
                 entry.last_used_at = self.clock()
@@ -367,15 +530,19 @@ class RuntimeManager:
         emit: Optional[Callable[[str], None]] = None,
         images: Optional[Sequence[str]] = None,
         on_admitted: Optional[Callable[[], None]] = None,
+        cancel_event: Optional[threading.Event] = None,
     ) -> GenerationResult:
+        check_cancelled(cancel_event)
         options = dict(options or {})
         entry, load_duration = self.get_or_load(model, options=options, keep_alive=keep_alive)
+        check_cancelled(cancel_event)
         max_tokens = int(options.get("num_predict", options.get("max_tokens", 128)))
         started = self.clock()
         first_emit_at: Optional[float] = None
 
         def timed_emit(text: str) -> None:
             nonlocal first_emit_at
+            check_cancelled(cancel_event)
             if text and first_emit_at is None:
                 first_emit_at = self.clock()
             if emit is not None:
@@ -385,7 +552,9 @@ class RuntimeManager:
         with entry.scheduler.slot(
             affinity_key=affinity_key,
             timeout=_optional_float(options.get("queue_timeout")),
+            cancel_event=cancel_event,
         ) as lease:
+            check_cancelled(cancel_event)
             if on_admitted is not None:
                 on_admitted()
             accelerator = lease.resource
@@ -394,7 +563,7 @@ class RuntimeManager:
                     prompt,
                     max_tokens=max_tokens,
                     context=context,
-                    on_text=timed_emit if emit is not None else None,
+                    on_text=timed_emit if emit is not None or cancel_event is not None else None,
                     images=images,
                     use_vision_cache=not bool(options.get("no_vision_cache", False)),
                     temperature=float(options.get("temperature", 0.0)),
@@ -415,8 +584,9 @@ class RuntimeManager:
                     prompt,
                     max_tokens=max_tokens,
                     context=context,
-                    on_text=timed_emit if emit is not None else None,
+                    on_text=timed_emit if emit is not None or cancel_event is not None else None,
                 )
+            check_cancelled(cancel_event)
             with entry.lock:
                 entry.requests += 1
                 entry.last_used_at = self.clock()
@@ -449,7 +619,15 @@ class RuntimeManager:
             scheduler=scheduler_result(lease, entry.config.replicas),
         )
 
-    def pull(self, model: str, *, revision: Optional[str] = None) -> dict[str, Any]:
+    def pull(
+        self,
+        model: str,
+        *,
+        revision: Optional[str] = None,
+        progress: Optional[Callable[[dict[str, Any]], None]] = None,
+        cancel_event: Optional[threading.Event] = None,
+    ) -> dict[str, Any]:
+        check_cancelled(cancel_event)
         path = Path(model).expanduser()
         if path.exists():
             return {"status": "success", "model": model, "path": str(path.resolve())}
@@ -458,7 +636,22 @@ class RuntimeManager:
             from huggingface_hub import snapshot_download
         except ImportError as exc:
             raise ImportError("Model downloads require `huggingface-hub` or a MachBoost MLX/HF extra.") from exc
-        downloaded = snapshot_download(repo_id=resolution.model, revision=revision)
+        if progress is not None:
+            progress(
+                {
+                    "status": "resolving",
+                    "model": model,
+                    "resolved_model": resolution.model,
+                }
+            )
+
+        tqdm_class = download_progress_class(progress, cancel_event)
+        downloaded = snapshot_download(
+            repo_id=resolution.model,
+            revision=revision,
+            tqdm_class=tqdm_class,
+        )
+        check_cancelled(cancel_event)
         return {
             "status": "success",
             "model": model,
@@ -512,6 +705,23 @@ class RuntimeManager:
             "vision_replicas": 1,
             "max_queue": self.max_queue,
             "queue_timeout_seconds": self.queue_timeout,
+        }
+
+    def metrics(self) -> dict[str, Any]:
+        models = self.ps()
+        schedulers = [item["scheduler"] for item in models]
+        return {
+            "schema": "machboost.metrics.v1",
+            "timestamp": utc_timestamp(),
+            "operations": self.operations.snapshot(),
+            "models": models,
+            "scheduler": {
+                "active_requests": sum(int(item["active_requests"]) for item in schedulers),
+                "queued_requests": sum(int(item["queued_requests"]) for item in schedulers),
+                "rejected_requests": sum(int(item["rejected_requests"]) for item in schedulers),
+                "timed_out_requests": sum(int(item["timed_out_requests"]) for item in schedulers),
+            },
+            "process": process_metrics(),
         }
 
     def close(self) -> None:
@@ -636,12 +846,89 @@ def stats_dict(stats: Any) -> dict[str, Any]:
         }
 
 
+def check_cancelled(cancel_event: Optional[threading.Event]) -> None:
+    if cancel_event is not None and cancel_event.is_set():
+        raise RequestCancelled("request cancelled")
+
+
+def download_progress_class(
+    progress: Optional[Callable[[dict[str, Any]], None]],
+    cancel_event: Optional[threading.Event],
+):
+    if progress is None and cancel_event is None:
+        return None
+    try:
+        from tqdm.auto import tqdm
+    except ImportError:
+        return None
+
+    class MachBoostDownloadProgress(tqdm):
+        def __init__(self, *args, **kwargs):
+            if progress is not None:
+                kwargs["disable"] = True
+            super().__init__(*args, **kwargs)
+            self._report()
+
+        def update(self, amount=1):
+            check_cancelled(cancel_event)
+            result = super().update(amount)
+            self._report()
+            check_cancelled(cancel_event)
+            return result
+
+        def _report(self) -> None:
+            if progress is None:
+                return
+            progress(
+                {
+                    "status": "downloading",
+                    "file": str(self.desc or "model files"),
+                    "completed": int(self.n),
+                    "total": int(self.total) if self.total is not None else None,
+                    "unit": str(self.unit or "B"),
+                }
+            )
+
+    return MachBoostDownloadProgress
+
+
+def percentile(values: Sequence[float], ratio: float) -> float:
+    if not values:
+        return 0.0
+    index = max(0, min(len(values) - 1, math.ceil(len(values) * ratio) - 1))
+    return float(values[index])
+
+
+def process_metrics() -> dict[str, Any]:
+    usage = resource.getrusage(resource.RUSAGE_SELF)
+    peak_rss = int(usage.ru_maxrss)
+    if sys.platform != "darwin":
+        peak_rss *= 1024
+    return {
+        "pid": os.getpid(),
+        "peak_resident_memory_bytes": peak_rss,
+        "user_cpu_seconds": float(usage.ru_utime),
+        "system_cpu_seconds": float(usage.ru_stime),
+    }
+
+
 class MachBoostHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
-    def __init__(self, server_address, manager: Optional[RuntimeManager] = None) -> None:
+    def __init__(
+        self,
+        server_address,
+        manager: Optional[RuntimeManager] = None,
+        *,
+        api_token: Optional[str] = None,
+        require_auth: bool = False,
+    ) -> None:
         self.manager = manager or RuntimeManager()
+        self.api_token = api_token or os.environ.get("MACHBOOST_API_TOKEN")
+        self.require_auth = bool(require_auth)
+        if self.require_auth and not self.api_token:
+            raise ValueError("secured serving requires MACHBOOST_API_TOKEN")
         super().__init__(server_address, MachBoostRequestHandler)
         self._reaper_stop = threading.Event()
         self._reaper = threading.Thread(
@@ -678,11 +965,25 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                     "status": "ok",
                     "version": __version__,
                     "serving": self.runtime.serving_config(),
+                    "authentication": "required" if self.server.require_auth else "local",  # type: ignore[attr-defined]
                 }
             )
             return
+        if not self.authorize():
+            return
         if path == "/api/version":
             self.send_json({"version": __version__})
+            return
+        if path == "/api/catalog":
+            self.send_json(
+                {
+                    "schema": "machboost.catalog.v1",
+                    "models": catalog_rows(),
+                }
+            )
+            return
+        if path == "/api/metrics":
+            self.send_json(self.runtime.metrics())
             return
         if path == "/api/ps":
             self.send_json({"models": self.runtime.ps()})
@@ -706,6 +1007,8 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
+        if not self.authorize():
+            return
         try:
             payload = self.read_json()
             if path == "/api/chat":
@@ -715,9 +1018,19 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                 self.handle_ollama_generate(payload)
                 return
             if path == "/api/pull":
-                model = required_string(payload, "model", aliases=("name",))
-                result = self.runtime.pull(model, revision=payload.get("revision"))
-                self.send_json(result)
+                self.handle_pull(payload)
+                return
+            if path == "/api/cancel":
+                request_id = required_string(payload, "request_id")
+                cancelled = self.runtime.operations.cancel(request_id)
+                self.send_json(
+                    {
+                        "status": "cancelling" if cancelled else "not_found",
+                        "request_id": request_id,
+                        "cancelled": cancelled,
+                    },
+                    status=202 if cancelled else 404,
+                )
                 return
             if path == "/api/load":
                 model = required_string(payload, "model", aliases=("name",))
@@ -755,14 +1068,19 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                 model = str(payload.get("model") or payload.get("name") or "")
                 resolved_model = resolve_model(model).model
                 matches = [item for item in self.runtime.ps() if item["model"] == resolved_model]
-                self.send_json(
-                    {
-                        "model": model,
-                        "resolved_model": resolved_model,
-                        "loaded": bool(matches),
-                        "instances": matches,
-                    }
-                )
+                body = {
+                    "model": model,
+                    "resolved_model": resolved_model,
+                    "loaded": bool(matches),
+                    "instances": matches,
+                }
+                if bool(payload.get("preflight", False)):
+                    body["preflight"] = preflight_model(
+                        model,
+                        str(payload.get("backend") or "auto"),
+                        allow_network=bool(payload.get("allow_network", False)),
+                    )
+                self.send_json(body)
                 return
             if path == "/v1/chat/completions":
                 self.handle_openai_chat(payload)
@@ -775,7 +1093,11 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
             return
         except RequestAdmissionError as exc:
             if not self.wfile.closed:
-                self.send_error_json(503, str(exc), code=exc.reason)
+                status = 409 if exc.reason == "request_cancelled" else 503
+                self.send_error_json(status, str(exc), code=exc.reason)
+        except RequestCancelled as exc:
+            if not self.wfile.closed:
+                self.send_error_json(409, str(exc), code="request_cancelled")
         except (ImportError, RuntimeError, TypeError, ValueError) as exc:
             if not self.wfile.closed:
                 self.send_error_json(400, str(exc))
@@ -788,15 +1110,23 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
         messages = normalize_messages(payload.get("messages") or ())
         options = dict(payload.get("options") or {})
         context = payload.get("context")
+        request_id = request_identifier(payload, "chat")
         if not bool(payload.get("stream", True)):
-            result = self.runtime.chat(
+            result = self.runtime.run_operation(
+                request_id,
+                "chat",
                 model,
-                messages,
-                options=options,
-                keep_alive=payload.get("keep_alive"),
-                context=context,
+                lambda cancel_event: self.runtime.chat(
+                    model,
+                    messages,
+                    options=options,
+                    keep_alive=payload.get("keep_alive"),
+                    context=context,
+                    cancel_event=cancel_event,
+                ),
             )
             body = {
+                "request_id": request_id,
                 "model": model,
                 "created_at": utc_timestamp(),
                 "message": {"role": "assistant", "content": result.text},
@@ -815,6 +1145,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
         def emit(text: str) -> None:
             self.write_json_line(
                 {
+                    "request_id": request_id,
                     "model": model,
                     "created_at": utc_timestamp(),
                     "message": {"role": "assistant", "content": text},
@@ -823,24 +1154,45 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
             )
 
         try:
-            result = self.runtime.chat(
+            result = self.runtime.run_operation(
+                request_id,
+                "chat",
                 model,
-                messages,
-                options=options,
-                keep_alive=payload.get("keep_alive"),
-                context=context,
-                emit=emit,
-                on_admitted=on_admitted,
+                lambda cancel_event: self.runtime.chat(
+                    model,
+                    messages,
+                    options=options,
+                    keep_alive=payload.get("keep_alive"),
+                    context=context,
+                    emit=emit,
+                    on_admitted=on_admitted,
+                    cancel_event=cancel_event,
+                ),
             )
         except RequestAdmissionError:
             raise
+        except RequestCancelled:
+            if not stream_started:
+                raise
+            self.write_json_line(
+                {
+                    "request_id": request_id,
+                    "model": model,
+                    "done": True,
+                    "done_reason": "cancelled",
+                }
+            )
+            return
         except Exception as exc:
             if not stream_started:
                 raise
-            self.write_json_line({"error": str(exc), "done": True})
+            self.write_json_line(
+                {"request_id": request_id, "error": str(exc), "done": True}
+            )
             return
         self.write_json_line(
             {
+                "request_id": request_id,
                 "model": model,
                 "created_at": utc_timestamp(),
                 "message": {"role": "assistant", "content": ""},
@@ -853,17 +1205,25 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
         prompt = str(payload.get("prompt") or "")
         options = dict(payload.get("options") or {})
         context = payload.get("context")
+        request_id = request_identifier(payload, "generate")
         if not bool(payload.get("stream", True)):
-            result = self.runtime.generate(
+            result = self.runtime.run_operation(
+                request_id,
+                "generate",
                 model,
-                prompt,
-                options=options,
-                keep_alive=payload.get("keep_alive"),
-                context=context,
-                images=normalize_image_list(payload.get("images")),
+                lambda cancel_event: self.runtime.generate(
+                    model,
+                    prompt,
+                    options=options,
+                    keep_alive=payload.get("keep_alive"),
+                    context=context,
+                    images=normalize_image_list(payload.get("images")),
+                    cancel_event=cancel_event,
+                ),
             )
             self.send_json(
                 {
+                    "request_id": request_id,
                     "model": model,
                     "created_at": utc_timestamp(),
                     "response": result.text,
@@ -881,38 +1241,81 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
 
         def emit(text: str) -> None:
             self.write_json_line(
-                {"model": model, "created_at": utc_timestamp(), "response": text, "done": False}
+                {
+                    "request_id": request_id,
+                    "model": model,
+                    "created_at": utc_timestamp(),
+                    "response": text,
+                    "done": False,
+                }
             )
 
         try:
-            result = self.runtime.generate(
+            result = self.runtime.run_operation(
+                request_id,
+                "generate",
                 model,
-                prompt,
-                options=options,
-                keep_alive=payload.get("keep_alive"),
-                context=context,
-                emit=emit,
-                images=normalize_image_list(payload.get("images")),
-                on_admitted=on_admitted,
+                lambda cancel_event: self.runtime.generate(
+                    model,
+                    prompt,
+                    options=options,
+                    keep_alive=payload.get("keep_alive"),
+                    context=context,
+                    emit=emit,
+                    images=normalize_image_list(payload.get("images")),
+                    on_admitted=on_admitted,
+                    cancel_event=cancel_event,
+                ),
             )
         except RequestAdmissionError:
             raise
+        except RequestCancelled:
+            if not stream_started:
+                raise
+            self.write_json_line(
+                {
+                    "request_id": request_id,
+                    "model": model,
+                    "done": True,
+                    "done_reason": "cancelled",
+                }
+            )
+            return
         except Exception as exc:
             if not stream_started:
                 raise
-            self.write_json_line({"error": str(exc), "done": True})
+            self.write_json_line(
+                {"request_id": request_id, "error": str(exc), "done": True}
+            )
             return
         self.write_json_line(
-            {"model": model, "created_at": utc_timestamp(), "response": "", **result.ollama_metrics()}
+            {
+                "request_id": request_id,
+                "model": model,
+                "created_at": utc_timestamp(),
+                "response": "",
+                **result.ollama_metrics(),
+            }
         )
 
     def handle_openai_chat(self, payload: dict[str, Any]) -> None:
         model = required_string(payload, "model")
         messages = normalize_messages(payload.get("messages") or ())
         options = openai_options(payload)
-        request_id = f"chatcmpl-{uuid.uuid4().hex}"
+        request_id = request_identifier(payload, "chatcmpl")
         if not bool(payload.get("stream", False)):
-            result = self.runtime.chat(model, messages, options=options, context=payload.get("context"))
+            result = self.runtime.run_operation(
+                request_id,
+                "chat",
+                model,
+                lambda cancel_event: self.runtime.chat(
+                    model,
+                    messages,
+                    options=options,
+                    context=payload.get("context"),
+                    cancel_event=cancel_event,
+                ),
+            )
             self.send_json(
                 {
                     "id": request_id,
@@ -947,16 +1350,39 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
             )
 
         try:
-            result = self.runtime.chat(
+            result = self.runtime.run_operation(
+                request_id,
+                "chat",
                 model,
-                messages,
-                options=options,
-                context=payload.get("context"),
-                emit=emit,
-                on_admitted=on_admitted,
+                lambda cancel_event: self.runtime.chat(
+                    model,
+                    messages,
+                    options=options,
+                    context=payload.get("context"),
+                    emit=emit,
+                    on_admitted=on_admitted,
+                    cancel_event=cancel_event,
+                ),
             )
         except RequestAdmissionError:
             raise
+        except RequestCancelled:
+            if not stream_started:
+                raise
+            self.write_sse(
+                {
+                    "id": request_id,
+                    "object": "chat.completion.chunk",
+                    "created": int(time.time()),
+                    "model": model,
+                    "choices": [
+                        {"index": 0, "delta": {}, "finish_reason": "cancelled"}
+                    ],
+                }
+            )
+            self.wfile.write(b"data: [DONE]\n\n")
+            self.wfile.flush()
+            return
         except Exception as exc:
             if not stream_started:
                 raise
@@ -981,14 +1407,20 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
         model = required_string(payload, "model")
         prompt = str(payload.get("prompt") or "")
         options = openai_options(payload)
-        request_id = f"cmpl-{uuid.uuid4().hex}"
+        request_id = request_identifier(payload, "cmpl")
         if not bool(payload.get("stream", False)):
-            result = self.runtime.generate(
+            result = self.runtime.run_operation(
+                request_id,
+                "generate",
                 model,
-                prompt,
-                options=options,
-                context=payload.get("context"),
-                images=normalize_image_list(payload.get("images")),
+                lambda cancel_event: self.runtime.generate(
+                    model,
+                    prompt,
+                    options=options,
+                    context=payload.get("context"),
+                    images=normalize_image_list(payload.get("images")),
+                    cancel_event=cancel_event,
+                ),
             )
             self.send_json(
                 {
@@ -1022,17 +1454,40 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
             )
 
         try:
-            result = self.runtime.generate(
+            result = self.runtime.run_operation(
+                request_id,
+                "generate",
                 model,
-                prompt,
-                options=options,
-                context=payload.get("context"),
-                emit=emit,
-                images=normalize_image_list(payload.get("images")),
-                on_admitted=on_admitted,
+                lambda cancel_event: self.runtime.generate(
+                    model,
+                    prompt,
+                    options=options,
+                    context=payload.get("context"),
+                    emit=emit,
+                    images=normalize_image_list(payload.get("images")),
+                    on_admitted=on_admitted,
+                    cancel_event=cancel_event,
+                ),
             )
         except RequestAdmissionError:
             raise
+        except RequestCancelled:
+            if not stream_started:
+                raise
+            self.write_sse(
+                {
+                    "id": request_id,
+                    "object": "text_completion",
+                    "created": int(time.time()),
+                    "model": model,
+                    "choices": [
+                        {"index": 0, "text": "", "finish_reason": "cancelled"}
+                    ],
+                }
+            )
+            self.wfile.write(b"data: [DONE]\n\n")
+            self.wfile.flush()
+            return
         except Exception as exc:
             if not stream_started:
                 raise
@@ -1053,6 +1508,77 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
         self.wfile.write(b"data: [DONE]\n\n")
         self.wfile.flush()
 
+    def handle_pull(self, payload: dict[str, Any]) -> None:
+        model = required_string(payload, "model", aliases=("name",))
+        request_id = request_identifier(payload, "pull")
+        if not bool(payload.get("stream", False)):
+            result = self.runtime.run_operation(
+                request_id,
+                "pull",
+                model,
+                lambda cancel_event: self.runtime.pull(
+                    model,
+                    revision=payload.get("revision"),
+                    cancel_event=cancel_event,
+                ),
+            )
+            self.send_json({"request_id": request_id, **result})
+            return
+
+        self.start_stream("application/x-ndjson")
+
+        def progress(event: dict[str, Any]) -> None:
+            self.write_json_line(
+                {"request_id": request_id, "done": False, **event}
+            )
+
+        try:
+            result = self.runtime.run_operation(
+                request_id,
+                "pull",
+                model,
+                lambda cancel_event: self.runtime.pull(
+                    model,
+                    revision=payload.get("revision"),
+                    progress=progress,
+                    cancel_event=cancel_event,
+                ),
+            )
+        except RequestCancelled:
+            self.write_json_line(
+                {
+                    "request_id": request_id,
+                    "status": "cancelled",
+                    "done": True,
+                }
+            )
+            return
+        except Exception as exc:
+            self.write_json_line(
+                {"request_id": request_id, "error": str(exc), "done": True}
+            )
+            return
+        self.write_json_line({"request_id": request_id, "done": True, **result})
+
+    def authorize(self) -> bool:
+        if not self.server.require_auth:  # type: ignore[attr-defined]
+            return True
+        expected = str(self.server.api_token or "")  # type: ignore[attr-defined]
+        supplied = self.headers.get("Authorization", "")
+        prefix = "Bearer "
+        valid = supplied.startswith(prefix) and hmac.compare_digest(
+            supplied[len(prefix) :],
+            expected,
+        )
+        if valid:
+            return True
+        self.send_json(
+            {"error": "authentication required", "code": "unauthorized"},
+            status=401,
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+        return False
+
     def read_json(self) -> dict[str, Any]:
         length = int(self.headers.get("Content-Length", "0"))
         if length <= 0:
@@ -1063,12 +1589,20 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
             raise ValueError("request body must be a JSON object")
         return value
 
-    def send_json(self, payload: dict[str, Any], status: int = 200) -> None:
+    def send_json(
+        self,
+        payload: dict[str, Any],
+        status: int = 200,
+        *,
+        headers: Optional[dict[str, str]] = None,
+    ) -> None:
         body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Connection", "close")
+        for name, value in (headers or {}).items():
+            self.send_header(name, value)
         self.end_headers()
         self.wfile.write(body)
 
@@ -1121,6 +1655,18 @@ def required_string(payload: dict[str, Any], key: str, *, aliases: Sequence[str]
     if not value:
         raise ValueError(f"missing required field: {key}")
     return value
+
+
+def request_identifier(payload: dict[str, Any], prefix: str) -> str:
+    supplied = str(payload.get("request_id") or "").strip()
+    request_id = supplied or f"{prefix}-{uuid.uuid4().hex}"
+    if len(request_id) > MAX_REQUEST_ID_LENGTH:
+        raise ValueError(
+            f"request_id cannot exceed {MAX_REQUEST_ID_LENGTH} characters"
+        )
+    if re.fullmatch(r"[A-Za-z0-9._:-]+", request_id) is None:
+        raise ValueError("request_id contains unsupported characters")
+    return request_id
 
 
 def normalize_messages(messages: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1251,6 +1797,8 @@ def serve(
     replicas: int = DEFAULT_REPLICAS,
     max_queue: int = DEFAULT_MAX_QUEUE,
     queue_timeout: float = DEFAULT_QUEUE_TIMEOUT,
+    api_token: Optional[str] = None,
+    require_auth: bool = False,
 ) -> None:
     if manager is None:
         manager = RuntimeManager(
@@ -1258,7 +1806,12 @@ def serve(
             max_queue=max_queue,
             queue_timeout=queue_timeout,
         )
-    server = MachBoostHTTPServer((host, int(port)), manager=manager)
+    server = MachBoostHTTPServer(
+        (host, int(port)),
+        manager=manager,
+        api_token=api_token,
+        require_auth=require_auth,
+    )
     if ready is not None:
         ready(server)
     try:
