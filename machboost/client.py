@@ -15,7 +15,16 @@ from .server import DEFAULT_HOST, DEFAULT_PORT
 
 
 class MachBoostAPIError(RuntimeError):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        status: Optional[int] = None,
+        code: Optional[str] = None,
+    ) -> None:
+        super().__init__(message)
+        self.status = status
+        self.code = code
 
 
 def default_endpoint() -> str:
@@ -90,6 +99,8 @@ class MachBoostClient:
         images: Optional[list[str] | str] = None,
         keep_alive: Any = None,
         stream: bool = True,
+        affinity_key: Optional[str] = None,
+        queue_timeout: Optional[float] = None,
     ) -> Iterator[dict[str, Any]] | dict[str, Any]:
         chat_messages = [dict(message) for message in messages]
         if images is not None:
@@ -100,10 +111,15 @@ class MachBoostClient:
                 chat_messages[-1],
             )
             target["images"] = images
+        request_options = dict(options or {})
+        if affinity_key is not None:
+            request_options["affinity_key"] = affinity_key
+        if queue_timeout is not None:
+            request_options["queue_timeout"] = float(queue_timeout)
         payload: dict[str, Any] = {
             "model": model,
             "messages": chat_messages,
-            "options": dict(options or {}),
+            "options": request_options,
             "stream": bool(stream),
         }
         if context is not None:
@@ -124,11 +140,18 @@ class MachBoostClient:
         images: Optional[list[str] | str] = None,
         keep_alive: Any = None,
         stream: bool = True,
+        affinity_key: Optional[str] = None,
+        queue_timeout: Optional[float] = None,
     ) -> Iterator[dict[str, Any]] | dict[str, Any]:
+        request_options = dict(options or {})
+        if affinity_key is not None:
+            request_options["affinity_key"] = affinity_key
+        if queue_timeout is not None:
+            request_options["queue_timeout"] = float(queue_timeout)
         payload: dict[str, Any] = {
             "model": model,
             "prompt": prompt,
-            "options": dict(options or {}),
+            "options": request_options,
             "stream": bool(stream),
         }
         if context is not None:
@@ -203,12 +226,18 @@ class MachBoostClient:
 
 def api_error(exc: Exception) -> MachBoostAPIError:
     if isinstance(exc, HTTPError):
+        code = None
         try:
             payload = json.loads(exc.read().decode("utf-8"))
             message = payload.get("error") or str(exc)
+            code = payload.get("code")
         except Exception:
             message = str(exc)
-        return MachBoostAPIError(str(message))
+        return MachBoostAPIError(
+            str(message),
+            status=exc.code,
+            code=str(code) if code is not None else None,
+        )
     if isinstance(exc, URLError):
         return MachBoostAPIError(f"cannot reach MachBoost server: {exc.reason}")
     return MachBoostAPIError(str(exc))
