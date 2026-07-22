@@ -124,21 +124,21 @@ struct ChatView: View {
                 }
                 .padding(.vertical, 12)
             }
-            .onChange(of: conversation.messages.count, initial: false) { _, _ in
+            .onChange(of: conversation.messages.count, perform: { _ in
                 if let last = conversation.orderedMessages.last {
                     withAnimation(.easeOut(duration: 0.18)) {
                         proxy.scrollTo(last.id, anchor: .bottom)
                     }
                 }
-            }
+            })
             .onChange(
                 of: conversation.orderedMessages.last?.content,
-                initial: false
-            ) { _, _ in
-                if let last = conversation.orderedMessages.last {
-                    proxy.scrollTo(last.id, anchor: .bottom)
+                perform: { _ in
+                    if let last = conversation.orderedMessages.last {
+                        proxy.scrollTo(last.id, anchor: .bottom)
+                    }
                 }
-            }
+            )
         }
     }
 
