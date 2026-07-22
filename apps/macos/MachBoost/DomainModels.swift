@@ -137,6 +137,14 @@ struct ServerConfiguration: Codable, Equatable {
     var bindHost: String { lanEnabled ? "0.0.0.0" : "127.0.0.1" }
     var clientHost: String { "127.0.0.1" }
     var endpoint: URL { URL(string: "http://\(clientHost):\(port)")! }
+    var advertisedEndpoint: URL {
+        guard lanEnabled else { return endpoint }
+        var components = URLComponents()
+        components.scheme = "http"
+        components.host = ProcessInfo.processInfo.hostName
+        components.port = port
+        return components.url ?? endpoint
+    }
 }
 
 struct CatalogResponse: Decodable {
