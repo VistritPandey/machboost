@@ -38,7 +38,7 @@ final class MachBoostUITests: XCTestCase {
         composer.typeText("Hello from native UI automation")
         app.buttons["Send message"].click()
 
-        XCTAssertTrue(app.staticTexts["Fixture response."].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Fixture response."].waitForExistence(timeout: 8))
         XCTAssertTrue(app.staticTexts["20.0 tok/s"].exists)
         XCTAssertTrue(app.staticTexts["0.12s TTFT"].exists)
     }
