@@ -37,9 +37,16 @@ def default_endpoint() -> str:
 
 
 class MachBoostClient:
-    def __init__(self, endpoint: Optional[str] = None, *, timeout: float = 300.0) -> None:
+    def __init__(
+        self,
+        endpoint: Optional[str] = None,
+        *,
+        timeout: float = 300.0,
+        api_token: Optional[str] = None,
+    ) -> None:
         self.endpoint = (endpoint or default_endpoint()).rstrip("/")
         self.timeout = float(timeout)
+        self.api_token = api_token if api_token is not None else os.environ.get("MACHBOOST_API_TOKEN")
 
     def health(self) -> dict[str, Any]:
         return self.get("/healthz")
@@ -56,10 +63,27 @@ class MachBoostClient:
     def tags(self) -> list[dict[str, Any]]:
         return list(self.get("/api/tags").get("models") or ())
 
-    def pull(self, model: str, *, revision: Optional[str] = None) -> dict[str, Any]:
-        payload = {"model": model}
+    def catalog(self) -> list[dict[str, Any]]:
+        return list(self.get("/api/catalog").get("models") or ())
+
+    def metrics(self) -> dict[str, Any]:
+        return self.get("/api/metrics")
+
+    def pull(
+        self,
+        model: str,
+        *,
+        revision: Optional[str] = None,
+        stream: bool = False,
+        request_id: Optional[str] = None,
+    ) -> dict[str, Any] | Iterator[dict[str, Any]]:
+        payload: dict[str, Any] = {"model": model, "stream": bool(stream)}
         if revision:
             payload["revision"] = revision
+        if request_id:
+            payload["request_id"] = request_id
+        if stream:
+            return self.stream("/api/pull", payload)
         return self.post("/api/pull", payload)
 
     def load(
@@ -80,8 +104,35 @@ class MachBoostClient:
             },
         )
 
-    def show(self, model: str) -> dict[str, Any]:
-        return self.post("/api/show", {"model": model})
+    def show(
+        self,
+        model: str,
+        *,
+        preflight: bool = False,
+        allow_network: bool = False,
+        backend: str = "auto",
+    ) -> dict[str, Any]:
+        return self.post(
+            "/api/show",
+            {
+                "model": model,
+                "preflight": bool(preflight),
+                "allow_network": bool(allow_network),
+                "backend": backend,
+            },
+        )
+
+    def cancel(self, request_id: str) -> bool:
+        try:
+            return bool(
+                self.post("/api/cancel", {"request_id": request_id}).get(
+                    "cancelled"
+                )
+            )
+        except MachBoostAPIError as exc:
+            if exc.status == 404:
+                return False
+            raise
 
     def stop(self, model: Optional[str] = None) -> dict[str, Any]:
         return self.post("/api/stop", {"model": model} if model else {})
@@ -101,6 +152,7 @@ class MachBoostClient:
         stream: bool = True,
         affinity_key: Optional[str] = None,
         queue_timeout: Optional[float] = None,
+        request_id: Optional[str] = None,
     ) -> Iterator[dict[str, Any]] | dict[str, Any]:
         chat_messages = [dict(message) for message in messages]
         if images is not None:
@@ -126,6 +178,8 @@ class MachBoostClient:
             payload["context"] = context
         if keep_alive is not None:
             payload["keep_alive"] = keep_alive
+        if request_id is not None:
+            payload["request_id"] = request_id
         if stream:
             return self.stream("/api/chat", payload)
         return self.post("/api/chat", payload)
@@ -142,6 +196,7 @@ class MachBoostClient:
         stream: bool = True,
         affinity_key: Optional[str] = None,
         queue_timeout: Optional[float] = None,
+        request_id: Optional[str] = None,
     ) -> Iterator[dict[str, Any]] | dict[str, Any]:
         request_options = dict(options or {})
         if affinity_key is not None:
@@ -160,6 +215,8 @@ class MachBoostClient:
             payload["images"] = images
         if keep_alive is not None:
             payload["keep_alive"] = keep_alive
+        if request_id is not None:
+            payload["request_id"] = request_id
         if stream:
             return self.stream("/api/generate", payload)
         return self.post("/api/generate", payload)
@@ -176,7 +233,10 @@ class MachBoostClient:
             self.endpoint + path,
             method="POST",
             data=data,
-            headers={"Content-Type": "application/json", "Accept": "application/x-ndjson"},
+            headers=self._headers(
+                content_type=True,
+                accept="application/x-ndjson",
+            ),
         )
         try:
             response = urlopen(request, timeout=self.timeout)
@@ -206,7 +266,7 @@ class MachBoostClient:
             self.endpoint + path,
             method=method,
             data=data,
-            headers={"Content-Type": "application/json"} if data is not None else {},
+            headers=self._headers(content_type=data is not None),
         )
         try:
             with urlopen(request, timeout=self.timeout) as response:
@@ -222,6 +282,21 @@ class MachBoostClient:
         if "error" in value:
             raise MachBoostAPIError(str(value["error"]))
         return value
+
+    def _headers(
+        self,
+        *,
+        content_type: bool = False,
+        accept: Optional[str] = None,
+    ) -> dict[str, str]:
+        headers: dict[str, str] = {}
+        if content_type:
+            headers["Content-Type"] = "application/json"
+        if accept:
+            headers["Accept"] = accept
+        if self.api_token:
+            headers["Authorization"] = f"Bearer {self.api_token}"
+        return headers
 
 
 def api_error(exc: Exception) -> MachBoostAPIError:
