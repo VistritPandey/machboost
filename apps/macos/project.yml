@@ -29,10 +29,9 @@ targets:
       - path: MachBoost
     resources:
       - path: Resources
-    entitlements:
-      path: MachBoost/MachBoost.entitlements
     settings:
       base:
+        CODE_SIGN_ENTITLEMENTS: MachBoost/MachBoost.entitlements
         PRODUCT_BUNDLE_IDENTIFIER: com.vistritpandey.MachBoost
         PRODUCT_NAME: MachBoost
         INFOPLIST_FILE: MachBoost/Info.plist
