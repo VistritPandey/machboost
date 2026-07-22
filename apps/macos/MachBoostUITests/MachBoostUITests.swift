@@ -31,6 +31,7 @@ final class MachBoostUITests: XCTestCase {
     private func launchApp() -> XCUIApplication {
         continueAfterFailure = false
         let app = XCUIApplication()
+        app.launchEnvironment["MACHBOOST_UI_TESTING"] = "1"
         app.launchEnvironment["MACHBOOST_SOURCE_ROOT"] = repositoryRoot()
         app.launch()
         return app
