@@ -54,7 +54,13 @@ jobs:
           brew install xcodegen
       - name: Regenerate Xcode project
         working-directory: apps/macos
-        run: xcodegen generate
+        run: |
+          xcodegen generate
+          git diff --exit-code MachBoost.xcodeproj
+      - name: Validate macOS release scripts
+        run: |
+          find scripts -type f -name '*.sh' -print0 \
+            | xargs -0 -n1 bash -n
       - name: Run native unit tests
         env:
           MACHBOOST_SOURCE_ROOT: ${{ github.workspace }}
