@@ -40,9 +40,15 @@ final class MachBoostAPI: @unchecked Sendable {
         self.decoder = JSONDecoder()
     }
 
-    func health() async throws -> Bool {
+    func health(timeoutInterval: TimeInterval = 1) async throws -> Bool {
         struct Health: Decodable { let status: String }
-        let health: Health = try await get("/healthz", authenticated: false)
+        var request = try request(
+            path: "/healthz",
+            method: "GET",
+            authenticated: false
+        )
+        request.timeoutInterval = timeoutInterval
+        let health: Health = try await perform(request)
         return health.status == "ok"
     }
 
