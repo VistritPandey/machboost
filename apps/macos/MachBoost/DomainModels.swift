@@ -163,8 +163,10 @@ struct CatalogModel: Codable, Identifiable, Hashable {
     let recommended: Bool
     let tested: Bool
     let downloadSizeGB: Double?
+    let diskSizeGB: Double?
     let minimumMemoryGB: Double?
     let support: String
+    let supportReason: String?
 
     var id: String { name }
     var supportsVision: Bool { capabilities.contains("vision") }
@@ -180,8 +182,10 @@ struct CatalogModel: Codable, Identifiable, Hashable {
         case recommended
         case tested
         case downloadSizeGB = "download_size_gb"
+        case diskSizeGB = "disk_size_gb"
         case minimumMemoryGB = "minimum_memory_gb"
         case support
+        case supportReason = "support_reason"
     }
 }
 
