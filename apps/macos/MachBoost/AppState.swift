@@ -83,16 +83,22 @@ final class AppState {
             configuration.port = min(65_535, max(1_024, configuration.port))
             configuration.replicas = min(8, max(1, configuration.replicas))
             configuration.maxQueue = max(0, configuration.maxQueue)
+            let previousConfiguration = self.configuration
+            let previousToken = apiToken
+            var nextToken = apiToken
             if configuration.lanEnabled {
-                apiToken = try KeychainStore.tokenOrCreate()
+                nextToken = try KeychainStore.tokenOrCreate()
             }
+            try await daemon.restart(
+                currentEndpoint: previousConfiguration.endpoint,
+                currentAPIToken: previousToken,
+                configuration: configuration,
+                apiToken: nextToken
+            )
             self.configuration = configuration
+            apiToken = nextToken
             Self.saveConfiguration(configuration)
             rebuildAPI()
-            try await daemon.restart(
-                configuration: configuration,
-                apiToken: apiToken
-            )
             await refreshAll()
         } catch {
             presentedError = error.localizedDescription
@@ -101,14 +107,18 @@ final class AppState {
 
     func rotateToken() async {
         do {
-            apiToken = try KeychainStore.generateToken()
-            rebuildAPI()
+            let previousToken = apiToken
+            let nextToken = try KeychainStore.generateToken()
             if configuration.lanEnabled {
                 try await daemon.restart(
+                    currentEndpoint: configuration.endpoint,
+                    currentAPIToken: previousToken,
                     configuration: configuration,
-                    apiToken: apiToken
+                    apiToken: nextToken
                 )
             }
+            apiToken = nextToken
+            rebuildAPI()
         } catch {
             presentedError = error.localizedDescription
         }
