@@ -80,6 +80,16 @@ private struct MenuBarContent: View {
             systemImage: appState.serverIsRunning ? "checkmark.circle.fill" : "xmark.circle"
         )
 
+        if appState.serverIsRunning {
+            Button("Pause serving") {
+                Task { await appState.pauseServer() }
+            }
+        } else {
+            Button("Resume serving") {
+                Task { await appState.resumeServer() }
+            }
+        }
+
         if appState.loadedModels.isEmpty {
             Text("No loaded models")
         } else {
@@ -95,7 +105,7 @@ private struct MenuBarContent: View {
         }
 
         Button("Unload all models") {
-            Task { await appState.pauseServing() }
+            Task { await appState.unloadAllModels() }
         }
         .disabled(appState.loadedModels.isEmpty)
 
