@@ -1128,12 +1128,17 @@ def run_serve(args: argparse.Namespace, *, output_stream=None, error_stream=None
         "Models unload after their keep-alive or via `machboost stop`/`machboost shutdown`.",
         file=output_stream,
     )
-    if args.host not in {"127.0.0.1", "localhost", "::1"}:
+    remote_bind = args.host not in {"127.0.0.1", "localhost", "::1"}
+    require_auth = bool(args.require_auth or remote_bind)
+    api_token = os.environ.get("MACHBOOST_API_TOKEN")
+    if require_auth and not api_token:
         print(
-            "Warning: MachBoost does not provide authentication or TLS. "
-            "Use a private network or authenticated reverse proxy.",
+            "machboost serve error: secured or LAN serving requires MACHBOOST_API_TOKEN",
             file=error_stream,
         )
+        return 2
+    if require_auth:
+        print("Bearer authentication is required for API routes.", file=output_stream)
     try:
         serve_runtime(
             args.host,
@@ -1141,6 +1146,8 @@ def run_serve(args: argparse.Namespace, *, output_stream=None, error_stream=None
             replicas=args.replicas,
             max_queue=args.max_queue,
             queue_timeout=args.queue_timeout,
+            api_token=api_token,
+            require_auth=require_auth,
         )
     except KeyboardInterrupt:
         print("\nMachBoost server stopped.", file=error_stream)
@@ -1613,6 +1620,11 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=DEFAULT_QUEUE_TIMEOUT,
         help="Seconds a request may wait for a replica; negative waits indefinitely.",
+    )
+    serve.add_argument(
+        "--require-auth",
+        action="store_true",
+        help="Require MACHBOOST_API_TOKEN as a bearer token. Enabled automatically for non-loopback hosts.",
     )
 
     pull = subcommands.add_parser("pull", help="Download a Hugging Face or MLX model into the local cache.")
