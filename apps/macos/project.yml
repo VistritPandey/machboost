@@ -1,0 +1,61 @@
+name: MachBoost
+options:
+  bundleIdPrefix: com.vistritpandey
+  deploymentTarget:
+    macOS: "14.0"
+  xcodeVersion: "16.0"
+  generateEmptyDirectories: true
+  createIntermediateGroups: true
+packages:
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    from: 2.9.4
+settings:
+  base:
+    ARCHS: arm64
+    CODE_SIGN_STYLE: Automatic
+    CURRENT_PROJECT_VERSION: 1
+    DEVELOPMENT_TEAM: ""
+    ENABLE_HARDENED_RUNTIME: YES
+    GENERATE_INFOPLIST_FILE: NO
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+    MARKETING_VERSION: 0.1.0
+    SWIFT_VERSION: 6.0
+targets:
+  MachBoost:
+    type: application
+    platform: macOS
+    sources:
+      - path: MachBoost
+    resources:
+      - path: Resources
+    info:
+      path: MachBoost/Info.plist
+    entitlements:
+      path: MachBoost/MachBoost.entitlements
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.vistritpandey.MachBoost
+        PRODUCT_NAME: MachBoost
+    dependencies:
+      - package: Sparkle
+  MachBoostTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: MachBoostTests
+    dependencies:
+      - target: MachBoost
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.vistritpandey.MachBoostTests
+schemes:
+  MachBoost:
+    build:
+      targets:
+        MachBoost: all
+        MachBoostTests: [test]
+    test:
+      gatherCoverageData: true
+      targets:
+        - MachBoostTests
