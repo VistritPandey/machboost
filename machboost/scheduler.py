@@ -63,8 +63,13 @@ class ReplicaPool:
         *,
         affinity_key: Optional[str] = None,
         timeout: Optional[float] = None,
+        cancel_event: Optional[threading.Event] = None,
     ) -> Iterator[ReplicaLease]:
-        lease = self.acquire(affinity_key=affinity_key, timeout=timeout)
+        lease = self.acquire(
+            affinity_key=affinity_key,
+            timeout=timeout,
+            cancel_event=cancel_event,
+        )
         try:
             yield lease
         finally:
@@ -75,6 +80,7 @@ class ReplicaPool:
         *,
         affinity_key: Optional[str] = None,
         timeout: Optional[float] = None,
+        cancel_event: Optional[threading.Event] = None,
     ) -> ReplicaLease:
         started = self.clock()
         wait_timeout = self.queue_timeout if timeout is None else float(timeout)
@@ -83,6 +89,11 @@ class ReplicaPool:
         ticket: Optional[int] = None
 
         with self._condition:
+            if cancel_event is not None and cancel_event.is_set():
+                raise RequestAdmissionError(
+                    "request cancelled",
+                    reason="request_cancelled",
+                )
             if self._closed:
                 raise RequestAdmissionError(
                     "model scheduler is shutting down",
@@ -101,6 +112,13 @@ class ReplicaPool:
                 self._max_queued = max(self._max_queued, len(self._waiters))
 
                 while True:
+                    if cancel_event is not None and cancel_event.is_set():
+                        self._remove_waiter(ticket)
+                        self._condition.notify_all()
+                        raise RequestAdmissionError(
+                            "request cancelled",
+                            reason="request_cancelled",
+                        )
                     if self._closed:
                         self._remove_waiter(ticket)
                         raise RequestAdmissionError(
@@ -119,7 +137,10 @@ class ReplicaPool:
                             "timed out waiting for an inference replica",
                             reason="queue_timeout",
                         )
-                    self._condition.wait(remaining)
+                    poll_interval = 0.1
+                    self._condition.wait(
+                        poll_interval if remaining is None else min(remaining, poll_interval)
+                    )
 
             index = self._select_available(preferred)
             self._available.remove(index)
