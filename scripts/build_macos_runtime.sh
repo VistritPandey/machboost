@@ -54,17 +54,24 @@ rm -rf "$OUTPUT"
 mkdir -p "$OUTPUT"
 mv "$WORK/python" "$OUTPUT/python"
 PYTHON="$OUTPUT/python/bin/python3"
+SITE_PACKAGES="$("$PYTHON" -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"
 
 "$PYTHON" -m pip install \
   --disable-pip-version-check \
   --no-cache-dir \
   --only-binary=:all: \
+  --platform macosx_14_0_arm64 \
+  --python-version 3.13 \
+  --implementation cp \
+  --abi cp313 \
+  --target "$SITE_PACKAGES" \
   --require-hashes \
   --requirement "$LOCKFILE"
 "$PYTHON" -m pip install \
   --disable-pip-version-check \
   --no-cache-dir \
   --no-deps \
+  --target "$SITE_PACKAGES" \
   "$ROOT"
 
 find "$OUTPUT" -type d -name __pycache__ -prune -exec rm -rf {} +
