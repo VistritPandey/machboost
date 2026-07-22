@@ -704,9 +704,14 @@ class HTTPServerTests(unittest.TestCase):
             with urlopen(health, timeout=2.0) as response:
                 self.assertEqual(response.status, 200)
 
-            with self.assertRaises(HTTPError) as raised:
-                urlopen(Request(f"http://{host}:{port}/api/metrics"), timeout=2.0)
-            self.assertEqual(raised.exception.code, 401)
+            for protected_path in ("/", "/api/metrics"):
+                with self.subTest(path=protected_path):
+                    with self.assertRaises(HTTPError) as raised:
+                        urlopen(
+                            Request(f"http://{host}:{port}{protected_path}"),
+                            timeout=2.0,
+                        )
+                    self.assertEqual(raised.exception.code, 401)
 
             authorized = Request(
                 f"http://{host}:{port}/api/metrics",
