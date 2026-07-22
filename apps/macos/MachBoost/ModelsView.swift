@@ -222,6 +222,7 @@ private struct ModelRow: View {
                     Image(systemName: "arrow.down.circle")
                 }
                 .accessibilityLabel("Download \(model.displayName)")
+                .accessibilityIdentifier("download-model-\(model.name)")
                 .help("Download model")
             }
         }
