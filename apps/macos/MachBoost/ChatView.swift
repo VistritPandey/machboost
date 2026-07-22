@@ -13,6 +13,7 @@ struct ChatView: View {
     @State private var activeRequestID: String?
     @State private var isImporting = false
     @State private var showsGenerationControls = false
+    @FocusState private var composerIsFocused: Bool
     @AppStorage("machboost.chat.maxTokens") private var maxTokens = 512
     @AppStorage("machboost.chat.temperature") private var temperature = 0.2
 
@@ -191,6 +192,7 @@ struct ChatView: View {
             .help("Attach text, code, folder, or image")
 
             TextField("Message MachBoost", text: $draft, axis: .vertical)
+                .focused($composerIsFocused)
                 .textFieldStyle(.plain)
                 .lineLimit(1...8)
                 .padding(.horizontal, 10)
@@ -204,6 +206,11 @@ struct ChatView: View {
                 .onSubmit {
                     guard !isGenerating else { return }
                     send()
+                }
+                .onAppear {
+                    if ProcessInfo.processInfo.environment["MACHBOOST_UI_TESTING"] == "1" {
+                        composerIsFocused = true
+                    }
                 }
 
             if isGenerating {
