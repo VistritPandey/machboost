@@ -238,10 +238,12 @@ struct ServerView: View {
 
     private var developer: some View {
         VStack(alignment: .leading, spacing: 18) {
+            metricsGrid
+
             VStack(alignment: .leading, spacing: 8) {
                 Text("Endpoint")
                     .font(.headline)
-                CopyField(value: appState.configuration.endpoint.absoluteString)
+                CopyField(value: appState.configuration.advertisedEndpoint.absoluteString)
             }
 
             VStack(alignment: .leading, spacing: 8) {
@@ -273,6 +275,19 @@ struct ServerView: View {
                     .foregroundStyle(.secondary)
             }
 
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Loaded models")
+                    .font(.headline)
+                if appState.loadedModels.isEmpty {
+                    Text("No resident models")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(appState.loadedModels) { model in
+                        residentModel(model)
+                    }
+                }
+            }
+
             SnippetView(title: "OpenAI Python", code: openAISnippet)
             SnippetView(title: "Ollama-compatible curl", code: ollamaSnippet)
         }
@@ -284,7 +299,7 @@ struct ServerView: View {
         from openai import OpenAI
 
         client = OpenAI(
-            base_url="\(appState.configuration.endpoint.absoluteString)/v1",
+            base_url="\(appState.configuration.advertisedEndpoint.absoluteString)/v1",
             api_key="\(token)",
         )
         response = client.chat.completions.create(
@@ -300,7 +315,7 @@ struct ServerView: View {
             ? "  -H 'Authorization: Bearer \(appState.apiToken ?? "YOUR_TOKEN")' \\" + "\n"
             : ""
         return """
-        curl \(appState.configuration.endpoint.absoluteString)/api/chat \\
+        curl \(appState.configuration.advertisedEndpoint.absoluteString)/api/chat \\
         \(authorization)  -H 'Content-Type: application/json' \\
           -d '{"model":"llama3.2:3b","messages":[{"role":"user","content":"Hello"}]}'
         """
