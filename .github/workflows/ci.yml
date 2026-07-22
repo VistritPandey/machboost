@@ -58,6 +58,7 @@ jobs:
       - name: Run native unit tests
         env:
           MACHBOOST_SOURCE_ROOT: ${{ github.workspace }}
+          MACHBOOST_TESTING: "1"
         run: |
           xcodebuild test \
             -project apps/macos/MachBoost.xcodeproj \
@@ -71,6 +72,7 @@ jobs:
       - name: Run native UI tests
         env:
           MACHBOOST_SOURCE_ROOT: ${{ github.workspace }}
+          MACHBOOST_TESTING: "1"
         run: |
           xcodebuild test \
             -project apps/macos/MachBoost.xcodeproj \
