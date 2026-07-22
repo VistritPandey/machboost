@@ -21,8 +21,9 @@ final class MachBoostUITests: XCTestCase {
         let app = launchApp()
         XCTAssertTrue(app.staticTexts["Server"].waitForExistence(timeout: 10))
         app.staticTexts["Server"].click()
-        XCTAssertTrue(app.buttons["Developer"].waitForExistence(timeout: 3))
-        app.buttons["Developer"].click()
+        let developerTab = app.radioButtons["Developer"]
+        XCTAssertTrue(developerTab.waitForExistence(timeout: 3))
+        developerTab.click()
         XCTAssertTrue(app.staticTexts["Endpoint"].exists)
         XCTAssertTrue(app.staticTexts["OpenAI Python"].exists)
     }
