@@ -1,0 +1,157 @@
+name: macOS Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Existing version tag without the v prefix
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: macos-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Sign, notarize, and publish
+    runs-on: macos-15
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Select release tag
+        shell: bash
+        run: |
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            VERSION="${{ inputs.version }}"
+          else
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
+          if [[ -z "$VERSION" || "$VERSION" == v* ]]; then
+            echo "Invalid release version: $VERSION" >&2
+            exit 2
+          fi
+          git rev-parse --verify "v${VERSION}^{commit}" >/dev/null
+          git checkout --detach "v${VERSION}"
+          echo "MACHBOOST_RELEASE_VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Install release tools
+        run: brew install xcodegen
+
+      - name: Import signing and notarization credentials
+        env:
+          CERTIFICATE_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          NOTARY_KEY_BASE64: ${{ secrets.APPLE_NOTARY_KEY_P8_BASE64 }}
+          NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+          KEYCHAIN_PASSWORD: ${{ secrets.MACOS_CI_KEYCHAIN_PASSWORD }}
+          SPARKLE_PRIVATE_KEY_BASE64: ${{ secrets.SPARKLE_PRIVATE_KEY_BASE64 }}
+        shell: bash
+        run: |
+          : "${CERTIFICATE_BASE64:?Missing MACOS_CERTIFICATE_P12_BASE64}"
+          : "${CERTIFICATE_PASSWORD:?Missing MACOS_CERTIFICATE_PASSWORD}"
+          : "${NOTARY_KEY_BASE64:?Missing APPLE_NOTARY_KEY_P8_BASE64}"
+          : "${NOTARY_KEY_ID:?Missing APPLE_NOTARY_KEY_ID}"
+          : "${NOTARY_ISSUER_ID:?Missing APPLE_NOTARY_ISSUER_ID}"
+          : "${KEYCHAIN_PASSWORD:?Missing MACOS_CI_KEYCHAIN_PASSWORD}"
+          : "${SPARKLE_PRIVATE_KEY_BASE64:?Missing SPARKLE_PRIVATE_KEY_BASE64}"
+
+          CERTIFICATE_PATH="$RUNNER_TEMP/machboost-release.p12"
+          NOTARY_KEY_PATH="$RUNNER_TEMP/AuthKey_${NOTARY_KEY_ID}.p8"
+          SPARKLE_KEY_PATH="$RUNNER_TEMP/sparkle-private-key"
+          KEYCHAIN_PATH="$RUNNER_TEMP/machboost-release.keychain-db"
+
+          printf '%s' "$CERTIFICATE_BASE64" | base64 --decode > "$CERTIFICATE_PATH"
+          printf '%s' "$NOTARY_KEY_BASE64" | base64 --decode > "$NOTARY_KEY_PATH"
+          printf '%s' "$SPARKLE_PRIVATE_KEY_BASE64" | base64 --decode > "$SPARKLE_KEY_PATH"
+          chmod 600 "$CERTIFICATE_PATH" "$NOTARY_KEY_PATH" "$SPARKLE_KEY_PATH"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERTIFICATE_PATH" \
+            -k "$KEYCHAIN_PATH" \
+            -P "$CERTIFICATE_PASSWORD" \
+            -A \
+            -t cert \
+            -f pkcs12
+          security set-key-partition-list \
+            -S apple-tool:,apple: \
+            -s \
+            -k "$KEYCHAIN_PASSWORD" \
+            "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
+
+          xcrun notarytool store-credentials machboost-ci-notary \
+            --key "$NOTARY_KEY_PATH" \
+            --key-id "$NOTARY_KEY_ID" \
+            --issuer "$NOTARY_ISSUER_ID" \
+            --keychain "$KEYCHAIN_PATH"
+
+          echo "MACHBOOST_RELEASE_KEYCHAIN=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
+          echo "MACHBOOST_NOTARY_PROFILE=machboost-ci-notary" >> "$GITHUB_ENV"
+          echo "SPARKLE_PRIVATE_KEY=$SPARKLE_KEY_PATH" >> "$GITHUB_ENV"
+
+      - name: Build signed and notarized DMG
+        env:
+          MACHBOOST_DEVELOPMENT_TEAM: ${{ secrets.APPLE_DEVELOPMENT_TEAM }}
+          MACHBOOST_DEVELOPER_ID: ${{ secrets.MACOS_DEVELOPER_ID }}
+          SPARKLE_PUBLIC_ED_KEY: ${{ secrets.SPARKLE_PUBLIC_ED_KEY }}
+        run: ./scripts/release_macos.sh "$MACHBOOST_RELEASE_VERSION"
+
+      - name: Verify embedded runtime without host Python
+        shell: bash
+        run: |
+          APP="dist/macos/MachBoost.xcarchive/Products/Applications/MachBoost.app"
+          PYTHON="$APP/Contents/Resources/runtime/python/bin/python3"
+          "$PYTHON" -I -c 'import machboost, mlx, mlx_lm, mlx_vlm; print(machboost.__version__)'
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          spctl --assess --type execute --verbose=2 "$APP"
+          xcrun stapler validate "dist/macos/MachBoost-${MACHBOOST_RELEASE_VERSION}-arm64.dmg"
+
+      - name: Generate release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh api \
+            --method POST \
+            "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
+            -f "tag_name=v${MACHBOOST_RELEASE_VERSION}" \
+            --jq .body > "$RUNNER_TEMP/machboost-release-notes.md"
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ./scripts/publish_macos_release.sh \
+            "$MACHBOOST_RELEASE_VERSION" \
+            "$RUNNER_TEMP/machboost-release-notes.md"
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: MachBoost-${{ env.MACHBOOST_RELEASE_VERSION }}-macOS
+          path: |
+            dist/macos/MachBoost-${{ env.MACHBOOST_RELEASE_VERSION }}-arm64.dmg
+            dist/macos/MachBoost-${{ env.MACHBOOST_RELEASE_VERSION }}-arm64.dmg.sha256
+            dist/macos/appcast.xml
+          if-no-files-found: error
+
+      - name: Remove temporary keychain
+        if: always()
+        shell: bash
+        run: |
+          if [[ -n "${MACHBOOST_RELEASE_KEYCHAIN:-}" ]]; then
+            security delete-keychain "$MACHBOOST_RELEASE_KEYCHAIN" || true
+          fi
