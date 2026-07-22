@@ -149,13 +149,23 @@ final class AppState {
         }
     }
 
-    func pauseServing() async {
+    func unloadAllModels() async {
         do {
             try await api.stop()
             await refreshMetrics()
         } catch {
             presentedError = error.localizedDescription
         }
+    }
+
+    func pauseServer() async {
+        await daemon.shutdown(endpoint: configuration.endpoint, apiToken: apiToken)
+        loadedModels = []
+        metrics = nil
+    }
+
+    func resumeServer() async {
+        await start()
     }
 
     func shutdown() async {
