@@ -11,6 +11,7 @@ struct ChatView: View {
     @State private var draft = ""
     @State private var generationTask: Task<Void, Never>?
     @State private var activeRequestID: String?
+    @State private var activeAssistant: ChatMessage?
     @State private var isImporting = false
     @State private var showsGenerationControls = false
     @FocusState private var composerIsFocused: Bool
@@ -276,6 +277,7 @@ struct ChatView: View {
             conversation: conversation
         )
         conversation.messages.append(assistant)
+        activeAssistant = assistant
         try? modelContext.save()
 
         let requestID = "chat-\(UUID().uuidString.lowercased())"
@@ -327,6 +329,7 @@ struct ChatView: View {
                 appState.presentedError = error.localizedDescription
             }
             activeRequestID = nil
+            activeAssistant = nil
             generationTask = nil
             conversation.updatedAt = .now
             try? modelContext.save()
@@ -336,6 +339,8 @@ struct ChatView: View {
 
     private func stop() {
         guard let activeRequestID else { return }
+        activeAssistant?.wasCancelled = true
+        try? modelContext.save()
         Task { @MainActor in
             _ = try? await appState.api.cancel(requestID: activeRequestID)
             generationTask?.cancel()
