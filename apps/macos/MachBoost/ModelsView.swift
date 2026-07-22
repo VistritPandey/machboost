@@ -77,7 +77,9 @@ struct ModelsView: View {
                 ForEach(models) { model in
                     ModelRow(
                         model: model,
-                        loaded: appState.loadedModels.contains { $0.model == model.repository },
+                        loaded: appState.loadedModels.contains {
+                            $0.model == model.repository || $0.model == model.name
+                        },
                         download: appState.downloads[model.name],
                         onDownload: { pendingDownload = model },
                         onCancel: { Task { await appState.cancelPull(model: model.name) } },
@@ -163,6 +165,9 @@ private struct ModelRow: View {
                     if loaded {
                         Label("Loaded", systemImage: "memorychip.fill")
                             .foregroundStyle(.green)
+                    } else if model.support != "ready" {
+                        Label("Unsupported", systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
                     } else if model.cached {
                         Label("Downloaded", systemImage: "checkmark.circle.fill")
                             .foregroundStyle(.secondary)
@@ -171,8 +176,13 @@ private struct ModelRow: View {
                 HStack(spacing: 10) {
                     Text(model.name)
                     Text(model.backend.uppercased())
-                    if let size = model.downloadSizeGB {
-                        Text("~\(size.formatted(.number.precision(.fractionLength(1)))) GB")
+                    ForEach(model.capabilities, id: \.self) { capability in
+                        Text(capability.capitalized)
+                    }
+                    if let size = model.diskSizeGB {
+                        Text("\(size.formatted(.number.precision(.fractionLength(2)))) GB on disk")
+                    } else if let size = model.downloadSizeGB {
+                        Text("~\(size.formatted(.number.precision(.fractionLength(1)))) GB download")
                     }
                     if let memory = model.minimumMemoryGB {
                         Text("\(Int(memory)) GB memory")
@@ -180,6 +190,13 @@ private struct ModelRow: View {
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
+
+                if model.support != "ready", let reason = model.supportReason {
+                    Text(reason)
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .lineLimit(2)
+                }
 
                 if let download {
                     downloadProgress(download)
