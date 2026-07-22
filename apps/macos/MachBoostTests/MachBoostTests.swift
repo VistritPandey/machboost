@@ -20,8 +20,10 @@ final class MachBoostTests: XCTestCase {
                 "recommended":true,
                 "tested":true,
                 "download_size_gb":2.0,
+                "disk_size_gb":1.8,
                 "minimum_memory_gb":8.0,
-                "support":"ready"
+                "support":"ready",
+                "support_reason":"compatible mlx architecture (llama)"
               }]
             }
             """.utf8
@@ -32,6 +34,11 @@ final class MachBoostTests: XCTestCase {
         XCTAssertEqual(response.schema, "machboost.catalog.v1")
         XCTAssertEqual(response.models.first?.name, "llama3.2:3b")
         XCTAssertEqual(response.models.first?.downloadSizeGB, 2.0)
+        XCTAssertEqual(response.models.first?.diskSizeGB, 1.8)
+        XCTAssertEqual(
+            response.models.first?.supportReason,
+            "compatible mlx architecture (llama)"
+        )
         XCTAssertFalse(response.models.first?.supportsVision ?? true)
     }
 
