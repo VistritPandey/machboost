@@ -19,7 +19,15 @@ enum AttachmentStore {
                 candidates.append(url)
             }
         }
-        return try candidates.map { try importFile($0, conversation: conversation) }
+        var importedPaths = Set(conversation.attachments.map(\.importedPath))
+        var imported: [ChatAttachment] = []
+        for candidate in candidates {
+            let attachment = try importFile(candidate, conversation: conversation)
+            if importedPaths.insert(attachment.importedPath).inserted {
+                imported.append(attachment)
+            }
+        }
+        return imported
     }
 
     static func remove(_ attachment: ChatAttachment) {
@@ -58,7 +66,7 @@ enum AttachmentStore {
         }
         let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
         let extensionSuffix = source.pathExtension.isEmpty ? "" : ".\(source.pathExtension.lowercased())"
-        let destination = try attachmentDirectory()
+        let destination = try attachmentDirectory(conversationID: conversation.id)
             .appendingPathComponent("\(digest)\(extensionSuffix)", isDirectory: false)
         if !FileManager.default.fileExists(atPath: destination.path) {
             try data.write(to: destination, options: .atomic)
@@ -122,7 +130,7 @@ enum AttachmentStore {
         return files.sorted { $0.path < $1.path }
     }
 
-    private static func attachmentDirectory() throws -> URL {
+    private static func attachmentDirectory(conversationID: UUID) throws -> URL {
         let root = try FileManager.default.url(
             for: .applicationSupportDirectory,
             in: .userDomainMask,
@@ -132,6 +140,7 @@ enum AttachmentStore {
         let directory = root
             .appendingPathComponent("MachBoost", isDirectory: true)
             .appendingPathComponent("Attachments", isDirectory: true)
+            .appendingPathComponent(conversationID.uuidString, isDirectory: true)
         try FileManager.default.createDirectory(
             at: directory,
             withIntermediateDirectories: true
