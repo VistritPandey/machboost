@@ -181,6 +181,24 @@ final class MachBoostTests: XCTestCase {
         XCTAssertTrue(models.isEmpty)
     }
 
+    func testHealthProbeUsesItsOwnShortTimeout() async throws {
+        let session = mockSession { request in
+            XCTAssertEqual(request.timeoutInterval, 0.25, accuracy: 0.001)
+            return self.response(
+                for: request,
+                body: #"{"status":"ok"}"#
+            )
+        }
+        let api = MachBoostAPI(
+            endpoint: URL(string: "http://127.0.0.1:11435")!,
+            session: session
+        )
+
+        let healthy = try await api.health(timeoutInterval: 0.25)
+
+        XCTAssertTrue(healthy)
+    }
+
     func testCancellationSendsClientRequestID() async throws {
         let session = mockSession { request in
             let data = try XCTUnwrap(request.httpBody)
