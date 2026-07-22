@@ -270,6 +270,39 @@ class CLITests(unittest.TestCase):
         self.assertIn("mlx-community/example", output.getvalue())
         self.assertIn("forever", output.getvalue())
 
+    def test_serve_forwards_concurrency_controls(self):
+        output = io.StringIO()
+        errors = io.StringIO()
+        args = cli.build_parser().parse_args(
+            [
+                "serve",
+                "--host",
+                "0.0.0.0",
+                "--port",
+                "12345",
+                "--replicas",
+                "3",
+                "--max-queue",
+                "12",
+                "--queue-timeout",
+                "7.5",
+            ]
+        )
+
+        with patch.object(cli, "serve_runtime") as serve_runtime:
+            code = cli.run_serve(args, output_stream=output, error_stream=errors)
+
+        self.assertEqual(code, 0)
+        serve_runtime.assert_called_once_with(
+            "0.0.0.0",
+            12345,
+            replicas=3,
+            max_queue=12,
+            queue_timeout=7.5,
+        )
+        self.assertIn("Serving 3 replica(s)", output.getvalue())
+        self.assertIn("does not provide authentication", errors.getvalue())
+
     def test_warm_preloads_model_through_resident_client(self):
         output = io.StringIO()
         client = FakeResidentClient()
