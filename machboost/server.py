@@ -960,17 +960,19 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         path = urlparse(self.path).path
-        if path in {"/", "/health", "/healthz"}:
-            self.send_json(
-                {
-                    "status": "ok",
-                    "version": __version__,
-                    "serving": self.runtime.serving_config(),
-                    "authentication": "required" if self.server.require_auth else "local",  # type: ignore[attr-defined]
-                }
-            )
+        status = {
+            "status": "ok",
+            "version": __version__,
+            "serving": self.runtime.serving_config(),
+            "authentication": "required" if self.server.require_auth else "local",  # type: ignore[attr-defined]
+        }
+        if path in {"/health", "/healthz"}:
+            self.send_json(status)
             return
         if not self.authorize():
+            return
+        if path == "/":
+            self.send_json(status)
             return
         if path == "/api/version":
             self.send_json({"version": __version__})
