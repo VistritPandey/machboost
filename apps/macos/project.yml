@@ -68,6 +68,8 @@ schemes:
         MachBoostUITests: [test]
     test:
       gatherCoverageData: true
+      environmentVariables:
+        MACHBOOST_TESTING: "1"
       targets:
         - MachBoostTests
         - MachBoostUITests
