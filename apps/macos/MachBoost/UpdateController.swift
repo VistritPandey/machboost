@@ -1,10 +1,20 @@
+import Foundation
 import Sparkle
 
 @MainActor
 final class UpdateController: ObservableObject {
-    let updaterController: SPUStandardUpdaterController
+    private let updaterController: SPUStandardUpdaterController?
 
     init(startingUpdater: Bool = true) {
+        let environment = ProcessInfo.processInfo.environment
+        guard
+            environment["MACHBOOST_TESTING"] != "1",
+            environment["MACHBOOST_UI_TESTING"] != "1"
+        else {
+            updaterController = nil
+            return
+        }
+
         updaterController = SPUStandardUpdaterController(
             startingUpdater: startingUpdater,
             updaterDelegate: nil,
@@ -13,11 +23,11 @@ final class UpdateController: ObservableObject {
     }
 
     func checkForUpdates() {
-        updaterController.checkForUpdates(nil)
+        updaterController?.checkForUpdates(nil)
     }
 
     var automaticallyChecksForUpdates: Bool {
-        get { updaterController.updater.automaticallyChecksForUpdates }
-        set { updaterController.updater.automaticallyChecksForUpdates = newValue }
+        get { updaterController?.updater.automaticallyChecksForUpdates ?? false }
+        set { updaterController?.updater.automaticallyChecksForUpdates = newValue }
     }
 }
