@@ -1,0 +1,14 @@
+{
+  "schema": "machboost.embedded-runtime.v1",
+  "architecture": "arm64",
+  "python": {
+    "version": "3.13.14",
+    "release": "20260718",
+    "asset": "cpython-3.13.14+20260718-aarch64-apple-darwin-install_only.tar.gz",
+    "sha256": "dca7c3bac21f023cf294705b27f4f3e9c70399c40790ebb81e8d0eff15b00770"
+  },
+  "packages": {
+    "machboost": "0.6.0",
+    "sparkle": "2.9.4"
+  }
+}
