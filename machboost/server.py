@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import gc
 import json
+import math
 import re
 import sys
 import threading
@@ -16,11 +17,16 @@ from urllib.parse import urlparse
 from . import __version__
 from .accelerator import Accelerator
 from .models import model_targets, resolve_model
+from .scheduler import ReplicaPool, RequestAdmissionError
 from .vision_auto import load_vision_calibration
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 11435
 DEFAULT_KEEP_ALIVE = 300.0
+DEFAULT_REPLICAS = 1
+DEFAULT_MAX_QUEUE = 64
+DEFAULT_QUEUE_TIMEOUT = 300.0
+MAX_REPLICAS = 8
 
 
 def select_backend(model: str, backend: str = "auto") -> str:
@@ -61,6 +67,7 @@ class ModelConfig:
     cache_enabled: bool = True
     lazy: bool = False
     vision_cache_size: int = 20
+    replicas: int = DEFAULT_REPLICAS
 
 
 @dataclass
@@ -74,9 +81,19 @@ class LoadedModel:
     requests: int = 0
     warmups: int = 0
     warmup_duration_s: float = 0.0
+    replica_accelerators: tuple[Any, ...] = ()
+    max_queue: int = DEFAULT_MAX_QUEUE
+    queue_timeout: float = DEFAULT_QUEUE_TIMEOUT
 
     def __post_init__(self) -> None:
         self.lock = threading.RLock()
+        if not self.replica_accelerators:
+            self.replica_accelerators = (self.accelerator,)
+        self.scheduler = ReplicaPool(
+            self.replica_accelerators,
+            max_queue=self.max_queue,
+            queue_timeout=self.queue_timeout,
+        )
 
     @property
     def expires_at(self) -> Optional[float]:
@@ -101,10 +118,18 @@ class LoadedModel:
             "warmups": self.warmups,
             "context_paths": list(self.config.context_paths),
             "boost_enabled": self.config.boost_enabled,
+            "scheduler": self.scheduler.snapshot(),
         }
         cache_info = getattr(self.accelerator, "cache_info", None)
         if callable(cache_info):
             result["vision_cache"] = cache_info()
+        for worker, accelerator in zip(
+            result["scheduler"]["workers"],
+            self.replica_accelerators,
+        ):
+            worker_cache_info = getattr(accelerator, "cache_info", None)
+            if callable(worker_cache_info):
+                worker["vision_cache"] = worker_cache_info()
         result["capabilities"] = ["vision", "chat"] if self.config.backend.endswith("-vlm") else ["chat", "completion"]
         return result
 
@@ -121,6 +146,7 @@ class GenerationResult:
     prompt_eval_duration_s: float = 0.0
     eval_duration_s: float = 0.0
     time_to_first_token_s: Optional[float] = None
+    scheduler: Optional[dict[str, Any]] = None
 
     def ollama_metrics(self) -> dict[str, Any]:
         generated = int(self.stats.get("generated_tokens", 0))
@@ -139,6 +165,7 @@ class GenerationResult:
                 "backend": self.backend,
                 "stats": self.stats,
                 "time_to_first_token_seconds": self.time_to_first_token_s,
+                "scheduler": dict(self.scheduler or {}),
             },
         }
 
@@ -150,10 +177,22 @@ class RuntimeManager:
         loader: Optional[Callable[[ModelConfig], Accelerator]] = None,
         clock: Callable[[], float] = time.monotonic,
         default_keep_alive: float = DEFAULT_KEEP_ALIVE,
+        replicas: int = DEFAULT_REPLICAS,
+        max_queue: int = DEFAULT_MAX_QUEUE,
+        queue_timeout: float = DEFAULT_QUEUE_TIMEOUT,
     ) -> None:
         self.loader = loader or load_accelerator
         self.clock = clock
         self.default_keep_alive = float(default_keep_alive)
+        self.replicas = validate_replicas(replicas)
+        max_queue = int(max_queue)
+        if max_queue < 0:
+            raise ValueError("max_queue cannot be negative")
+        queue_timeout = float(queue_timeout)
+        if math.isnan(queue_timeout):
+            raise ValueError("queue_timeout cannot be NaN")
+        self.max_queue = max_queue
+        self.queue_timeout = queue_timeout
         self._models: dict[ModelConfig, LoadedModel] = {}
         self._lock = threading.RLock()
 
@@ -165,7 +204,7 @@ class RuntimeManager:
         keep_alive: Any = None,
     ) -> tuple[LoadedModel, float]:
         options = dict(options or {})
-        config = model_config(model, options)
+        config = model_config(model, options, replicas=self.replicas)
         ttl = parse_keep_alive(keep_alive, default=self.default_keep_alive)
         self.evict_expired()
         with self._lock:
@@ -176,16 +215,26 @@ class RuntimeManager:
                 return entry, 0.0
 
             started = self.clock()
-            accelerator = self.loader(config)
+            accelerators = []
+            try:
+                for _ in range(config.replicas):
+                    accelerators.append(self.loader(config))
+            except Exception:
+                for loaded_accelerator in accelerators:
+                    release_accelerator(loaded_accelerator)
+                raise
             finished = self.clock()
             load_duration = max(0.0, finished - started)
             entry = LoadedModel(
                 config=config,
-                accelerator=accelerator,
+                accelerator=accelerators[0],
                 loaded_at=finished,
                 last_used_at=finished,
                 keep_alive=ttl,
                 load_duration_s=load_duration,
+                replica_accelerators=tuple(accelerators),
+                max_queue=self.max_queue,
+                queue_timeout=self.queue_timeout,
             )
             self._models[config] = entry
             return entry, load_duration
@@ -198,13 +247,14 @@ class RuntimeManager:
                 entry.last_used_at = self.clock()
                 return 0.0, False
             started = self.clock()
-            entry.accelerator.generate_chat(
-                [
-                    {"role": "system", "content": "Answer concisely."},
-                    {"role": "user", "content": "hi"},
-                ],
-                max_tokens=1,
-            )
+            for accelerator in entry.replica_accelerators:
+                accelerator.generate_chat(
+                    [
+                        {"role": "system", "content": "Answer concisely."},
+                        {"role": "user", "content": "hi"},
+                    ],
+                    max_tokens=1,
+                )
             finished = self.clock()
             duration = max(0.0, finished - started)
             entry.warmups += 1
@@ -221,6 +271,7 @@ class RuntimeManager:
         keep_alive: Any = None,
         context: Optional[Iterable[str] | str] = None,
         emit: Optional[Callable[[str], None]] = None,
+        on_admitted: Optional[Callable[[], None]] = None,
     ) -> GenerationResult:
         options = dict(options or {})
         entry, load_duration = self.get_or_load(model, options=options, keep_alive=keep_alive)
@@ -235,9 +286,19 @@ class RuntimeManager:
             if emit is not None:
                 emit(text)
 
-        with entry.lock:
+        affinity_key = request_affinity_key(
+            options,
+            image_sources=message_image_sources(messages),
+        )
+        with entry.scheduler.slot(
+            affinity_key=affinity_key,
+            timeout=_optional_float(options.get("queue_timeout")),
+        ) as lease:
+            if on_admitted is not None:
+                on_admitted()
+            accelerator = lease.resource
             if entry.config.backend.endswith("-vlm"):
-                text, stats = entry.accelerator.generate_chat(
+                text, stats = accelerator.generate_chat(
                     messages,
                     max_tokens=max_tokens,
                     context=context,
@@ -257,24 +318,30 @@ class RuntimeManager:
             else:
                 if messages_have_images(messages):
                     raise ValueError("image inputs require a vision model and VLM backend")
-                text, stats = entry.accelerator.generate_chat(
+                text, stats = accelerator.generate_chat(
                     messages,
                     max_tokens=max_tokens,
                     context=context,
                     on_text=timed_emit if emit is not None else None,
                 )
-            entry.requests += 1
-            entry.last_used_at = self.clock()
+            with entry.lock:
+                entry.requests += 1
+                entry.last_used_at = self.clock()
         finished = self.clock()
         stats = stats_dict(stats)
         request_duration = max(0.0, finished - started)
         ttft = stats.get("time_to_first_token_seconds")
-        if ttft is None and first_emit_at is not None:
+        if first_emit_at is not None:
             ttft = max(0.0, first_emit_at - started)
+        elif ttft is not None:
+            ttft = lease.queue_wait_seconds + float(ttft)
         prompt_eval_duration = float(stats.get("prompt_eval_seconds") or 0.0)
         eval_duration = float(stats.get("generation_seconds") or 0.0)
         if eval_duration <= 0:
-            eval_duration = max(0.0, request_duration - prompt_eval_duration)
+            eval_duration = max(
+                0.0,
+                request_duration - lease.queue_wait_seconds - prompt_eval_duration,
+            )
         return GenerationResult(
             model=model,
             backend=entry.config.backend,
@@ -286,6 +353,7 @@ class RuntimeManager:
             prompt_eval_duration_s=prompt_eval_duration,
             eval_duration_s=eval_duration,
             time_to_first_token_s=ttft,
+            scheduler=scheduler_result(lease, entry.config.replicas),
         )
 
     def generate(
@@ -298,6 +366,7 @@ class RuntimeManager:
         context: Optional[Iterable[str] | str] = None,
         emit: Optional[Callable[[str], None]] = None,
         images: Optional[Sequence[str]] = None,
+        on_admitted: Optional[Callable[[], None]] = None,
     ) -> GenerationResult:
         options = dict(options or {})
         entry, load_duration = self.get_or_load(model, options=options, keep_alive=keep_alive)
@@ -312,9 +381,16 @@ class RuntimeManager:
             if emit is not None:
                 emit(text)
 
-        with entry.lock:
+        affinity_key = request_affinity_key(options, image_sources=images)
+        with entry.scheduler.slot(
+            affinity_key=affinity_key,
+            timeout=_optional_float(options.get("queue_timeout")),
+        ) as lease:
+            if on_admitted is not None:
+                on_admitted()
+            accelerator = lease.resource
             if entry.config.backend.endswith("-vlm"):
-                text, stats = entry.accelerator.generate(
+                text, stats = accelerator.generate(
                     prompt,
                     max_tokens=max_tokens,
                     context=context,
@@ -335,24 +411,30 @@ class RuntimeManager:
             else:
                 if images:
                     raise ValueError("image inputs require a vision model and VLM backend")
-                text, stats = entry.accelerator.generate(
+                text, stats = accelerator.generate(
                     prompt,
                     max_tokens=max_tokens,
                     context=context,
                     on_text=timed_emit if emit is not None else None,
                 )
-            entry.requests += 1
-            entry.last_used_at = self.clock()
+            with entry.lock:
+                entry.requests += 1
+                entry.last_used_at = self.clock()
         finished = self.clock()
         stats = stats_dict(stats)
         request_duration = max(0.0, finished - started)
         ttft = stats.get("time_to_first_token_seconds")
-        if ttft is None and first_emit_at is not None:
+        if first_emit_at is not None:
             ttft = max(0.0, first_emit_at - started)
+        elif ttft is not None:
+            ttft = lease.queue_wait_seconds + float(ttft)
         prompt_eval_duration = float(stats.get("prompt_eval_seconds") or 0.0)
         eval_duration = float(stats.get("generation_seconds") or 0.0)
         if eval_duration <= 0:
-            eval_duration = max(0.0, request_duration - prompt_eval_duration)
+            eval_duration = max(
+                0.0,
+                request_duration - lease.queue_wait_seconds - prompt_eval_duration,
+            )
         return GenerationResult(
             model=model,
             backend=entry.config.backend,
@@ -364,6 +446,7 @@ class RuntimeManager:
             prompt_eval_duration_s=prompt_eval_duration,
             eval_duration_s=eval_duration,
             time_to_first_token_s=ttft,
+            scheduler=scheduler_result(lease, entry.config.replicas),
         )
 
     def pull(self, model: str, *, revision: Optional[str] = None) -> dict[str, Any]:
@@ -392,8 +475,9 @@ class RuntimeManager:
             ]
             entries = [self._models.pop(config) for config in configs]
         for entry in entries:
+            entry.scheduler.close(wait=True)
             with entry.lock:
-                release_accelerator(entry.accelerator)
+                release_entry_accelerators(entry)
         return len(entries)
 
     def evict_expired(self) -> int:
@@ -405,10 +489,13 @@ class RuntimeManager:
                     continue
                 if not entry.lock.acquire(blocking=False):
                     continue
+                if not entry.scheduler.try_close_idle():
+                    entry.lock.release()
+                    continue
                 entries.append(self._models.pop(config))
         for entry in entries:
             try:
-                release_accelerator(entry.accelerator)
+                release_entry_accelerators(entry)
             finally:
                 entry.lock.release()
         return len(entries)
@@ -419,12 +506,37 @@ class RuntimeManager:
         with self._lock:
             return [entry.to_dict(now) for entry in self._models.values()]
 
+    def serving_config(self) -> dict[str, Any]:
+        return {
+            "text_replicas": self.replicas,
+            "vision_replicas": 1,
+            "max_queue": self.max_queue,
+            "queue_timeout_seconds": self.queue_timeout,
+        }
+
     def close(self) -> None:
         self.stop()
 
 
-def model_config(model: str, options: dict[str, Any]) -> ModelConfig:
+def validate_replicas(value: Any) -> int:
+    replicas = int(value)
+    if replicas < 1 or replicas > MAX_REPLICAS:
+        raise ValueError(f"replicas must be between 1 and {MAX_REPLICAS}")
+    return replicas
+
+
+def model_config(
+    model: str,
+    options: dict[str, Any],
+    *,
+    replicas: int = DEFAULT_REPLICAS,
+) -> ModelConfig:
     resolution = resolve_model(model, str(options.get("backend", "auto")))
+    effective_replicas = (
+        DEFAULT_REPLICAS
+        if resolution.backend.endswith("-vlm")
+        else validate_replicas(replicas)
+    )
     paths = options.get("context_paths") or options.get("context") or ()
     if isinstance(paths, str):
         paths = (paths,)
@@ -443,6 +555,7 @@ def model_config(model: str, options: dict[str, Any]) -> ModelConfig:
         cache_enabled=not bool(options.get("strict", False)),
         lazy=bool(options.get("lazy", False)),
         vision_cache_size=max(1, int(options.get("vision_cache_size", 20))),
+        replicas=effective_replicas,
     )
 
 
@@ -500,6 +613,16 @@ def release_accelerator(accelerator: Any) -> None:
             pass
 
 
+def release_entry_accelerators(entry: LoadedModel) -> None:
+    released: set[int] = set()
+    for accelerator in entry.replica_accelerators:
+        identity = id(accelerator)
+        if identity in released:
+            continue
+        released.add(identity)
+        release_accelerator(accelerator)
+
+
 def stats_dict(stats: Any) -> dict[str, Any]:
     try:
         return asdict(stats)
@@ -550,7 +673,13 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         path = urlparse(self.path).path
         if path in {"/", "/health", "/healthz"}:
-            self.send_json({"status": "ok", "version": __version__})
+            self.send_json(
+                {
+                    "status": "ok",
+                    "version": __version__,
+                    "serving": self.runtime.serving_config(),
+                }
+            )
             return
         if path == "/api/version":
             self.send_json({"version": __version__})
@@ -644,6 +773,9 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
             self.send_error_json(404, f"unknown endpoint: {path}")
         except (BrokenPipeError, ConnectionResetError):
             return
+        except RequestAdmissionError as exc:
+            if not self.wfile.closed:
+                self.send_error_json(503, str(exc), code=exc.reason)
         except (ImportError, RuntimeError, TypeError, ValueError) as exc:
             if not self.wfile.closed:
                 self.send_error_json(400, str(exc))
@@ -673,7 +805,12 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
             self.send_json(body)
             return
 
-        self.start_stream("application/x-ndjson")
+        stream_started = False
+
+        def on_admitted() -> None:
+            nonlocal stream_started
+            self.start_stream("application/x-ndjson")
+            stream_started = True
 
         def emit(text: str) -> None:
             self.write_json_line(
@@ -693,8 +830,13 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                 keep_alive=payload.get("keep_alive"),
                 context=context,
                 emit=emit,
+                on_admitted=on_admitted,
             )
+        except RequestAdmissionError:
+            raise
         except Exception as exc:
+            if not stream_started:
+                raise
             self.write_json_line({"error": str(exc), "done": True})
             return
         self.write_json_line(
@@ -730,7 +872,12 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
             )
             return
 
-        self.start_stream("application/x-ndjson")
+        stream_started = False
+
+        def on_admitted() -> None:
+            nonlocal stream_started
+            self.start_stream("application/x-ndjson")
+            stream_started = True
 
         def emit(text: str) -> None:
             self.write_json_line(
@@ -746,8 +893,13 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                 context=context,
                 emit=emit,
                 images=normalize_image_list(payload.get("images")),
+                on_admitted=on_admitted,
             )
+        except RequestAdmissionError:
+            raise
         except Exception as exc:
+            if not stream_started:
+                raise
             self.write_json_line({"error": str(exc), "done": True})
             return
         self.write_json_line(
@@ -771,12 +923,17 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                         {"index": 0, "message": {"role": "assistant", "content": result.text}, "finish_reason": "stop"}
                     ],
                     "usage": usage_from_result(result),
-                    "machboost": result.stats,
+                    "machboost": openai_machboost_result(result),
                 }
             )
             return
 
-        self.start_stream("text/event-stream")
+        stream_started = False
+
+        def on_admitted() -> None:
+            nonlocal stream_started
+            self.start_stream("text/event-stream")
+            stream_started = True
 
         def emit(text: str) -> None:
             self.write_sse(
@@ -789,7 +946,24 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                 }
             )
 
-        result = self.runtime.chat(model, messages, options=options, context=payload.get("context"), emit=emit)
+        try:
+            result = self.runtime.chat(
+                model,
+                messages,
+                options=options,
+                context=payload.get("context"),
+                emit=emit,
+                on_admitted=on_admitted,
+            )
+        except RequestAdmissionError:
+            raise
+        except Exception as exc:
+            if not stream_started:
+                raise
+            self.write_sse({"error": {"message": str(exc), "type": "server_error"}})
+            self.wfile.write(b"data: [DONE]\n\n")
+            self.wfile.flush()
+            return
         self.write_sse(
             {
                 "id": request_id,
@@ -797,7 +971,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                 "created": int(time.time()),
                 "model": model,
                 "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
-                "machboost": result.stats,
+                "machboost": openai_machboost_result(result),
             }
         )
         self.wfile.write(b"data: [DONE]\n\n")
@@ -824,12 +998,17 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                     "model": model,
                     "choices": [{"index": 0, "text": result.text, "finish_reason": "stop"}],
                     "usage": usage_from_result(result),
-                    "machboost": result.stats,
+                    "machboost": openai_machboost_result(result),
                 }
             )
             return
 
-        self.start_stream("text/event-stream")
+        stream_started = False
+
+        def on_admitted() -> None:
+            nonlocal stream_started
+            self.start_stream("text/event-stream")
+            stream_started = True
 
         def emit(text: str) -> None:
             self.write_sse(
@@ -842,14 +1021,25 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                 }
             )
 
-        result = self.runtime.generate(
-            model,
-            prompt,
-            options=options,
-            context=payload.get("context"),
-            emit=emit,
-            images=normalize_image_list(payload.get("images")),
-        )
+        try:
+            result = self.runtime.generate(
+                model,
+                prompt,
+                options=options,
+                context=payload.get("context"),
+                emit=emit,
+                images=normalize_image_list(payload.get("images")),
+                on_admitted=on_admitted,
+            )
+        except RequestAdmissionError:
+            raise
+        except Exception as exc:
+            if not stream_started:
+                raise
+            self.write_sse({"error": {"message": str(exc), "type": "server_error"}})
+            self.wfile.write(b"data: [DONE]\n\n")
+            self.wfile.flush()
+            return
         self.write_sse(
             {
                 "id": request_id,
@@ -857,7 +1047,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                 "created": int(time.time()),
                 "model": model,
                 "choices": [{"index": 0, "text": "", "finish_reason": "stop"}],
-                "machboost": result.stats,
+                "machboost": openai_machboost_result(result),
             }
         )
         self.wfile.write(b"data: [DONE]\n\n")
@@ -882,10 +1072,19 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def send_error_json(self, status: int, message: str) -> None:
+    def send_error_json(
+        self,
+        status: int,
+        message: str,
+        *,
+        code: Optional[str] = None,
+    ) -> None:
         if self.headers_sent:
             return
-        self.send_json({"error": message}, status=status)
+        payload = {"error": message}
+        if code is not None:
+            payload["code"] = code
+        self.send_json(payload, status=status)
 
     @property
     def headers_sent(self) -> bool:
@@ -952,6 +1151,52 @@ def _optional_int(value: Any) -> Optional[int]:
     return None if value is None else int(value)
 
 
+def _optional_float(value: Any) -> Optional[float]:
+    return None if value is None else float(value)
+
+
+def request_affinity_key(
+    options: dict[str, Any],
+    *,
+    image_sources: Optional[Iterable[str]] = None,
+) -> Optional[str]:
+    explicit = options.get("affinity_key")
+    if explicit is not None and str(explicit):
+        return f"client:{explicit}"
+    sources = tuple(str(source) for source in (image_sources or ()) if source)
+    if not sources:
+        return None
+    return "images:" + json.dumps(sources, separators=(",", ":"), ensure_ascii=True)
+
+
+def message_image_sources(messages: Sequence[dict[str, Any]]) -> tuple[str, ...]:
+    sources: list[str] = []
+    for message in messages:
+        sources.extend(normalize_image_list(message.get("images")))
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            part_type = str(part.get("type") or "")
+            if part_type not in {"image_url", "input_image", "image"}:
+                continue
+            source = part.get("image_url", part.get("image", part.get("url")))
+            if isinstance(source, dict):
+                source = source.get("url", source)
+            sources.append(json.dumps(source, sort_keys=True, default=str))
+    return tuple(sources)
+
+
+def scheduler_result(lease: Any, replicas: int) -> dict[str, Any]:
+    return {
+        "replica": int(lease.index),
+        "replicas": int(replicas),
+        "queue_wait_seconds": float(lease.queue_wait_seconds),
+    }
+
+
 def messages_have_images(messages: Sequence[dict[str, Any]]) -> bool:
     for message in messages:
         if message.get("images"):
@@ -970,6 +1215,9 @@ def openai_options(payload: dict[str, Any]) -> dict[str, Any]:
     options = dict(payload.get("machboost_options") or {})
     if "max_tokens" in payload:
         options["max_tokens"] = payload["max_tokens"]
+    for key in ("affinity_key", "queue_timeout"):
+        if key in payload:
+            options[key] = payload[key]
     return options
 
 
@@ -977,6 +1225,15 @@ def usage_from_result(result: GenerationResult) -> dict[str, int]:
     prompt = int(result.stats.get("prompt_tokens", 0))
     completion = int(result.stats.get("generated_tokens", 0))
     return {"prompt_tokens": prompt, "completion_tokens": completion, "total_tokens": prompt + completion}
+
+
+def openai_machboost_result(result: GenerationResult) -> dict[str, Any]:
+    return {
+        **result.stats,
+        "backend": result.backend,
+        "time_to_first_token_seconds": result.time_to_first_token_s,
+        "scheduler": dict(result.scheduler or {}),
+    }
 
 
 def utc_timestamp() -> str:
@@ -991,7 +1248,16 @@ def serve(
     *,
     manager: Optional[RuntimeManager] = None,
     ready: Optional[Callable[[MachBoostHTTPServer], None]] = None,
+    replicas: int = DEFAULT_REPLICAS,
+    max_queue: int = DEFAULT_MAX_QUEUE,
+    queue_timeout: float = DEFAULT_QUEUE_TIMEOUT,
 ) -> None:
+    if manager is None:
+        manager = RuntimeManager(
+            replicas=replicas,
+            max_queue=max_queue,
+            queue_timeout=queue_timeout,
+        )
     server = MachBoostHTTPServer((host, int(port)), manager=manager)
     if ready is not None:
         ready(server)
