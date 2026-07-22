@@ -110,6 +110,28 @@ authenticated GitHub CLI session, and an explicit release-notes file. It refuses
 to overwrite an existing release and uploads the DMG, checksum, and appcast to
 the matching GitHub release.
 
+The `macOS Release` GitHub Actions workflow performs the same process for an
+existing `v*` tag. Configure these repository secrets before pushing a release
+tag or starting the workflow manually:
+
+- `APPLE_DEVELOPMENT_TEAM`
+- `APPLE_NOTARY_ISSUER_ID`
+- `APPLE_NOTARY_KEY_ID`
+- `APPLE_NOTARY_KEY_P8_BASE64`
+- `MACOS_CERTIFICATE_P12_BASE64`
+- `MACOS_CERTIFICATE_PASSWORD`
+- `MACOS_CI_KEYCHAIN_PASSWORD`
+- `MACOS_DEVELOPER_ID`
+- `SPARKLE_PRIVATE_KEY_BASE64`
+- `SPARKLE_PUBLIC_ED_KEY`
+
+The workflow imports signing material into a temporary Keychain, builds and
+notarizes the DMG, validates the bundled runtime without invoking host Python,
+generates release notes, publishes the GitHub release, and then removes the
+temporary Keychain. A green ordinary CI run does not imply that signing,
+notarization, or clean-machine hardware validation has run; those checks occur
+in the credential-gated release workflow and the pre-release hardware pass.
+
 Before release, test a small text model, a 3B text model, and a supported vision
 model on Apple Silicon. Also verify a clean-machine install, concurrent OpenAI
 and Ollama requests, cancellation, overload behavior, token rotation, graceful
