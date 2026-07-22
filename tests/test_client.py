@@ -80,6 +80,36 @@ class ClientTests(unittest.TestCase):
         self.assertTrue(rows[-1]["done"])
         self.assertEqual(self.client.ps()[0]["requests"], 1)
 
+    def test_client_exposes_catalog_and_runtime_metrics(self):
+        catalog = self.client.catalog()
+        metrics = self.client.metrics()
+
+        self.assertTrue(any(model["name"] == "llama3.2:3b" for model in catalog))
+        self.assertEqual(metrics["schema"], "machboost.metrics.v1")
+        self.assertIn("active_count", metrics["operations"])
+
+    def test_client_forwards_request_identifier(self):
+        with patch.object(self.client, "post", return_value={"done": True}) as post:
+            self.client.chat(
+                "mlx-community/example",
+                [{"role": "user", "content": "hello"}],
+                request_id="desktop-message-42",
+                stream=False,
+            )
+
+        self.assertEqual(post.call_args.args[1]["request_id"], "desktop-message-42")
+
+    def test_client_adds_bearer_token_to_every_request(self):
+        client = MachBoostClient(self.client.endpoint, api_token="secret-token")
+
+        self.assertEqual(
+            client._headers()["Authorization"],
+            "Bearer secret-token",
+        )
+
+    def test_cancel_returns_false_for_unknown_request(self):
+        self.assertFalse(self.client.cancel("missing-request"))
+
     def test_client_supports_non_streaming_generation_and_stop(self):
         response = self.client.generate("mlx-community/example", "def add", stream=False)
 
