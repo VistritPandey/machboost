@@ -210,28 +210,16 @@ struct RootView: View {
     private func export(_ conversation: Conversation) {
         let panel = NSSavePanel()
         panel.allowedContentTypes = [UTType(filenameExtension: "md") ?? .plainText]
-        panel.nameFieldStringValue = "\(sanitized(conversation.title)).md"
+        panel.nameFieldStringValue = ConversationExporter.fileName(for: conversation)
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        var lines = ["# \(conversation.title)", "", "Model: `\(conversation.model)`", ""]
-        if !conversation.attachments.isEmpty {
-            lines.append("Context: \(conversation.orderedAttachments.map(\.displayName).joined(separator: ", "))")
-            lines.append("")
-        }
-        for message in conversation.orderedMessages {
-            lines.append("## \(message.role == .user ? "User" : "Assistant")")
-            lines.append("")
-            lines.append(message.content)
-            lines.append("")
-        }
         do {
-            try lines.joined(separator: "\n").write(to: url, atomically: true, encoding: .utf8)
+            try ConversationExporter.markdown(conversation).write(
+                to: url,
+                atomically: true,
+                encoding: .utf8
+            )
         } catch {
             appState.presentedError = error.localizedDescription
         }
-    }
-
-    private func sanitized(_ name: String) -> String {
-        name.replacingOccurrences(of: "/", with: "-")
-            .replacingOccurrences(of: ":", with: "-")
     }
 }
