@@ -100,10 +100,15 @@ final class DaemonManager {
     }
 
     func restart(
+        currentEndpoint: URL,
+        currentAPIToken: String?,
         configuration: ServerConfiguration,
         apiToken: String?
     ) async throws {
-        await shutdown(endpoint: configuration.endpoint, apiToken: apiToken)
+        if state == .running, !ownsProcess {
+            throw DaemonError.externallyManaged
+        }
+        await shutdown(endpoint: currentEndpoint, apiToken: currentAPIToken)
         try await start(configuration: configuration, apiToken: apiToken)
     }
 
@@ -210,6 +215,7 @@ enum DaemonError: LocalizedError {
     case runtimeMissing
     case timedOut
     case exited(Int32)
+    case externallyManaged
 
     var errorDescription: String? {
         switch self {
@@ -219,6 +225,8 @@ enum DaemonError: LocalizedError {
             "The MachBoost daemon did not become ready within 30 seconds."
         case let .exited(status):
             "The MachBoost daemon exited with status \(status)."
+        case .externallyManaged:
+            "This server was started outside the app. Stop it before changing app server settings."
         }
     }
 }
