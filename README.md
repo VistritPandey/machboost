@@ -86,6 +86,24 @@ machboost list
 python -m machboost self-test --json
 ```
 
+### Native macOS App
+
+The repository also contains a SwiftUI app for Apple Silicon Macs running
+macOS 14 or newer. It provides streaming chat, local conversation history,
+text/code/folder/image attachments, model downloads, resident-model controls,
+server metrics, a developer API view, and a menu-bar controller. Chats and
+imported attachments remain local, model downloads always require confirmation,
+and closing the window leaves the selected models available until they expire,
+are unloaded, or MachBoost is quit.
+
+Release builds bundle pinned arm64 CPython 3.13, MLX, `mlx-lm`, `mlx-vlm`, and
+MachBoost dependencies. They do not depend on Homebrew, system Python, or an
+existing package install. The source is under [apps/macos](apps/macos/); see the
+[native app guide](apps/macos/README.md) for local builds, runtime verification,
+signing, notarization, DMG creation, and Sparkle updates. A public signed DMG is
+not claimed until those release steps have completed with the project owner's
+Apple credentials.
+
 ## Quick Start
 
 Start a native local chat from the command line. Short aliases select MLX on a compatible Apple Silicon installation and Hugging Face elsewhere:
@@ -150,12 +168,21 @@ curl http://127.0.0.1:11435/api/chat -d '{
 Run MachBoost as a long-lived inference endpoint for multiple application clients:
 
 ```sh
+export MACHBOOST_API_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
 machboost serve \
   --host 0.0.0.0 \
   --port 11435 \
   --replicas 2 \
   --max-queue 64 \
   --queue-timeout 120
+```
+
+Binding to a non-loopback address automatically requires the token. Send it on
+every API request except the minimal health routes:
+
+```sh
+curl -H "Authorization: Bearer $MACHBOOST_API_TOKEN" \
+  http://127.0.0.1:11435/api/metrics
 ```
 
 Each text-model replica owns an independent accelerator and mutable generation cache. Requests are admitted through a bounded FIFO queue, then routed to an available replica. When every replica is busy and the queue is full, MachBoost returns HTTP `503` with `{"code":"queue_full"}` before starting a streaming response. Per-request queue wait and replica selection are returned under `machboost.scheduler`; aggregate active, queued, rejected, timed-out, and per-worker counts are available from `/api/ps` and `machboost ps --json`.
@@ -187,7 +214,17 @@ python3 scripts/benchmark_concurrency.py qwen2.5:3b \
 
 MLX-VLM currently remains limited to one replica because its visual and prompt-state caches are mutable. Even when the server is started with a higher text replica count, a visual model receives one worker and concurrent visual requests queue safely on it. MachBoost does not yet implement continuous batching, which is the more promising route to higher aggregate GPU utilization with one weight copy.
 
-The server has no authentication or TLS. Do not expose it directly to an untrusted network; use a private network or an authenticated reverse proxy.
+Loopback serving remains backward compatible and does not require a token. LAN
+serving requires bearer authentication but does not provide TLS; use a trusted
+private network or an authenticated TLS reverse proxy, and never expose the
+plain HTTP listener directly to the public internet. The native app generates
+its LAN token locally, stores it in Keychain, and passes it to the daemon without
+placing it in process arguments or logs.
+
+Discovery and control clients can use `GET /api/catalog`, `GET /api/metrics`,
+and `POST /api/cancel`. Chat, generation, and pull requests accept an optional
+`request_id`, which is echoed in streaming events. `/api/pull` supports NDJSON
+progress and cancellation while retaining its non-streaming response contract.
 
 ### Visual Chat
 
@@ -701,6 +738,12 @@ Run tests:
 ```sh
 python3 -m unittest discover -s tests
 go test ./...
+cd apps/macos
+xcodegen generate
+xcodebuild test \
+  -project MachBoost.xcodeproj \
+  -scheme MachBoost \
+  -destination 'platform=macOS,arch=arm64'
 ```
 
 CI uses Go 1.24 on current macOS runners. The older Go 1.17 toolchain can build the module, but its test binaries may be rejected by macOS 26 `dyld` because they lack the required Mach-O `LC_UUID` command.
