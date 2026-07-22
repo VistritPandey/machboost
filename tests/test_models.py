@@ -1,5 +1,7 @@
 import json
+import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -7,6 +9,7 @@ from unittest.mock import patch
 from machboost.models import (
     MODEL_ALIASES,
     alias_rows,
+    cached_repo_path,
     catalog_rows,
     model_targets,
     preflight_model,
@@ -99,6 +102,18 @@ class ModelCatalogTests(unittest.TestCase):
 
         self.assertFalse(result["supported"])
         self.assertIn("not supported", result["reason"])
+
+    def test_cached_repo_path_returns_snapshot_with_config(self):
+        with tempfile.TemporaryDirectory() as directory:
+            snapshot = Path(directory, "snapshots", "revision")
+            snapshot.mkdir(parents=True)
+            Path(snapshot, "config.json").write_text("{}", encoding="utf-8")
+            hub = types.ModuleType("huggingface_hub")
+            hub.snapshot_download = lambda **_: str(snapshot)
+            with patch.dict(sys.modules, {"huggingface_hub": hub}):
+                result = cached_repo_path("organization/model")
+
+        self.assertEqual(result, snapshot.resolve())
 
     def test_alias_targets_include_both_native_backends(self):
         self.assertEqual(
