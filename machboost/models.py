@@ -363,14 +363,15 @@ def cached_repo_path(model: Optional[str]) -> Optional[Path]:
     if path.exists():
         return path.resolve()
     try:
-        from huggingface_hub import try_to_load_from_cache
+        from huggingface_hub import snapshot_download
 
-        config = try_to_load_from_cache(model, "config.json")
+        snapshot = snapshot_download(repo_id=model, local_files_only=True)
     except (ImportError, OSError, ValueError):
         return None
-    if not isinstance(config, str):
+    snapshot_path = Path(snapshot)
+    if not (snapshot_path / "config.json").is_file():
         return None
-    return Path(config).resolve().parent
+    return snapshot_path.resolve()
 
 
 def _validate_mlx_architecture(config: dict[str, Any], backend: str) -> None:
