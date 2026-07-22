@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import json
+import os
 import platform
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -244,8 +245,15 @@ def alias_rows() -> list[dict]:
     return [MODEL_ALIASES[name].to_dict() for name in sorted(MODEL_ALIASES)]
 
 
-def catalog_rows() -> list[dict[str, Any]]:
+def catalog_rows(
+    *,
+    include_cached_repositories: bool = True,
+    cache_dirs: Optional[list[Path]] = None,
+) -> list[dict[str, Any]]:
     rows = []
+    catalog_repositories = {
+        alias.mlx for alias in MODEL_ALIASES.values() if alias.mlx is not None
+    }
     for name in sorted(MODEL_ALIASES):
         alias = MODEL_ALIASES[name]
         backend = "mlx-vlm" if alias.capability == "vision" else "mlx"
@@ -269,11 +277,154 @@ def catalog_rows() -> list[dict[str, Any]]:
                 "recommended": name in RECOMMENDED_MODELS,
                 "tested": True,
                 "download_size_gb": download_size_gb,
+                "disk_size_gb": _directory_size_gb(cached_path),
                 "minimum_memory_gb": minimum_memory_gb,
                 "support": "ready" if backend_available(backend) else "missing_runtime",
+                "support_reason": None,
             }
         )
+    if include_cached_repositories:
+        rows.extend(
+            _cached_repository_rows(
+                cache_dirs=cache_dirs,
+                excluded_repositories=catalog_repositories,
+            )
+        )
+    return sorted(rows, key=lambda row: str(row["name"]).lower())
+
+
+def default_hf_cache_dirs() -> list[Path]:
+    candidates: list[Path] = []
+    for variable in ("HF_HUB_CACHE", "HUGGINGFACE_HUB_CACHE"):
+        if value := os.environ.get(variable):
+            candidates.append(Path(value).expanduser())
+    if value := os.environ.get("HF_HOME"):
+        candidates.append(Path(value).expanduser() / "hub")
+    candidates.append(Path.home() / ".cache" / "huggingface" / "hub")
+
+    result: list[Path] = []
+    seen: set[Path] = set()
+    for candidate in candidates:
+        resolved = candidate.resolve()
+        if resolved not in seen:
+            result.append(resolved)
+            seen.add(resolved)
+    return result
+
+
+def _cached_repository_rows(
+    *,
+    cache_dirs: Optional[list[Path]],
+    excluded_repositories: set[str],
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    seen: set[str] = set(excluded_repositories)
+    for cache_dir in cache_dirs or default_hf_cache_dirs():
+        if not cache_dir.is_dir():
+            continue
+        for repository_dir in sorted(cache_dir.glob("models--*")):
+            repository = _repository_id_from_cache_name(repository_dir.name)
+            if not repository or repository in seen:
+                continue
+            seen.add(repository)
+            backend = select_backend_for_repo(repository)
+            if not backend.startswith("mlx"):
+                continue
+            snapshot = _latest_snapshot(repository_dir)
+            if snapshot is None:
+                continue
+            preflight = _preflight_cached_snapshot(repository, backend, snapshot)
+            capabilities = (
+                ["chat", "vision"]
+                if backend.endswith("-vlm")
+                else ["chat", "completion"]
+            )
+            rows.append(
+                {
+                    "name": repository,
+                    "display_name": repository.rsplit("/", 1)[-1],
+                    "repository": repository,
+                    "backend": backend,
+                    "capabilities": capabilities,
+                    "cached": True,
+                    "cached_path": str(snapshot),
+                    "recommended": False,
+                    "tested": False,
+                    "download_size_gb": None,
+                    "disk_size_gb": _directory_size_gb(snapshot),
+                    "minimum_memory_gb": None,
+                    "support": "ready" if preflight["supported"] else "unsupported",
+                    "support_reason": preflight["reason"],
+                }
+            )
     return rows
+
+
+def _repository_id_from_cache_name(name: str) -> Optional[str]:
+    if not name.startswith("models--"):
+        return None
+    pieces = name.removeprefix("models--").split("--")
+    if len(pieces) < 2 or any(not piece for piece in pieces):
+        return None
+    return "/".join(pieces)
+
+
+def _latest_snapshot(repository_dir: Path) -> Optional[Path]:
+    snapshots = repository_dir / "snapshots"
+    if not snapshots.is_dir():
+        return None
+    candidates = [
+        path
+        for path in snapshots.iterdir()
+        if path.is_dir() and (path / "config.json").is_file()
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda path: path.stat().st_mtime_ns).resolve()
+
+
+def _preflight_cached_snapshot(
+    repository: str,
+    backend: str,
+    snapshot: Path,
+) -> dict[str, Any]:
+    if not backend_available(backend):
+        return {
+            "supported": False,
+            "reason": f"{backend} runtime is not installed",
+        }
+    try:
+        config = json.loads((snapshot / "config.json").read_text(encoding="utf-8"))
+        model_type = str(config.get("model_type") or "").strip().lower()
+        if not model_type:
+            raise ValueError("config.json does not define model_type")
+        _validate_mlx_architecture(config, backend)
+    except (ImportError, OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        return {"supported": False, "reason": str(exc)}
+    return {
+        "supported": True,
+        "reason": f"compatible {backend} architecture ({model_type})",
+    }
+
+
+def _directory_size_gb(path: Optional[Path]) -> Optional[float]:
+    if path is None or not path.is_dir():
+        return None
+    total = 0
+    seen_files: set[tuple[int, int]] = set()
+    try:
+        for item in path.rglob("*"):
+            if not item.is_file():
+                continue
+            stat = item.stat()
+            identity = (stat.st_dev, stat.st_ino)
+            if identity in seen_files:
+                continue
+            seen_files.add(identity)
+            total += stat.st_size
+    except OSError:
+        return None
+    return total / 1_000_000_000
 
 
 def preflight_model(
