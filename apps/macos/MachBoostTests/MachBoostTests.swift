@@ -160,4 +160,157 @@ final class MachBoostTests: XCTestCase {
         XCTAssertEqual(configuration.bindHost, "0.0.0.0")
         XCTAssertEqual(configuration.endpoint.host, "127.0.0.1")
     }
+
+    func testAuthenticatedCatalogRequestUsesBearerToken() async throws {
+        let session = mockSession { request in
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer secret-token")
+            return self.response(
+                for: request,
+                body: #"{"schema":"machboost.catalog.v1","models":[]}"#
+            )
+        }
+        let api = MachBoostAPI(
+            endpoint: URL(string: "http://127.0.0.1:11435")!,
+            apiToken: "secret-token",
+            session: session
+        )
+
+        let models = try await api.catalog()
+
+        XCTAssertTrue(models.isEmpty)
+    }
+
+    func testCancellationSendsClientRequestID() async throws {
+        let session = mockSession { request in
+            let data = try XCTUnwrap(request.httpBody)
+            let object = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: data) as? [String: Any]
+            )
+            XCTAssertEqual(object["request_id"] as? String, "chat-request-42")
+            return self.response(
+                for: request,
+                status: 202,
+                body: #"{"cancelled":true}"#
+            )
+        }
+        let api = MachBoostAPI(
+            endpoint: URL(string: "http://127.0.0.1:11435")!,
+            session: session
+        )
+
+        let cancelled = try await api.cancel(requestID: "chat-request-42")
+
+        XCTAssertTrue(cancelled)
+    }
+
+    func testNDJSONChatStreamPreservesRequestIDAndCompletion() async throws {
+        let session = mockSession { request in
+            self.response(
+                for: request,
+                contentType: "application/x-ndjson",
+                body: """
+                {"request_id":"chat-stream-7","message":{"role":"assistant","content":"Hi"},"done":false}
+                {"request_id":"chat-stream-7","message":{"role":"assistant","content":" there"},"done":true,"done_reason":"stop"}
+
+                """
+            )
+        }
+        let api = MachBoostAPI(
+            endpoint: URL(string: "http://127.0.0.1:11435")!,
+            session: session
+        )
+        let request = ChatRequest(
+            requestID: "chat-stream-7",
+            model: "llama3.2:3b",
+            messages: [.init(role: "user", content: "Hello", images: nil)],
+            context: [],
+            options: .init(maxTokens: 32, temperature: 0, affinityKey: nil)
+        )
+        var events: [ChatEvent] = []
+
+        for try await event in api.streamChat(request) {
+            events.append(event)
+        }
+
+        XCTAssertEqual(events.count, 2)
+        XCTAssertEqual(events.map(\.requestID), ["chat-stream-7", "chat-stream-7"])
+        XCTAssertEqual(events.compactMap(\.message?.content).joined(), "Hi there")
+        XCTAssertTrue(events.last?.done ?? false)
+    }
+
+    @MainActor
+    func testConversationMarkdownExportIsOrderedAndSanitized() throws {
+        let conversation = Conversation(title: "Release: notes/July", model: "qwen2.5:3b")
+        conversation.messages = [
+            ChatMessage(
+                role: .assistant,
+                content: "Ready.",
+                createdAt: Date(timeIntervalSince1970: 2),
+                conversation: conversation
+            ),
+            ChatMessage(
+                role: .user,
+                content: "Ship it?",
+                createdAt: Date(timeIntervalSince1970: 1),
+                conversation: conversation
+            ),
+        ]
+
+        let markdown = ConversationExporter.markdown(conversation)
+
+        XCTAssertEqual(ConversationExporter.fileName(for: conversation), "Release- notes-July.md")
+        XCTAssertLessThan(
+            try XCTUnwrap(markdown.range(of: "## User")?.lowerBound),
+            try XCTUnwrap(markdown.range(of: "## Assistant")?.lowerBound)
+        )
+        XCTAssertTrue(markdown.contains("Model: `qwen2.5:3b`"))
+    }
+
+    private func mockSession(
+        handler: @escaping (URLRequest) throws -> (HTTPURLResponse, Data)
+    ) -> URLSession {
+        MockURLProtocol.handler = handler
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [MockURLProtocol.self]
+        return URLSession(configuration: configuration)
+    }
+
+    private func response(
+        for request: URLRequest,
+        status: Int = 200,
+        contentType: String = "application/json",
+        body: String
+    ) -> (HTTPURLResponse, Data) {
+        let response = HTTPURLResponse(
+            url: request.url!,
+            statusCode: status,
+            httpVersion: "HTTP/1.1",
+            headerFields: ["Content-Type": contentType]
+        )!
+        return (response, Data(body.utf8))
+    }
+}
+
+private final class MockURLProtocol: URLProtocol, @unchecked Sendable {
+    nonisolated(unsafe) static var handler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
+    override func startLoading() {
+        do {
+            let handler = try XCTUnwrap(Self.handler)
+            let (response, data) = try handler(request)
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: data)
+            client?.urlProtocolDidFinishLoading(self)
+        } catch {
+            client?.urlProtocol(self, didFailWithError: error)
+        }
+    }
+
+    override func stopLoading() {}
 }
