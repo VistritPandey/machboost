@@ -35,6 +35,20 @@
                ReferencedContainer = "container:MachBoost.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "NO"
+            buildForProfiling = "NO"
+            buildForArchiving = "NO"
+            buildForAnalyzing = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "749C29BCC7EDAE1BF0083D7C"
+               BuildableName = "MachBoostUITests.xctest"
+               BlueprintName = "MachBoostUITests"
+               ReferencedContainer = "container:MachBoost.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
       </BuildActionEntries>
    </BuildAction>
    <TestAction
@@ -62,6 +76,17 @@
                BlueprintIdentifier = "7C9618CBD58BF5B78FD41FDE"
                BuildableName = "MachBoostTests.xctest"
                BlueprintName = "MachBoostTests"
+               ReferencedContainer = "container:MachBoost.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "749C29BCC7EDAE1BF0083D7C"
+               BuildableName = "MachBoostUITests.xctest"
+               BlueprintName = "MachBoostUITests"
                ReferencedContainer = "container:MachBoost.xcodeproj">
             </BuildableReference>
          </TestableReference>
