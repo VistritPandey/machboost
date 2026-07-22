@@ -10,7 +10,12 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from machboost.scheduler import RequestAdmissionError
-from machboost.server import MachBoostHTTPServer, RuntimeManager, parse_keep_alive
+from machboost.server import (
+    MachBoostHTTPServer,
+    OperationRegistry,
+    RuntimeManager,
+    parse_keep_alive,
+)
 
 
 @dataclass
@@ -214,6 +219,20 @@ class FakeClock:
 
 
 class RuntimeManagerTests(unittest.TestCase):
+    def test_generation_throughput_excludes_pull_duration(self):
+        now = [0.0]
+        registry = OperationRegistry(clock=lambda: now[0])
+        generation = registry.begin("chat-1", "chat", "example")
+        now[0] = 2.0
+        registry.finish(generation, status="completed", generated_tokens=20)
+        pull = registry.begin("pull-1", "pull", "example")
+        now[0] = 12.0
+        registry.finish(pull, status="completed")
+
+        metrics = registry.snapshot()
+
+        self.assertEqual(metrics["generation_tokens_per_second"], 10.0)
+
     def test_parse_keep_alive_supports_ollama_style_durations(self):
         self.assertEqual(parse_keep_alive("90s"), 90.0)
         self.assertEqual(parse_keep_alive("5m"), 300.0)
