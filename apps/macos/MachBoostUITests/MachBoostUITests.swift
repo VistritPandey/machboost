@@ -1,5 +1,6 @@
 import XCTest
 
+@MainActor
 final class MachBoostUITests: XCTestCase {
     private var app: XCUIApplication!
 
