@@ -12,6 +12,9 @@ struct ChatView: View {
     @State private var generationTask: Task<Void, Never>?
     @State private var activeRequestID: String?
     @State private var isImporting = false
+    @State private var showsGenerationControls = false
+    @AppStorage("machboost.chat.maxTokens") private var maxTokens = 512
+    @AppStorage("machboost.chat.temperature") private var temperature = 0.2
 
     var body: some View {
         VStack(spacing: 0) {
@@ -58,6 +61,17 @@ struct ChatView: View {
 
             Spacer()
 
+            Button {
+                showsGenerationControls.toggle()
+            } label: {
+                Image(systemName: "slider.horizontal.3")
+            }
+            .buttonStyle(.plain)
+            .help("Generation controls")
+            .popover(isPresented: $showsGenerationControls, arrowEdge: .bottom) {
+                generationControls
+            }
+
             if let activeRequestID {
                 Text(activeRequestID.suffix(8))
                     .font(.caption.monospaced())
@@ -66,6 +80,24 @@ struct ChatView: View {
         }
         .padding(.horizontal, 16)
         .frame(height: 48)
+    }
+
+    private var generationControls: some View {
+        Form {
+            Stepper(value: $maxTokens, in: 32...4_096, step: 32) {
+                LabeledContent("Maximum tokens", value: "\(maxTokens)")
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                LabeledContent(
+                    "Temperature",
+                    value: temperature.formatted(.number.precision(.fractionLength(2)))
+                )
+                Slider(value: $temperature, in: 0...1, step: 0.05)
+            }
+        }
+        .formStyle(.grouped)
+        .frame(width: 300)
+        .padding(.vertical, 6)
     }
 
     private var messageList: some View {
@@ -249,8 +281,8 @@ struct ChatView: View {
                 .filter { $0.kind == .text }
                 .map(\.importedPath),
             options: .init(
-                maxTokens: 512,
-                temperature: 0.2,
+                maxTokens: maxTokens,
+                temperature: temperature,
                 affinityKey: conversation.id.uuidString
             )
         )
