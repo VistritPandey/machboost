@@ -85,7 +85,7 @@ class ModelCatalogTests(unittest.TestCase):
             with (
                 patch("machboost.models.cached_repo_path", return_value=None),
                 patch("machboost.models.backend_available", return_value=True),
-                patch("machboost.models._validate_mlx_architecture") as validate,
+                patch("machboost.models._validate_cached_mlx_architecture") as validate,
             ):
                 rows = catalog_rows(cache_dirs=[Path(directory)])
 
@@ -116,7 +116,7 @@ class ModelCatalogTests(unittest.TestCase):
                 patch("machboost.models.cached_repo_path", return_value=None),
                 patch("machboost.models.backend_available", return_value=True),
                 patch(
-                    "machboost.models._validate_mlx_architecture",
+                    "machboost.models._validate_cached_mlx_architecture",
                     side_effect=ValueError("future_model is not supported"),
                 ),
             ):
