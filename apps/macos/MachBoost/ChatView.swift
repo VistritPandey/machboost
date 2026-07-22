@@ -32,7 +32,7 @@ struct ChatView: View {
             onCompletion: importAttachments
         )
         .onDisappear {
-            generationTask?.cancel()
+            stop()
         }
     }
 
