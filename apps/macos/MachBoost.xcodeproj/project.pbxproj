@@ -22,11 +22,19 @@
 		B13EB86E24A994C300C7858C /* DaemonManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A31E8B16876F4F8C49D2AB38 /* DaemonManager.swift */; };
 		B4C476FB19A204404CC5DF12 /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 897AC5550FBF95B6362AB6E6 /* KeychainStore.swift */; };
 		D31D40691C5E9FFEBE04703E /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87B97748332FB15E03C019A8 /* SettingsView.swift */; };
+		D6E5D248F85B5447DDF0EAE2 /* MachBoostUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5C13DB7C6E6AF6223311FA2 /* MachBoostUITests.swift */; };
 		D8244BCFAAD2F230190F23BC /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 9AE21F9C8B888A139F3A8B1B /* Assets.xcassets */; };
 		F3A9FF23F0DBCABCEC4463E9 /* DomainModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE8900B13B2CE90C7E32FF10 /* DomainModels.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+		2099DC8449190AA4F29B402E /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = D103937D0F66FBDD5681B141 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 92C17BC99578975684FD9432;
+			remoteInfo = MachBoost;
+		};
 		37A6A867A3EB5C58CD27194A /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = D103937D0F66FBDD5681B141 /* Project object */;
@@ -55,6 +63,8 @@
 		A31E8B16876F4F8C49D2AB38 /* DaemonManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DaemonManager.swift; sourceTree = "<group>"; };
 		A8F16CEE5C06B74EBF5897BF /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
 		B015F7E4554CB7BDFD22B814 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		B4E3E80C4F320139BF2EB1C4 /* MachBoostUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MachBoostUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		B5C13DB7C6E6AF6223311FA2 /* MachBoostUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MachBoostUITests.swift; sourceTree = "<group>"; };
 		BAE25776D58D45FA869FC1DE /* AttachmentStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentStore.swift; sourceTree = "<group>"; };
 		EE8900B13B2CE90C7E32FF10 /* DomainModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DomainModels.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -71,11 +81,20 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		10E03DE42029D80DA0C9142E /* MachBoostUITests */ = {
+			isa = PBXGroup;
+			children = (
+				B5C13DB7C6E6AF6223311FA2 /* MachBoostUITests.swift */,
+			);
+			path = MachBoostUITests;
+			sourceTree = "<group>";
+		};
 		2427EADC13622440643F5C58 = {
 			isa = PBXGroup;
 			children = (
 				565F5263509E5EC680F7B786 /* MachBoost */,
 				3A2359EC92D6AAEEB5BE92AA /* MachBoostTests */,
+				10E03DE42029D80DA0C9142E /* MachBoostUITests */,
 				EFE0487475770A5F6CE56CA1 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -117,6 +136,7 @@
 			children = (
 				1B0DFBEEC996B812905DFC15 /* MachBoost.app */,
 				6D3E0E38EC91A702C4A3F7BB /* MachBoostTests.xctest */,
+				B4E3E80C4F320139BF2EB1C4 /* MachBoostUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -124,6 +144,24 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		749C29BCC7EDAE1BF0083D7C /* MachBoostUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 3428C00FC1716CB2A691992C /* Build configuration list for PBXNativeTarget "MachBoostUITests" */;
+			buildPhases = (
+				DAFF2177D7C3ADDB55996CAB /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				CF606CBA3134BC9808332510 /* PBXTargetDependency */,
+			);
+			name = MachBoostUITests;
+			packageProductDependencies = (
+			);
+			productName = MachBoostUITests;
+			productReference = B4E3E80C4F320139BF2EB1C4 /* MachBoostUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 		7C9618CBD58BF5B78FD41FDE /* MachBoostTests */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 0D653B3F9999A4A6FC127262 /* Build configuration list for PBXNativeTarget "MachBoostTests" */;
@@ -171,6 +209,11 @@
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 1600;
 				TargetAttributes = {
+					749C29BCC7EDAE1BF0083D7C = {
+						DevelopmentTeam = "";
+						ProvisioningStyle = Automatic;
+						TestTargetID = 92C17BC99578975684FD9432;
+					};
 					7C9618CBD58BF5B78FD41FDE = {
 						DevelopmentTeam = "";
 						ProvisioningStyle = Automatic;
@@ -200,6 +243,7 @@
 			targets = (
 				92C17BC99578975684FD9432 /* MachBoost */,
 				7C9618CBD58BF5B78FD41FDE /* MachBoostTests */,
+				749C29BCC7EDAE1BF0083D7C /* MachBoostUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -245,6 +289,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		DAFF2177D7C3ADDB55996CAB /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				D6E5D248F85B5447DDF0EAE2 /* MachBoostUITests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -252,6 +304,11 @@
 			isa = PBXTargetDependency;
 			target = 92C17BC99578975684FD9432 /* MachBoost */;
 			targetProxy = 37A6A867A3EB5C58CD27194A /* PBXContainerItemProxy */;
+		};
+		CF606CBA3134BC9808332510 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 92C17BC99578975684FD9432 /* MachBoost */;
+			targetProxy = 2099DC8449190AA4F29B402E /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -271,6 +328,22 @@
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/MachBoost.app/Contents/MacOS/MachBoost";
 			};
 			name = Release;
+		};
+		0E874B35C6A7F17A4B98A7DD /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.vistritpandey.MachBoostUITests;
+				SDKROOT = macosx;
+				TEST_TARGET_NAME = MachBoost;
+			};
+			name = Debug;
 		};
 		4330A9E9B555D861C7F68441 /* Release */ = {
 			isa = XCBuildConfiguration;
@@ -455,6 +528,22 @@
 			};
 			name = Debug;
 		};
+		FE50B1F45C32AFBB6ED81A24 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.vistritpandey.MachBoostUITests;
+				SDKROOT = macosx;
+				TEST_TARGET_NAME = MachBoost;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -472,6 +561,15 @@
 			buildConfigurations = (
 				DA4CF82F46FF1D4F5961EB80 /* Debug */,
 				048BF03F6DD451255AB78968 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		3428C00FC1716CB2A691992C /* Build configuration list for PBXNativeTarget "MachBoostUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				0E874B35C6A7F17A4B98A7DD /* Debug */,
+				FE50B1F45C32AFBB6ED81A24 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;
