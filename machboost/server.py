@@ -130,10 +130,11 @@ class OperationRegistry:
             history = list(self._history)
             totals = dict(self._totals)
         durations = sorted(float(item["duration_seconds"]) for item in history)
-        completed_duration = sum(
+        generation_duration = sum(
             float(item["duration_seconds"])
             for item in history
             if item["status"] == "completed"
+            and item["kind"] in {"chat", "generate"}
         )
         return {
             "active": active,
@@ -144,8 +145,8 @@ class OperationRegistry:
                 "p95": percentile(durations, 0.95),
             },
             "generation_tokens_per_second": (
-                float(totals["generated_tokens"]) / completed_duration
-                if completed_duration > 0
+                float(totals["generated_tokens"]) / generation_duration
+                if generation_duration > 0
                 else 0.0
             ),
         }
