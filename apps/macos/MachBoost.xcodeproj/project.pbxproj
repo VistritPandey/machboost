@@ -11,6 +11,7 @@
 		0EAB94A2402BCECBC7520929 /* MachBoostAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65BFBB8E6C3023647313F310 /* MachBoostAPI.swift */; };
 		1BD8A1EEF4A2C390909133B6 /* ConversationExporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E50EC9925586409060F9B1F /* ConversationExporter.swift */; };
 		1C9E4E6E69E7F0F84744660E /* UpdateController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C427B3847622D628B344F16 /* UpdateController.swift */; };
+		2AE014D9F9C0E3D500A7EF6C /* UITestMachBoostAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48709DA45E2A1AFBF0DCD64A /* UITestMachBoostAPI.swift */; };
 		4850300E156305AF616FE930 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = E284163CFFA3CC2C71B3C1CC /* Sparkle */; };
 		4CABF47F885FDD74C37117E1 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2436F81998E2D43F6056D376 /* RootView.swift */; };
 		5D338DB8EEBB4A4EDBA60748 /* ServerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3915A2BFBF1C814FE0FD65D4 /* ServerView.swift */; };
@@ -52,6 +53,7 @@
 		1B0DFBEEC996B812905DFC15 /* MachBoost.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MachBoost.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		2436F81998E2D43F6056D376 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		3915A2BFBF1C814FE0FD65D4 /* ServerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerView.swift; sourceTree = "<group>"; };
+		48709DA45E2A1AFBF0DCD64A /* UITestMachBoostAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UITestMachBoostAPI.swift; sourceTree = "<group>"; };
 		5C427B3847622D628B344F16 /* UpdateController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateController.swift; sourceTree = "<group>"; };
 		5C62A9D5540E53785741BB3B /* MessageContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageContentView.swift; sourceTree = "<group>"; };
 		65BFBB8E6C3023647313F310 /* MachBoostAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MachBoostAPI.swift; sourceTree = "<group>"; };
@@ -129,6 +131,7 @@
 				2436F81998E2D43F6056D376 /* RootView.swift */,
 				3915A2BFBF1C814FE0FD65D4 /* ServerView.swift */,
 				87B97748332FB15E03C019A8 /* SettingsView.swift */,
+				48709DA45E2A1AFBF0DCD64A /* UITestMachBoostAPI.swift */,
 				5C427B3847622D628B344F16 /* UpdateController.swift */,
 			);
 			path = MachBoost;
@@ -281,6 +284,7 @@
 				4CABF47F885FDD74C37117E1 /* RootView.swift in Sources */,
 				5D338DB8EEBB4A4EDBA60748 /* ServerView.swift in Sources */,
 				D31D40691C5E9FFEBE04703E /* SettingsView.swift in Sources */,
+				2AE014D9F9C0E3D500A7EF6C /* UITestMachBoostAPI.swift in Sources */,
 				1C9E4E6E69E7F0F84744660E /* UpdateController.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
