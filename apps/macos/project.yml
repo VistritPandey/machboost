@@ -29,14 +29,13 @@ targets:
       - path: MachBoost
     resources:
       - path: Resources
-    info:
-      path: MachBoost/Info.plist
     entitlements:
       path: MachBoost/MachBoost.entitlements
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.vistritpandey.MachBoost
         PRODUCT_NAME: MachBoost
+        INFOPLIST_FILE: MachBoost/Info.plist
     dependencies:
       - package: Sparkle
   MachBoostTests:
