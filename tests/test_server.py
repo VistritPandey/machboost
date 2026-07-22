@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 import unittest
 from dataclasses import dataclass
 from unittest.mock import patch
@@ -185,6 +186,20 @@ class BlockingAccelerator(FakeAccelerator):
         if on_text is not None:
             on_text("hello world")
         return "hello world", FakeStats()
+
+
+class StreamingAccelerator(FakeAccelerator):
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = threading.Event()
+
+    def generate_chat(self, messages, *, max_tokens, context=None, on_text=None):
+        self.started.set()
+        for _ in range(200):
+            if on_text is not None:
+                on_text("token ")
+            time.sleep(0.005)
+        return "token " * 200, FakeStats(generated_tokens=200)
 
 
 class FakeClock:
@@ -489,6 +504,17 @@ class HTTPServerTests(unittest.TestCase):
         _, _, body = self.request("/api/ps")
         self.assertEqual(json.loads(body)["models"][0]["model"], "mlx-community/example")
 
+    def test_catalog_and_metrics_have_stable_schemas(self):
+        _, _, catalog_body = self.request("/api/catalog")
+        _, _, metrics_body = self.request("/api/metrics")
+
+        catalog = json.loads(catalog_body)
+        metrics = json.loads(metrics_body)
+        self.assertEqual(catalog["schema"], "machboost.catalog.v1")
+        self.assertTrue(any(item["name"] == "llama3.2:3b" for item in catalog["models"]))
+        self.assertEqual(metrics["schema"], "machboost.metrics.v1")
+        self.assertIn("peak_resident_memory_bytes", metrics["process"])
+
     def test_ollama_chat_supports_non_streaming_and_reuses_model(self):
         payload = {
             "model": "mlx-community/example",
@@ -557,6 +583,102 @@ class HTTPServerTests(unittest.TestCase):
         self.assertEqual("".join(row["message"]["content"] for row in rows), "hello world")
         self.assertFalse(rows[0]["done"])
         self.assertTrue(rows[-1]["done"])
+
+    def test_client_request_id_is_returned_in_every_stream_event(self):
+        _, _, body = self.request(
+            "/api/chat",
+            {
+                "request_id": "desktop-chat-7",
+                "model": "mlx-community/example",
+                "messages": [{"role": "user", "content": "hello"}],
+                "stream": True,
+            },
+        )
+
+        rows = [json.loads(line) for line in body.splitlines()]
+        self.assertTrue(rows)
+        self.assertTrue(all(row["request_id"] == "desktop-chat-7" for row in rows))
+
+    def test_secured_server_requires_valid_bearer_token(self):
+        manager = RuntimeManager(loader=lambda config: FakeAccelerator())
+        server = MachBoostHTTPServer(
+            ("127.0.0.1", 0),
+            manager=manager,
+            api_token="top-secret",
+            require_auth=True,
+        )
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        host, port = server.server_address
+        try:
+            health = Request(f"http://{host}:{port}/healthz")
+            with urlopen(health, timeout=2.0) as response:
+                self.assertEqual(response.status, 200)
+
+            with self.assertRaises(HTTPError) as raised:
+                urlopen(Request(f"http://{host}:{port}/api/metrics"), timeout=2.0)
+            self.assertEqual(raised.exception.code, 401)
+
+            authorized = Request(
+                f"http://{host}:{port}/api/metrics",
+                headers={"Authorization": "Bearer top-secret"},
+            )
+            with urlopen(authorized, timeout=2.0) as response:
+                self.assertEqual(json.loads(response.read())["schema"], "machboost.metrics.v1")
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2.0)
+
+    def test_cancel_stops_an_active_stream(self):
+        accelerator = StreamingAccelerator()
+        manager = RuntimeManager(loader=lambda config: accelerator)
+        server = MachBoostHTTPServer(("127.0.0.1", 0), manager=manager)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        host, port = server.server_address
+        endpoint = f"http://{host}:{port}"
+        response_rows = []
+
+        def stream_request() -> None:
+            payload = json.dumps(
+                {
+                    "request_id": "cancel-me",
+                    "model": "mlx-community/example",
+                    "messages": [{"role": "user", "content": "long answer"}],
+                    "stream": True,
+                }
+            ).encode("utf-8")
+            request = Request(
+                endpoint + "/api/chat",
+                data=payload,
+                headers={"Content-Type": "application/json"},
+            )
+            with urlopen(request, timeout=3.0) as response:
+                response_rows.extend(
+                    json.loads(line) for line in response if line.strip()
+                )
+
+        request_thread = threading.Thread(target=stream_request)
+        request_thread.start()
+        try:
+            self.assertTrue(accelerator.started.wait(timeout=1.0))
+            cancel_payload = json.dumps({"request_id": "cancel-me"}).encode("utf-8")
+            cancel_request = Request(
+                endpoint + "/api/cancel",
+                data=cancel_payload,
+                headers={"Content-Type": "application/json"},
+            )
+            with urlopen(cancel_request, timeout=2.0) as response:
+                self.assertEqual(response.status, 202)
+            request_thread.join(timeout=2.0)
+            self.assertFalse(request_thread.is_alive())
+            self.assertEqual(response_rows[-1]["done_reason"], "cancelled")
+            self.assertEqual(manager.metrics()["operations"]["totals"]["cancelled"], 1)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2.0)
 
     def test_openai_completion_endpoint(self):
         _, _, body = self.request(
