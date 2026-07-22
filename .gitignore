@@ -58,3 +58,24 @@ checkpoints/
 .cache/
 hf_cache/
 mlx_cache/
+
+# Native macOS build state and bundled runtime
+apps/macos/.build/
+apps/macos/.swiftpm/
+apps/macos/Resources/runtime/
+apps/macos/DerivedData/
+apps/macos/build/
+apps/macos/*.xcarchive/
+apps/macos/*.dmg
+apps/macos/*.zip
+apps/macos/**/*.xcuserstate
+apps/macos/**/xcuserdata/
+*.dSYM/
+
+# Signing and notarization material must never be committed
+*.cer
+*.p12
+*.provisionprofile
+*.mobileprovision
+appcast-private-key*
+notarytool-profile*
