@@ -187,7 +187,7 @@ final class UITestMachBoostAPI: MachBoostAPIProtocol, @unchecked Sendable {
         let startsEmpty = ProcessInfo.processInfo.environment[
             "MACHBOOST_UI_TEST_NO_CACHED_MODELS"
         ] == "1"
-        [
+        return [
             model(
                 name: "qwen2.5:3b",
                 displayName: "Qwen2.5 3B",
