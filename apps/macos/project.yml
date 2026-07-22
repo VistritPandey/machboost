@@ -46,6 +46,7 @@ targets:
       - target: MachBoost
     settings:
       base:
+        GENERATE_INFOPLIST_FILE: YES
         PRODUCT_BUNDLE_IDENTIFIER: com.vistritpandey.MachBoostTests
   MachBoostUITests:
     type: bundle.ui-testing
@@ -56,6 +57,7 @@ targets:
       - target: MachBoost
     settings:
       base:
+        GENERATE_INFOPLIST_FILE: YES
         PRODUCT_BUNDLE_IDENTIFIER: com.vistritpandey.MachBoostUITests
 schemes:
   MachBoost:
