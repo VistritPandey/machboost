@@ -37,6 +37,7 @@ Treat every workload as uncalibrated until it passes a same-model paired benchma
 | Path | Current evidence | Product status |
 |---|---|---|
 | Plain resident text chat | Native MLX decode through a local server; no drafting without context | usable, with measurable server/streaming overhead versus direct `mlx-lm` |
+| Concurrent text API serving | bounded FIFO admission, explicit overload responses, and isolated model replicas | usable; replicas consume additional memory and do not guarantee higher GPU throughput |
 | Context-backed MLX text | latest broad Llama 3.2 3B suite was 1.008x aggregate with 20/21 exact pairs; favorable controlled continuations can be materially faster | experimental; never generalize a fixture result beyond its workload |
 | Repeated unchanged image | 5.14x-17.44x model-level paired medians on one synthetic image and short extraction prompts | promising for repeated-image prefill; not a first-view or decode result |
 | New-image Qwen3-VL compression | 1.70x median on ten TextVQA rows, with 70% normalized output equality and equal 8/10 aggregate task scores | approximate, opt-in, and not quality-equivalence evidence |
@@ -143,6 +144,50 @@ curl http://127.0.0.1:11435/api/chat -d '{
   "stream": false
 }'
 ```
+
+### Concurrent API Serving
+
+Run MachBoost as a long-lived inference endpoint for multiple application clients:
+
+```sh
+machboost serve \
+  --host 0.0.0.0 \
+  --port 11435 \
+  --replicas 2 \
+  --max-queue 64 \
+  --queue-timeout 120
+```
+
+Each text-model replica owns an independent accelerator and mutable generation cache. Requests are admitted through a bounded FIFO queue, then routed to an available replica. When every replica is busy and the queue is full, MachBoost returns HTTP `503` with `{"code":"queue_full"}` before starting a streaming response. Per-request queue wait and replica selection are returned under `machboost.scheduler`; aggregate active, queued, rejected, timed-out, and per-worker counts are available from `/api/ps` and `machboost ps --json`.
+
+Use `affinity_key` for best-effort routing of a user, document, or session to the same available replica:
+
+```python
+response = client.chat(
+    "qwen2.5:3b",
+    [{"role": "user", "content": "Summarize the current incident."}],
+    affinity_key="incident-4821",
+    queue_timeout=2.0,
+    stream=False,
+)
+```
+
+Replicas are an opt-in concurrency and isolation control, not a promised throughput multiplier. They load another model instance and therefore use additional unified memory. On one local Qwen2.5 3B MLX audit with four clients, 24 requests, greedy decoding, and a 64-token limit, two replicas improved median time to first token from `2.089s` to `1.234s` and median total latency from `2.681s` to `2.435s`; aggregate decode throughput changed only from `94.15` to `96.12 tok/s`, while p95 total latency regressed from `2.791s` to `3.132s`. All `24/24` same-request output hashes matched. See [the concurrency artifact](results/concurrency_qwen25_3b_mlx_20260721.json) and reproduce it with:
+
+```sh
+python3 scripts/benchmark_concurrency.py qwen2.5:3b \
+  --endpoint http://127.0.0.1:11435 \
+  --backend mlx \
+  --mode generate \
+  --clients 4 \
+  --requests 8 \
+  --rounds 3 \
+  --max-tokens 64
+```
+
+MLX-VLM currently remains limited to one replica because its visual and prompt-state caches are mutable. Even when the server is started with a higher text replica count, a visual model receives one worker and concurrent visual requests queue safely on it. MachBoost does not yet implement continuous batching, which is the more promising route to higher aggregate GPU utilization with one weight copy.
+
+The server has no authentication or TLS. Do not expose it directly to an untrusted network; use a private network or an authenticated reverse proxy.
 
 ### Visual Chat
 
@@ -376,8 +421,10 @@ machboost shutdown
 Run the server in the foreground when integrating it with another application or process manager:
 
 ```sh
-machboost serve --host 127.0.0.1 --port 11435
+machboost serve --host 127.0.0.1 --port 11435 --replicas 1 --max-queue 64
 ```
+
+Increase `--replicas` only after measuring representative concurrent traffic and checking unified-memory use. `machboost ps` shows active and queued work; `machboost ps --json` includes the full scheduler counters.
 
 By default, models remain warm for five idle minutes. The lifetime can be selected per load or run:
 
