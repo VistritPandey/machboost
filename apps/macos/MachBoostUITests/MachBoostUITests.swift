@@ -90,7 +90,7 @@ final class MachBoostUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Choose your first model"].waitForExistence(timeout: 10))
         XCTAssertFalse(app.buttons["Continue"].exists)
 
-        let download = app.buttons["download-model-qwen2.5:3b"]
+        let download = app.buttons["onboarding-download-model"]
         XCTAssertTrue(download.waitForExistence(timeout: 3))
         download.click()
         let confirmation = app.sheets.buttons["Download"]
