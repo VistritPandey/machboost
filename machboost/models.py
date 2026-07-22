@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import importlib
 import importlib.util
 import json
@@ -398,13 +399,62 @@ def _preflight_cached_snapshot(
         model_type = str(config.get("model_type") or "").strip().lower()
         if not model_type:
             raise ValueError("config.json does not define model_type")
-        _validate_mlx_architecture(config, backend)
+        _validate_cached_mlx_architecture(config, backend)
     except (ImportError, OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
         return {"supported": False, "reason": str(exc)}
     return {
         "supported": True,
         "reason": f"compatible {backend} architecture ({model_type})",
     }
+
+
+def _validate_cached_mlx_architecture(config: dict[str, Any], backend: str) -> None:
+    package = "mlx_vlm" if backend == "mlx-vlm" else "mlx_lm"
+    spec = importlib.util.find_spec(package)
+    locations = list(spec.submodule_search_locations or ()) if spec is not None else []
+    if not locations:
+        raise ValueError(f"{package} runtime is not installed")
+
+    package_root = Path(locations[0])
+    model_type = str(config["model_type"]).lower()
+    model_type = _model_remapping(package_root).get(model_type, model_type)
+    if backend == "mlx-vlm" and config.get("dflash_config") is not None:
+        model_type += "_dflash"
+
+    candidates = [package_root / "models" / f"{model_type}.py"]
+    candidates.append(package_root / "models" / model_type / "__init__.py")
+    if backend == "mlx-vlm":
+        candidates.append(
+            package_root / "speculative" / "drafters" / f"{model_type}.py"
+        )
+    if not any(candidate.is_file() for candidate in candidates):
+        raise ValueError(f"Model type {model_type} not supported")
+
+
+def _model_remapping(package_root: Path) -> dict[str, str]:
+    utils_path = package_root / "utils.py"
+    try:
+        tree = ast.parse(utils_path.read_text(encoding="utf-8"))
+    except (OSError, SyntaxError):
+        return {}
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if not any(
+            isinstance(target, ast.Name) and target.id == "MODEL_REMAPPING"
+            for target in node.targets
+        ):
+            continue
+        try:
+            value = ast.literal_eval(node.value)
+        except (TypeError, ValueError):
+            return {}
+        if isinstance(value, dict):
+            return {
+                str(key).lower(): str(mapped).lower()
+                for key, mapped in value.items()
+            }
+    return {}
 
 
 def _directory_size_gb(path: Optional[Path]) -> Optional[float]:
