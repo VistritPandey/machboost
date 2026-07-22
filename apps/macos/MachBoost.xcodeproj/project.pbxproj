@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		0987C108B164890D8BC63A27 /* MachBoostTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10ECC494BAAC1C4D1DDC8EED /* MachBoostTests.swift */; };
 		0EAB94A2402BCECBC7520929 /* MachBoostAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65BFBB8E6C3023647313F310 /* MachBoostAPI.swift */; };
+		1BD8A1EEF4A2C390909133B6 /* ConversationExporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E50EC9925586409060F9B1F /* ConversationExporter.swift */; };
 		1C9E4E6E69E7F0F84744660E /* UpdateController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C427B3847622D628B344F16 /* UpdateController.swift */; };
 		4850300E156305AF616FE930 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = E284163CFFA3CC2C71B3C1CC /* Sparkle */; };
 		4CABF47F885FDD74C37117E1 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2436F81998E2D43F6056D376 /* RootView.swift */; };
@@ -55,6 +56,7 @@
 		5C62A9D5540E53785741BB3B /* MessageContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageContentView.swift; sourceTree = "<group>"; };
 		65BFBB8E6C3023647313F310 /* MachBoostAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MachBoostAPI.swift; sourceTree = "<group>"; };
 		6D3E0E38EC91A702C4A3F7BB /* MachBoostTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MachBoostTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		6E50EC9925586409060F9B1F /* ConversationExporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationExporter.swift; sourceTree = "<group>"; };
 		714090FF416A6EA959EEC39B /* MachBoostApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MachBoostApp.swift; sourceTree = "<group>"; };
 		87B97748332FB15E03C019A8 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		880BA16ED1FA2BE113A59AD6 /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
@@ -114,6 +116,7 @@
 				9AE21F9C8B888A139F3A8B1B /* Assets.xcassets */,
 				BAE25776D58D45FA869FC1DE /* AttachmentStore.swift */,
 				880BA16ED1FA2BE113A59AD6 /* ChatView.swift */,
+				6E50EC9925586409060F9B1F /* ConversationExporter.swift */,
 				A31E8B16876F4F8C49D2AB38 /* DaemonManager.swift */,
 				EE8900B13B2CE90C7E32FF10 /* DomainModels.swift */,
 				B015F7E4554CB7BDFD22B814 /* Info.plist */,
@@ -267,6 +270,7 @@
 				AE67929B45EF5C34FC58DF67 /* AppState.swift in Sources */,
 				A4DCDC3B29F4E1E07F01F205 /* AttachmentStore.swift in Sources */,
 				A3ACD221FDF66A145D5980CF /* ChatView.swift in Sources */,
+				1BD8A1EEF4A2C390909133B6 /* ConversationExporter.swift in Sources */,
 				B13EB86E24A994C300C7858C /* DaemonManager.swift in Sources */,
 				F3A9FF23F0DBCABCEC4463E9 /* DomainModels.swift in Sources */,
 				B4C476FB19A204404CC5DF12 /* KeychainStore.swift in Sources */,
