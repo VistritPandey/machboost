@@ -52,6 +52,17 @@ xcodebuild test \
 The checked-in Xcode project is generated from `project.yml`. Update the YAML
 first and regenerate the project whenever target or package settings change.
 
+The desktop code is split into explicit targets:
+
+- `MachBoost` owns SwiftUI presentation, app state, daemon lifecycle, Keychain,
+  menu-bar behavior, and update controls.
+- `MachBoostDaemonClient` owns HTTP/NDJSON transport and stable API schemas.
+- `MachBoostPersistence` owns SwiftData chat models, attachment imports, and
+  conversation export.
+- `MachBoostTests` and `MachBoostUITests` cover module contracts and user flows.
+
+The Swift package manifest mirrors these boundaries for non-Xcode builds.
+
 ## Embedded Runtime
 
 The runtime manifest pins the CPython artifact and checksum. Python wheels are
