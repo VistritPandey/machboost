@@ -7,6 +7,8 @@ let package = Package(
     platforms: [.macOS(.v14)],
     products: [
         .executable(name: "MachBoost", targets: ["MachBoost"]),
+        .library(name: "MachBoostDaemonClient", targets: ["MachBoostDaemonClient"]),
+        .library(name: "MachBoostPersistence", targets: ["MachBoostPersistence"]),
     ],
     dependencies: [
         .package(
@@ -15,9 +17,19 @@ let package = Package(
         ),
     ],
     targets: [
+        .target(
+            name: "MachBoostDaemonClient",
+            path: "MachBoostDaemonClient"
+        ),
+        .target(
+            name: "MachBoostPersistence",
+            path: "MachBoostPersistence"
+        ),
         .executableTarget(
             name: "MachBoost",
             dependencies: [
+                "MachBoostDaemonClient",
+                "MachBoostPersistence",
                 .product(name: "Sparkle", package: "Sparkle"),
             ],
             path: "MachBoost",
@@ -25,7 +37,11 @@ let package = Package(
         ),
         .testTarget(
             name: "MachBoostTests",
-            dependencies: ["MachBoost"],
+            dependencies: [
+                "MachBoost",
+                "MachBoostDaemonClient",
+                "MachBoostPersistence",
+            ],
             path: "MachBoostTests"
         ),
     ]
