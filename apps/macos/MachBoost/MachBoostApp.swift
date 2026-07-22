@@ -15,11 +15,17 @@ struct MachBoostApp: App {
         _appState = State(initialValue: appState)
         _updates = StateObject(wrappedValue: UpdateController())
         do {
-            modelContainer = try ModelContainer(
-                for: Conversation.self,
+            let schema = Schema([
+                Conversation.self,
                 ChatMessage.self,
-                ChatAttachment.self
+                ChatAttachment.self,
+            ])
+            let isUITesting = ProcessInfo.processInfo.environment["MACHBOOST_UI_TESTING"] == "1"
+            let configuration = ModelConfiguration(
+                schema: schema,
+                isStoredInMemoryOnly: isUITesting
             )
+            modelContainer = try ModelContainer(for: schema, configurations: configuration)
         } catch {
             fatalError("Could not open the local MachBoost chat store: \(error)")
         }
