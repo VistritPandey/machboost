@@ -2,12 +2,12 @@ import CryptoKit
 import Foundation
 import UniformTypeIdentifiers
 
-enum AttachmentStore {
-    static let maximumTextFileBytes: Int64 = 2 * 1_024 * 1_024
-    static let maximumImageBytes: Int64 = 25 * 1_024 * 1_024
-    static let maximumFolderFiles = 200
+public enum AttachmentStore {
+    public static let maximumTextFileBytes: Int64 = 2 * 1_024 * 1_024
+    public static let maximumImageBytes: Int64 = 25 * 1_024 * 1_024
+    public static let maximumFolderFiles = 200
 
-    static func importURLs(
+    public static func importURLs(
         _ urls: [URL],
         conversation: Conversation
     ) throws -> [ChatAttachment] {
@@ -30,7 +30,7 @@ enum AttachmentStore {
         return imported
     }
 
-    static func remove(_ attachment: ChatAttachment) {
+    public static func remove(_ attachment: ChatAttachment) {
         let path = URL(fileURLWithPath: attachment.importedPath)
         try? FileManager.default.removeItem(at: path)
     }
@@ -156,12 +156,12 @@ enum AttachmentStore {
     ]
 }
 
-enum AttachmentError: LocalizedError {
+public enum AttachmentError: LocalizedError {
     case unsupported(String)
     case tooLarge(name: String, maximumBytes: Int64)
     case notUTF8(String)
 
-    var errorDescription: String? {
+    public var errorDescription: String? {
         switch self {
         case let .unsupported(name):
             "\(name) is not a supported text, code, or image file."
