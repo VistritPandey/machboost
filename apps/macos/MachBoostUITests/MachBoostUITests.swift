@@ -129,12 +129,12 @@ final class MachBoostUITests: XCTestCase {
         let response = app.staticTexts["Fixture response."]
         XCTAssertTrue(response.waitForExistence(timeout: 8))
 
-        response.hover()
         let regenerate = app.buttons["regenerate-response"]
         XCTAssertTrue(regenerate.waitForExistence(timeout: 2))
         regenerate.click()
-        XCTAssertTrue(response.waitForNonExistence(timeout: 3))
-        XCTAssertTrue(response.waitForExistence(timeout: 8))
+        XCTAssertTrue(
+            app.staticTexts["Regenerated fixture response."].waitForExistence(timeout: 8)
+        )
     }
 
     @MainActor
