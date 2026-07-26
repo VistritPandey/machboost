@@ -5,6 +5,7 @@ final class UITestMachBoostAPI: MachBoostAPIProtocol, @unchecked Sendable {
     private let lock = NSLock()
     private var downloadedModels: Set<String> = []
     private var cancelledRequests: Set<String> = []
+    private var chatRequestCount = 0
 
     func catalogSnapshot() -> [CatalogModel] {
         lock.withLock { makeCatalog() }
@@ -74,10 +75,17 @@ final class UITestMachBoostAPI: MachBoostAPIProtocol, @unchecked Sendable {
     }
 
     func streamChat(_ request: ChatRequest) -> AsyncThrowingStream<ChatEvent, Error> {
-        AsyncThrowingStream { continuation in
+        let requestNumber = lock.withLock {
+            chatRequestCount += 1
+            return chatRequestCount
+        }
+        return AsyncThrowingStream { continuation in
             let task = Task<Void, Never> {
                 do {
-                    let response = self.fixtureResponse(for: request)
+                    let response = self.fixtureResponse(
+                        for: request,
+                        requestNumber: requestNumber
+                    )
                     let splitIndex = response.index(
                         response.startIndex,
                         offsetBy: max(1, response.count / 2)
@@ -222,11 +230,16 @@ final class UITestMachBoostAPI: MachBoostAPIProtocol, @unchecked Sendable {
         ]
     }
 
-    private func fixtureResponse(for request: ChatRequest) -> String {
+    private func fixtureResponse(
+        for request: ChatRequest,
+        requestNumber: Int
+    ) -> String {
         let imageCount = request.messages.last?.images?.count ?? 0
         let contextCount = request.context.count
         guard imageCount > 0 || contextCount > 0 else {
-            return "Fixture response."
+            return requestNumber == 1
+                ? "Fixture response."
+                : "Regenerated fixture response."
         }
         return "Fixture context: \(imageCount) image, \(contextCount) file."
     }
