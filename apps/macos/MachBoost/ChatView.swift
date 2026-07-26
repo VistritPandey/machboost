@@ -221,7 +221,7 @@ struct ChatView: View {
                     }
                 }
 
-            if isGenerating {
+            ZStack {
                 Button {
                     stop()
                 } label: {
@@ -232,7 +232,12 @@ struct ChatView: View {
                 .tint(.red)
                 .accessibilityLabel("Stop generation")
                 .help("Stop generation")
-            } else {
+                .keyboardShortcut(.escape, modifiers: [])
+                .opacity(isGenerating ? 1 : 0)
+                .allowsHitTesting(isGenerating)
+                .accessibilityHidden(!isGenerating)
+                .zIndex(isGenerating ? 1 : 0)
+
                 Button {
                     send()
                 } label: {
@@ -244,7 +249,12 @@ struct ChatView: View {
                 .accessibilityLabel("Send message")
                 .help("Send")
                 .keyboardShortcut(.return, modifiers: .command)
+                .opacity(isGenerating ? 0 : 1)
+                .allowsHitTesting(!isGenerating)
+                .accessibilityHidden(isGenerating)
+                .zIndex(isGenerating ? 0 : 1)
             }
+            .frame(width: 52, height: 36)
         }
         .padding(12)
     }
