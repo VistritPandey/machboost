@@ -4,22 +4,36 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_ROOT="$ROOT/apps/macos"
 VERSION="${1:-}"
+MODE="${2:-release}"
 BUILD_NUMBER="${BUILD_NUMBER:-1}"
 DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
 DIST="$ROOT/dist/macos"
 ARCHIVE="$DIST/MachBoost.xcarchive"
 DERIVED_DATA="$DIST/DerivedData"
 DMG="$DIST/MachBoost-${VERSION}-arm64.dmg"
+LOCAL_BUILD=false
 
 if [[ -z "$VERSION" ]]; then
-  echo "usage: $0 VERSION" >&2
+  echo "usage: $0 VERSION [--local]" >&2
   exit 2
 fi
-: "${MACHBOOST_DEVELOPMENT_TEAM:?Set MACHBOOST_DEVELOPMENT_TEAM to the Apple team ID}"
-: "${MACHBOOST_DEVELOPER_ID:?Set MACHBOOST_DEVELOPER_ID to the Developer ID Application identity}"
-: "${MACHBOOST_NOTARY_PROFILE:?Set MACHBOOST_NOTARY_PROFILE to a notarytool Keychain profile}"
-: "${SPARKLE_PUBLIC_ED_KEY:?Set SPARKLE_PUBLIC_ED_KEY to the Sparkle public key}"
-: "${SPARKLE_PRIVATE_KEY:?Set SPARKLE_PRIVATE_KEY to the Sparkle private key file}"
+case "$MODE" in
+  release)
+    : "${MACHBOOST_DEVELOPMENT_TEAM:?Set MACHBOOST_DEVELOPMENT_TEAM to the Apple team ID}"
+    : "${MACHBOOST_DEVELOPER_ID:?Set MACHBOOST_DEVELOPER_ID to the Developer ID Application identity}"
+    : "${MACHBOOST_NOTARY_PROFILE:?Set MACHBOOST_NOTARY_PROFILE to a notarytool Keychain profile}"
+    : "${SPARKLE_PUBLIC_ED_KEY:?Set SPARKLE_PUBLIC_ED_KEY to the Sparkle public key}"
+    : "${SPARKLE_PRIVATE_KEY:?Set SPARKLE_PRIVATE_KEY to the Sparkle private key file}"
+    ;;
+  --local)
+    LOCAL_BUILD=true
+    SPARKLE_PUBLIC_ED_KEY="${SPARKLE_PUBLIC_ED_KEY:-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=}"
+    ;;
+  *)
+    echo "usage: $0 VERSION [--local]" >&2
+    exit 2
+    ;;
+esac
 
 export DEVELOPER_DIR
 "$ROOT/scripts/build_macos_runtime.sh"
@@ -32,6 +46,19 @@ rm -rf "$DIST"
 mkdir -p "$DIST"
 (cd "$APP_ROOT" && xcodegen generate)
 
+if $LOCAL_BUILD; then
+  SIGNING_ARGUMENTS=(
+    CODE_SIGN_STYLE=Manual
+    DEVELOPMENT_TEAM=
+    CODE_SIGN_IDENTITY=-
+  )
+else
+  SIGNING_ARGUMENTS=(
+    DEVELOPMENT_TEAM="$MACHBOOST_DEVELOPMENT_TEAM"
+    CODE_SIGN_IDENTITY="$MACHBOOST_DEVELOPER_ID"
+  )
+fi
+
 xcodebuild \
   -project "$APP_ROOT/MachBoost.xcodeproj" \
   -scheme MachBoost \
@@ -39,16 +66,20 @@ xcodebuild \
   -destination "generic/platform=macOS,arch=arm64" \
   -archivePath "$ARCHIVE" \
   -derivedDataPath "$DERIVED_DATA" \
-  DEVELOPMENT_TEAM="$MACHBOOST_DEVELOPMENT_TEAM" \
-  CODE_SIGN_IDENTITY="$MACHBOOST_DEVELOPER_ID" \
+  "${SIGNING_ARGUMENTS[@]}" \
   MARKETING_VERSION="$VERSION" \
   CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
   SPARKLE_PUBLIC_ED_KEY="$SPARKLE_PUBLIC_ED_KEY" \
   archive
 
 APP="$ARCHIVE/Products/Applications/MachBoost.app"
+SIGN_IDENTITY="${MACHBOOST_DEVELOPER_ID:--}"
+SIGN_ARGUMENTS=(--force --timestamp --options runtime --sign "$SIGN_IDENTITY")
+if $LOCAL_BUILD; then
+  SIGN_ARGUMENTS=(--force --options runtime --sign -)
+fi
 while IFS= read -r binary; do
-  codesign --force --timestamp --options runtime --sign "$MACHBOOST_DEVELOPER_ID" "$binary"
+  codesign "${SIGN_ARGUMENTS[@]}" "$binary"
 done < <(
   find "$APP/Contents/Resources/runtime" -type f -perm -111 -print0 \
     | xargs -0 file \
@@ -57,9 +88,9 @@ done < <(
     | sort -rn \
     | cut -d' ' -f2-
 )
-codesign --force --deep --timestamp --options runtime \
+codesign "${SIGN_ARGUMENTS[@]}" --deep \
   --entitlements "$APP_ROOT/MachBoost/MachBoost.entitlements" \
-  --sign "$MACHBOOST_DEVELOPER_ID" "$APP"
+  "$APP"
 codesign --verify --deep --strict --verbose=2 "$APP"
 
 STAGING="$(mktemp -d "${TMPDIR:-/tmp}/machboost-dmg.XXXXXX")"
@@ -73,6 +104,15 @@ hdiutil create \
   -ov \
   "$DMG"
 
+hdiutil verify "$DMG"
+shasum -a 256 "$DMG" > "$DMG.sha256"
+if $LOCAL_BUILD; then
+  echo "Local DMG ready:"
+  echo "  $DMG"
+  echo "  $DMG.sha256"
+  exit 0
+fi
+
 NOTARY_ARGUMENTS=(--keychain-profile "$MACHBOOST_NOTARY_PROFILE")
 if [[ -n "${MACHBOOST_RELEASE_KEYCHAIN:-}" ]]; then
   NOTARY_ARGUMENTS+=(--keychain "$MACHBOOST_RELEASE_KEYCHAIN")
@@ -80,7 +120,6 @@ fi
 xcrun notarytool submit "$DMG" "${NOTARY_ARGUMENTS[@]}" --wait
 xcrun stapler staple "$DMG"
 spctl --assess --type open --context context:primary-signature --verbose=2 "$DMG"
-shasum -a 256 "$DMG" > "$DMG.sha256"
 
 GENERATE_APPCAST="$(find "$DERIVED_DATA/SourcePackages/artifacts" -type f -name generate_appcast -perm -111 | head -1)"
 if [[ -z "$GENERATE_APPCAST" ]]; then
