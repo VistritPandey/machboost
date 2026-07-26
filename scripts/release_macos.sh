@@ -74,6 +74,19 @@ xcodebuild \
   archive
 
 APP="$ARCHIVE/Products/Applications/MachBoost.app"
+SOURCE_RUNTIME="$APP_ROOT/Resources/runtime"
+BUNDLED_RUNTIME="$APP/Contents/Resources/runtime"
+if [[ ! -x "$SOURCE_RUNTIME/python/bin/python3" ]]; then
+  echo "Embedded runtime was not built at $SOURCE_RUNTIME." >&2
+  exit 4
+fi
+rm -rf "$BUNDLED_RUNTIME"
+ditto "$SOURCE_RUNTIME" "$BUNDLED_RUNTIME"
+if [[ ! -x "$BUNDLED_RUNTIME/python/bin/python3" ]]; then
+  echo "Embedded runtime was not copied into the archived app." >&2
+  exit 4
+fi
+
 SIGN_IDENTITY="${MACHBOOST_DEVELOPER_ID:--}"
 SIGN_ARGUMENTS=(--force --timestamp --options runtime --sign "$SIGN_IDENTITY")
 if $LOCAL_BUILD; then
@@ -82,7 +95,7 @@ fi
 while IFS= read -r binary; do
   codesign "${SIGN_ARGUMENTS[@]}" "$binary"
 done < <(
-  find "$APP/Contents/Resources/runtime" -type f -perm -111 -print0 \
+  find "$BUNDLED_RUNTIME" -type f -perm -111 -print0 \
     | xargs -0 file \
     | awk -F: '/Mach-O/ {print $1}' \
     | awk '{ print length, $0 }' \
