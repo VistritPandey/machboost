@@ -90,7 +90,7 @@ fi
 SIGN_IDENTITY="${MACHBOOST_DEVELOPER_ID:--}"
 SIGN_ARGUMENTS=(--force --timestamp --options runtime --sign "$SIGN_IDENTITY")
 if $LOCAL_BUILD; then
-  SIGN_ARGUMENTS=(--force --options runtime --sign -)
+  SIGN_ARGUMENTS=(--force --sign -)
 fi
 while IFS= read -r -d '' binary; do
   description="$(file -b "$binary")"
