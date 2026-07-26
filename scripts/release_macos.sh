@@ -63,10 +63,11 @@ xcodebuild \
   -project "$APP_ROOT/MachBoost.xcodeproj" \
   -scheme MachBoost \
   -configuration Release \
-  -destination "generic/platform=macOS,arch=arm64" \
+  -destination "generic/platform=macOS" \
   -archivePath "$ARCHIVE" \
   -derivedDataPath "$DERIVED_DATA" \
   "${SIGNING_ARGUMENTS[@]}" \
+  ARCHS=arm64 \
   MARKETING_VERSION="$VERSION" \
   CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
   SPARKLE_PUBLIC_ED_KEY="$SPARKLE_PUBLIC_ED_KEY" \
