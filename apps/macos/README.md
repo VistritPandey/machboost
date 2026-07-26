@@ -102,9 +102,22 @@ Chat, generation, and pull requests may provide a client-generated
 
 ## Release
 
-Unsigned local builds do not need Apple credentials. Public DMG releases need
-Vistrit Pandey's Developer ID, Apple team and notarization credentials, and
-Sparkle EdDSA keys:
+Build an ad-hoc signed DMG for local packaging and runtime tests without Apple
+credentials:
+
+```sh
+./scripts/release_macos.sh 0.7.0-local --local
+open dist/macos/MachBoost-0.7.0-local-arm64.dmg
+```
+
+Local mode builds the locked runtime, archives the arm64 app, embeds and signs
+every native runtime binary, verifies the app and disk image, and writes a
+SHA-256 checksum. It deliberately skips notarization, stapling, and Sparkle
+appcast generation. Gatekeeper will not treat this artifact as a public release;
+use it only for development and clean-machine testing.
+
+Public DMG releases need Vistrit Pandey's Developer ID, Apple team and
+notarization credentials, and Sparkle EdDSA keys:
 
 ```sh
 export MACHBOOST_DEVELOPMENT_TEAM=...
