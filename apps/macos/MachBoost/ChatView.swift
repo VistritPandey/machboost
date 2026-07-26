@@ -127,9 +127,10 @@ struct ChatView: View {
                             MessageRow(
                                 message: message,
                                 onEdit: { edit(message) },
-                                onRegenerate: message.role == .assistant
-                                    ? { regenerate() }
-                                    : nil
+                                onRegenerate: regenerateAction(
+                                    for: message,
+                                    in: messages
+                                )
                             )
                             .id(message.id)
                         }
@@ -273,8 +274,8 @@ struct ChatView: View {
         try? modelContext.save()
     }
 
-    private func send() {
-        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+    private func send(_ textOverride: String? = nil) {
+        let text = (textOverride ?? draft).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !isGenerating else { return }
         let images = conversation.orderedAttachments.filter { $0.kind == .image }
         if !images.isEmpty, appState.model(named: conversation.model)?.supportsVision != true {
@@ -367,18 +368,31 @@ struct ChatView: View {
         }
     }
 
-    private func regenerate() {
-        guard let lastUser = conversation.orderedMessages.last(where: { $0.role == .user }) else {
-            return
+    private func regenerateAction(
+        for message: ChatMessage,
+        in messages: [ChatMessage]
+    ) -> (() -> Void)? {
+        guard
+            !isGenerating,
+            message.role == .assistant,
+            message.id == messages.last?.id,
+            let lastUser = messages.last(where: { $0.role == .user })
+        else {
+            return nil
         }
         let text = lastUser.content
         let cutoff = lastUser.createdAt
-        for message in conversation.messages where message.createdAt >= cutoff {
+        return { regenerate(text: text, cutoff: cutoff) }
+    }
+
+    private func regenerate(text: String, cutoff: Date) {
+        let replacedMessages = conversation.messages.filter { $0.createdAt >= cutoff }
+        conversation.messages.removeAll { $0.createdAt >= cutoff }
+        for message in replacedMessages {
             modelContext.delete(message)
         }
-        draft = text
         try? modelContext.save()
-        send()
+        send(text)
     }
 
     private func edit(_ message: ChatMessage) {
@@ -430,7 +444,6 @@ private struct MessageRow: View {
     @Bindable var message: ChatMessage
     let onEdit: () -> Void
     let onRegenerate: (() -> Void)?
-    @State private var hovering = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -443,9 +456,7 @@ private struct MessageRow: View {
                     Text(message.role == .user ? "You" : "MachBoost")
                         .font(.caption.weight(.semibold))
                     Spacer()
-                    if hovering {
-                        messageActions
-                    }
+                    messageActions
                 }
                 if message.content.isEmpty {
                     ProgressView()
@@ -465,7 +476,6 @@ private struct MessageRow: View {
                 ? Color(nsColor: .controlBackgroundColor).opacity(0.55)
                 : Color.clear
         )
-        .onHover { hovering = $0 }
         .contextMenu {
             Button("Copy") { copyMessage() }
             if message.role == .user {
@@ -481,26 +491,31 @@ private struct MessageRow: View {
         HStack(spacing: 8) {
             Button(action: copyMessage) {
                 Image(systemName: "doc.on.doc")
+                    .frame(width: 28, height: 28)
             }
+            .buttonStyle(.borderless)
             .accessibilityLabel("Copy message")
             .help("Copy message")
             if message.role == .user {
                 Button(action: onEdit) {
                     Image(systemName: "pencil")
+                        .frame(width: 28, height: 28)
                 }
+                .buttonStyle(.borderless)
                 .accessibilityLabel("Edit and resend")
                 .help("Edit and resend")
             }
             if let onRegenerate {
                 Button(action: onRegenerate) {
                     Image(systemName: "arrow.clockwise")
+                        .frame(width: 28, height: 28)
                 }
+                .buttonStyle(.borderless)
                 .accessibilityLabel("Regenerate response")
                 .accessibilityIdentifier("regenerate-response")
                 .help("Regenerate")
             }
         }
-        .buttonStyle(.plain)
         .foregroundStyle(.secondary)
     }
 
