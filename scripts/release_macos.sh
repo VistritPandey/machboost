@@ -92,16 +92,12 @@ SIGN_ARGUMENTS=(--force --timestamp --options runtime --sign "$SIGN_IDENTITY")
 if $LOCAL_BUILD; then
   SIGN_ARGUMENTS=(--force --options runtime --sign -)
 fi
-while IFS= read -r binary; do
-  codesign "${SIGN_ARGUMENTS[@]}" "$binary"
-done < <(
-  find "$BUNDLED_RUNTIME" -type f -perm -111 -print0 \
-    | xargs -0 file \
-    | awk -F: '/Mach-O/ {print $1}' \
-    | awk '{ print length, $0 }' \
-    | sort -rn \
-    | cut -d' ' -f2-
-)
+while IFS= read -r -d '' binary; do
+  description="$(file -b "$binary")"
+  if [[ "$description" == *Mach-O* ]]; then
+    codesign "${SIGN_ARGUMENTS[@]}" "$binary"
+  fi
+done < <(find "$BUNDLED_RUNTIME" -type f -print0)
 codesign "${SIGN_ARGUMENTS[@]}" --deep \
   --entitlements "$APP_ROOT/MachBoost/MachBoost.entitlements" \
   "$APP"
