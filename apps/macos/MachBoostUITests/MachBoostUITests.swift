@@ -58,6 +58,12 @@ final class MachBoostUITests: XCTestCase {
         app.buttons["Send message"].click()
         let stop = app.buttons["Stop generation"]
         XCTAssertTrue(stop.waitForExistence(timeout: 2))
+        let stopReady = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "hittable == true"),
+            object: stop
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [stopReady], timeout: 2), .completed)
+        app.activate()
         stop.click()
 
         XCTAssertTrue(app.staticTexts["Stopped"].waitForExistence(timeout: 5))
