@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from contextlib import closing
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 import hashlib
@@ -330,7 +331,7 @@ class WorkspaceStore:
             unchanged_files = 0
             skipped_files = 0
 
-            with sqlite3.connect(database_path) as connection:
+            with closing(sqlite3.connect(database_path)) as connection:
                 connection.execute("PRAGMA journal_mode=WAL")
                 existing = {
                     row[0]: (int(row[1]), int(row[2]), str(row[3]))
@@ -436,7 +437,7 @@ class WorkspaceStore:
         expression = " OR ".join(f'"{term}"*' for term in terms)
         rows: list[Sequence[Any]]
         try:
-            with sqlite3.connect(self._database_path(workspace_id)) as connection:
+            with closing(sqlite3.connect(self._database_path(workspace_id))) as connection:
                 rows = connection.execute(
                     """
                     SELECT path, start_line, end_line, symbols, content, bm25(chunks)
@@ -461,7 +462,7 @@ class WorkspaceStore:
                     path=path,
                     start_line=int(row[1]),
                     end_line=int(row[2]),
-                    symbols=tuple(filter(None, str(row[3]).split(" "))),
+                    symbols=_parse_symbols(str(row[3])),
                     text=str(row[4]),
                     score=round(-float(row[5]), 6),
                 )
@@ -526,7 +527,9 @@ class WorkspaceStore:
     def _initialize_database(self, workspace_id: str) -> None:
         self._workspace_dir(workspace_id).mkdir(parents=True, exist_ok=True)
         try:
-            with sqlite3.connect(self._database_path(workspace_id)) as connection:
+            with closing(
+                sqlite3.connect(self._database_path(workspace_id))
+            ) as connection:
                 connection.executescript(
                     """
                     CREATE TABLE IF NOT EXISTS files (
@@ -573,7 +576,13 @@ class WorkspaceStore:
                 INSERT INTO chunks(path, start_line, end_line, symbols, content)
                 VALUES (?, ?, ?, ?, ?)
                 """,
-                (relative_path, start_line, end_line, " ".join(symbols), chunk_text),
+                (
+                    relative_path,
+                    start_line,
+                    end_line,
+                    _symbol_index_payload(symbols),
+                    chunk_text,
+                ),
             )
 
     @staticmethod
@@ -771,6 +780,35 @@ def _extract_symbols(lines: Sequence[str]) -> tuple[str, ...]:
                 symbols.append(match.group(1))
                 break
     return tuple(symbols[:32])
+
+
+def _symbol_index_payload(symbols: Sequence[str]) -> str:
+    terms: list[str] = []
+    seen: set[str] = set()
+    for symbol in symbols:
+        for term in re.findall(
+            r"[A-Z]+(?=[A-Z][a-z]|\b)|[A-Z]?[a-z]+|[0-9]+",
+            symbol.replace("_", " "),
+        ):
+            normalized = term.lower()
+            if normalized and normalized not in seen:
+                seen.add(normalized)
+                terms.append(normalized)
+    return json.dumps(
+        {"names": list(symbols), "terms": terms},
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
+def _parse_symbols(payload: str) -> tuple[str, ...]:
+    try:
+        parsed = json.loads(payload)
+    except (TypeError, ValueError):
+        return tuple(filter(None, payload.split(" ")))
+    if not isinstance(parsed, dict) or not isinstance(parsed.get("names"), list):
+        return tuple(filter(None, payload.split(" ")))
+    return tuple(str(name) for name in parsed["names"] if name)
 
 
 def _query_terms(query: str) -> list[str]:
