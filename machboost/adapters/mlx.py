@@ -45,6 +45,11 @@ class MLXCausalLMService:
         self._cache_logits = None
         self._cache_supported: Optional[bool] = None
         self._native_prompt_cache = None
+        self._native_prompt_cache_key = (
+            type(model).__module__,
+            type(model).__qualname__,
+            id(model),
+        )
         self._native_prompt_cache_supported: Optional[bool] = None
         self._last_native_metrics: dict[str, float | int | None] = {}
         if hasattr(self.model, "eval"):
@@ -212,7 +217,7 @@ class MLXCausalLMService:
         cached_prompt_tokens = 0
         if prompt_cache_store is not None:
             prompt_cache, prompt = prompt_cache_store.fetch_nearest_cache(
-                self.model,
+                self._native_prompt_cache_key,
                 full_prompt,
             )
             cached_prompt_tokens = len(full_prompt) - len(prompt)
@@ -254,7 +259,7 @@ class MLXCausalLMService:
         finally:
             if prompt_cache_store is not None and prompt_cache is not None:
                 prompt_cache_store.insert_cache(
-                    self.model,
+                    self._native_prompt_cache_key,
                     cache_key,
                     prompt_cache,
                 )
