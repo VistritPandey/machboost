@@ -88,6 +88,62 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(metrics["schema"], "machboost.metrics.v1")
         self.assertIn("active_count", metrics["operations"])
 
+    def test_client_exposes_workspace_lifecycle_helpers(self):
+        with patch.object(
+            self.client,
+            "post",
+            side_effect=[
+                {"workspace": {"id": "workspace-1", "name": "repo"}},
+                {"workspace": {"id": "workspace-1", "file_count": 12}},
+                {"schema": "machboost.workspace-query.v1", "hits": [{"path": "a.py"}]},
+                {"removed": True},
+            ],
+        ) as post:
+            registered = self.client.register_workspace(
+                Path("/tmp/example-repo"),
+                name="Example",
+            )
+            reindexed = self.client.reindex_workspace("workspace-1")
+            query = self.client.query_workspace(
+                "workspace-1",
+                "where is cancellation",
+                top_k=4,
+                max_chars=12_000,
+            )
+            removed = self.client.remove_workspace("workspace-1")
+
+        self.assertEqual(registered["id"], "workspace-1")
+        self.assertEqual(reindexed["file_count"], 12)
+        self.assertEqual(query["hits"][0]["path"], "a.py")
+        self.assertTrue(removed)
+        self.assertEqual(post.call_args_list[0].args[0], "/api/workspaces")
+        self.assertEqual(
+            post.call_args_list[0].args[1]["path"],
+            "/tmp/example-repo",
+        )
+        self.assertEqual(
+            post.call_args_list[2].args[1]["max_chars"],
+            12_000,
+        )
+
+    def test_client_forwards_workspace_chat_options(self):
+        with patch.object(self.client, "post", return_value={"done": True}) as post:
+            self.client.chat(
+                "qwen2.5:7b",
+                [{"role": "user", "content": "Where is cancellation handled?"}],
+                workspace_id="workspace-1",
+                workspace_query="request cancellation",
+                workspace_top_k=6,
+                workspace_max_chars=24_000,
+                stream=False,
+            )
+
+        payload = post.call_args.args[1]
+        self.assertEqual(payload["workspace_id"], "workspace-1")
+        self.assertEqual(payload["workspace_query"], "request cancellation")
+        self.assertEqual(payload["workspace_top_k"], 6)
+        self.assertEqual(payload["workspace_max_chars"], 24_000)
+
     def test_client_forwards_request_identifier(self):
         with patch.object(self.client, "post", return_value={"done": True}) as post:
             self.client.chat(
