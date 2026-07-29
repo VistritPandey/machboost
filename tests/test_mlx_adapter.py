@@ -354,7 +354,11 @@ class MLXAdapterTest(unittest.TestCase):
         mlx_lm.stream_generate = stream_generate
         cache_module.LRUPromptCache = FakeLRUPromptCache
         cache_module.make_prompt_cache = make_prompt_cache
-        service = MLXCausalLMService(object(), object())
+        service = MLXCausalLMService(
+            object(),
+            object(),
+            native_prompt_cache_size=8,
+        )
 
         with patch.dict(
             "sys.modules",
@@ -397,6 +401,24 @@ class MLXAdapterTest(unittest.TestCase):
             [[10, 11, 12, 13], [10, 11, 12, 99]],
         )
         self.assertEqual(service.last_native_metrics["cached_prompt_tokens"], 0)
+
+    def test_native_prompt_cache_is_opt_in_and_runtime_configurable(self):
+        service = MLXCausalLMService(object(), object())
+        self.assertEqual(service.native_prompt_cache_size, 0)
+
+        service.configure_native_prompt_cache(
+            enabled=True,
+            max_size=4,
+            max_bytes=1_024,
+        )
+        self.assertEqual(service.native_prompt_cache_size, 4)
+        self.assertEqual(service.native_prompt_cache_bytes, 1_024)
+
+        service._native_prompt_cache = object()
+        service.configure_native_prompt_cache(enabled=False)
+        self.assertEqual(service.native_prompt_cache_size, 0)
+        self.assertEqual(service.native_prompt_cache_bytes, 0)
+        self.assertIsNone(service._native_prompt_cache)
 
     def test_cached_verify_commits_accepted_candidate(self):
         prompt = (100, 101, 102)
