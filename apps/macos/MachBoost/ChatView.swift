@@ -13,6 +13,7 @@ struct ChatView: View {
     @State private var activeRequestID: String?
     @State private var activeAssistant: ChatMessage?
     @State private var isImporting = false
+    @State private var isAddingWorkspace = false
     @State private var showsGenerationControls = false
     @FocusState private var composerIsFocused: Bool
     @AppStorage("machboost.chat.maxTokens") private var maxTokens = 512
@@ -59,13 +60,15 @@ struct ChatView: View {
                 }
             }
             .labelsHidden()
-            .frame(maxWidth: 320)
+            .frame(maxWidth: 280)
 
             if let model = appState.model(named: conversation.model) {
                 Text(model.backend.uppercased())
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(.secondary)
             }
+
+            workspaceMenu
 
             Spacer()
 
@@ -89,6 +92,81 @@ struct ChatView: View {
         }
         .padding(.horizontal, 16)
         .frame(height: 48)
+    }
+
+    private var workspaceMenu: some View {
+        Menu {
+            Button {
+                conversation.workspaceID = nil
+                try? modelContext.save()
+            } label: {
+                Label("No Repository", systemImage: "minus.circle")
+            }
+
+            if !appState.workspaces.isEmpty {
+                Divider()
+                ForEach(appState.workspaces) { workspace in
+                    Button {
+                        conversation.workspaceID = workspace.id
+                        try? modelContext.save()
+                    } label: {
+                        if conversation.workspaceID == workspace.id {
+                            Label(workspace.name, systemImage: "checkmark")
+                        } else {
+                            Text(workspace.name)
+                        }
+                    }
+                }
+            }
+
+            Divider()
+            Button(action: chooseWorkspace) {
+                Label("Open Repository...", systemImage: "folder.badge.plus")
+            }
+
+            if let workspace = selectedWorkspace {
+                Button {
+                    Task {
+                        await appState.reindexWorkspace(id: workspace.id)
+                    }
+                } label: {
+                    Label("Refresh Index", systemImage: "arrow.clockwise")
+                }
+                .disabled(appState.indexingWorkspaces.contains(workspace.id))
+
+                Button {
+                    conversation.workspaceID = nil
+                    try? modelContext.save()
+                    Task {
+                        await appState.removeWorkspace(id: workspace.id)
+                    }
+                } label: {
+                    Label("Remove Repository", systemImage: "trash")
+                }
+            }
+        } label: {
+            HStack(spacing: 6) {
+                if isAddingWorkspace
+                    || selectedWorkspace.map({
+                        appState.indexingWorkspaces.contains($0.id)
+                    }) == true {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Image(systemName: "folder")
+                }
+                Text(selectedWorkspace?.name ?? "Repository")
+                    .lineLimit(1)
+                if let workspace = selectedWorkspace {
+                    Text("\(workspace.fileCount)")
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+            }
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize(horizontal: true, vertical: false)
+        .help(workspaceHelp)
     }
 
     private var generationControls: some View {
@@ -270,6 +348,18 @@ struct ChatView: View {
 
     private var isGenerating: Bool { activeRequestID != nil }
 
+    private var selectedWorkspace: WorkspaceSummary? {
+        appState.workspace(id: conversation.workspaceID)
+    }
+
+    private var workspaceHelp: String {
+        guard let workspace = selectedWorkspace else {
+            return "Choose a repository for local code search"
+        }
+        let revision = workspace.revision.map { " at \($0)" } ?? ""
+        return "\(workspace.fileCount) indexed files\(revision)"
+    }
+
     private func selectAvailableModelIfNeeded() {
         guard
             !selectableModels.contains(where: {
@@ -282,6 +372,28 @@ struct ChatView: View {
         conversation.model = model.name
         conversation.updatedAt = .now
         try? modelContext.save()
+    }
+
+    private func chooseWorkspace() {
+        let panel = NSOpenPanel()
+        panel.title = "Choose a Repository"
+        panel.prompt = "Index Repository"
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        isAddingWorkspace = true
+        Task {
+            defer { isAddingWorkspace = false }
+            guard let workspace = await appState.registerWorkspace(path: url.path) else {
+                return
+            }
+            conversation.workspaceID = workspace.id
+            conversation.updatedAt = .now
+            try? modelContext.save()
+        }
     }
 
     private func send(_ textOverride: String? = nil) {
@@ -334,8 +446,10 @@ struct ChatView: View {
             options: .init(
                 maxTokens: maxTokens,
                 temperature: temperature,
-                affinityKey: conversation.id.uuidString
-            )
+                affinityKey: conversation.workspaceID.map { "workspace:\($0)" }
+                    ?? conversation.id.uuidString
+            ),
+            workspaceID: conversation.workspaceID
         )
         generationTask = Task { @MainActor in
             do {
