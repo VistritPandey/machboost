@@ -13,8 +13,10 @@ final class AppState {
     private(set) var apiToken: String?
     private(set) var catalog: [CatalogModel] = []
     private(set) var loadedModels: [ModelInstance] = []
+    private(set) var workspaces: [WorkspaceSummary] = []
     private(set) var metrics: ServerMetrics?
     private(set) var downloads: [String: PullEvent] = [:]
+    private(set) var indexingWorkspaces: Set<String> = []
     private(set) var isRefreshing = false
     var showOnboarding = false
     var presentedError: String?
@@ -69,10 +71,12 @@ final class AppState {
             async let catalog = api.catalog()
             async let models = api.models()
             async let metrics = api.metrics()
-            let values = try await (catalog, models, metrics)
+            async let workspaces = api.workspaces()
+            let values = try await (catalog, models, metrics, workspaces)
             self.catalog = values.0
             self.loadedModels = values.1
             self.metrics = values.2
+            self.workspaces = values.3
             if values.0.allSatisfy({ !$0.cached }) {
                 showOnboarding = true
             }
@@ -177,6 +181,42 @@ final class AppState {
         }
     }
 
+    func registerWorkspace(path: String) async -> WorkspaceSummary? {
+        let operationID = "new:\(path)"
+        indexingWorkspaces.insert(operationID)
+        defer { indexingWorkspaces.remove(operationID) }
+        do {
+            let workspace = try await api.registerWorkspace(path: path, name: nil)
+            workspaces.removeAll { $0.id == workspace.id }
+            workspaces.insert(workspace, at: 0)
+            return workspace
+        } catch {
+            presentedError = error.localizedDescription
+            return nil
+        }
+    }
+
+    func reindexWorkspace(id: String) async {
+        indexingWorkspaces.insert(id)
+        defer { indexingWorkspaces.remove(id) }
+        do {
+            let workspace = try await api.reindexWorkspace(id: id)
+            workspaces.removeAll { $0.id == workspace.id }
+            workspaces.insert(workspace, at: 0)
+        } catch {
+            presentedError = error.localizedDescription
+        }
+    }
+
+    func removeWorkspace(id: String) async {
+        do {
+            try await api.removeWorkspace(id: id)
+            workspaces.removeAll { $0.id == id }
+        } catch {
+            presentedError = error.localizedDescription
+        }
+    }
+
     func unloadAllModels() async {
         do {
             try await api.stop()
@@ -202,6 +242,11 @@ final class AppState {
 
     func model(named name: String) -> CatalogModel? {
         catalog.first { $0.name == name || $0.repository == name }
+    }
+
+    func workspace(id: String?) -> WorkspaceSummary? {
+        guard let id else { return nil }
+        return workspaces.first { $0.id == id }
     }
 
     private func rebuildAPI() {
