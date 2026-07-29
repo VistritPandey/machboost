@@ -69,6 +69,73 @@ class MachBoostClient:
     def metrics(self) -> dict[str, Any]:
         return self.get("/api/metrics")
 
+    def workspaces(self) -> list[dict[str, Any]]:
+        return list(self.get("/api/workspaces").get("workspaces") or ())
+
+    def register_workspace(
+        self,
+        path: str | os.PathLike[str],
+        *,
+        name: Optional[str] = None,
+        index: bool = True,
+        max_file_bytes: int = 1_000_000,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "path": os.fspath(path),
+            "index": bool(index),
+            "max_file_bytes": int(max_file_bytes),
+        }
+        if name:
+            payload["name"] = name
+        response = self.post("/api/workspaces", payload)
+        return dict(response.get("workspace") or {})
+
+    def reindex_workspace(
+        self,
+        workspace_id: str,
+        *,
+        max_file_bytes: int = 1_000_000,
+    ) -> dict[str, Any]:
+        response = self.post(
+            "/api/workspaces/index",
+            {
+                "workspace_id": workspace_id,
+                "max_file_bytes": int(max_file_bytes),
+            },
+        )
+        return dict(response.get("workspace") or {})
+
+    def query_workspace(
+        self,
+        workspace_id: str,
+        query: str,
+        *,
+        top_k: int = 12,
+        max_chars: int = 48_000,
+    ) -> dict[str, Any]:
+        return self.post(
+            "/api/workspaces/query",
+            {
+                "workspace_id": workspace_id,
+                "query": query,
+                "top_k": int(top_k),
+                "max_chars": int(max_chars),
+            },
+        )
+
+    def remove_workspace(self, workspace_id: str) -> bool:
+        try:
+            return bool(
+                self.post(
+                    "/api/workspaces/delete",
+                    {"workspace_id": workspace_id},
+                ).get("removed")
+            )
+        except MachBoostAPIError as exc:
+            if exc.status == 404:
+                return False
+            raise
+
     def pull(
         self,
         model: str,
@@ -153,6 +220,10 @@ class MachBoostClient:
         affinity_key: Optional[str] = None,
         queue_timeout: Optional[float] = None,
         request_id: Optional[str] = None,
+        workspace_id: Optional[str] = None,
+        workspace_query: Optional[str] = None,
+        workspace_top_k: Optional[int] = None,
+        workspace_max_chars: Optional[int] = None,
     ) -> Iterator[dict[str, Any]] | dict[str, Any]:
         chat_messages = [dict(message) for message in messages]
         if images is not None:
@@ -180,6 +251,14 @@ class MachBoostClient:
             payload["keep_alive"] = keep_alive
         if request_id is not None:
             payload["request_id"] = request_id
+        if workspace_id is not None:
+            payload["workspace_id"] = workspace_id
+        if workspace_query is not None:
+            payload["workspace_query"] = workspace_query
+        if workspace_top_k is not None:
+            payload["workspace_top_k"] = int(workspace_top_k)
+        if workspace_max_chars is not None:
+            payload["workspace_max_chars"] = int(workspace_max_chars)
         if stream:
             return self.stream("/api/chat", payload)
         return self.post("/api/chat", payload)
@@ -197,6 +276,10 @@ class MachBoostClient:
         affinity_key: Optional[str] = None,
         queue_timeout: Optional[float] = None,
         request_id: Optional[str] = None,
+        workspace_id: Optional[str] = None,
+        workspace_query: Optional[str] = None,
+        workspace_top_k: Optional[int] = None,
+        workspace_max_chars: Optional[int] = None,
     ) -> Iterator[dict[str, Any]] | dict[str, Any]:
         request_options = dict(options or {})
         if affinity_key is not None:
@@ -217,6 +300,14 @@ class MachBoostClient:
             payload["keep_alive"] = keep_alive
         if request_id is not None:
             payload["request_id"] = request_id
+        if workspace_id is not None:
+            payload["workspace_id"] = workspace_id
+        if workspace_query is not None:
+            payload["workspace_query"] = workspace_query
+        if workspace_top_k is not None:
+            payload["workspace_top_k"] = int(workspace_top_k)
+        if workspace_max_chars is not None:
+            payload["workspace_max_chars"] = int(workspace_max_chars)
         if stream:
             return self.stream("/api/generate", payload)
         return self.post("/api/generate", payload)
