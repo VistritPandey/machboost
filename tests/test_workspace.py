@@ -131,6 +131,28 @@ class WorkspaceStoreTests(unittest.TestCase):
         self.assertLessEqual(paths.count("large.py"), 3)
         self.assertTrue(result.truncated)
 
+    def test_repository_map_is_stable_across_different_queries(self) -> None:
+        (self.repo / "auth.py").write_text(
+            "def authenticate_user(token):\n    return token\n",
+            encoding="utf-8",
+        )
+        (self.repo / "billing.py").write_text(
+            "def capture_payment(invoice):\n    return invoice\n",
+            encoding="utf-8",
+        )
+        workspace = self.store.register(self.repo)
+        self.store.index(workspace.id)
+
+        auth = self.store.query(workspace.id, "authenticate user")
+        billing = self.store.query(workspace.id, "capture payment")
+        auth_prefix = auth.context.split("\n\n## ", maxsplit=1)[0]
+        billing_prefix = billing.context.split("\n\n## ", maxsplit=1)[0]
+
+        self.assertEqual(auth_prefix, billing_prefix)
+        self.assertIn("auth.py: authenticate_user", auth_prefix)
+        self.assertIn("billing.py: capture_payment", auth_prefix)
+        self.assertNotEqual(auth.hits[0].path, billing.hits[0].path)
+
     def test_metadata_schema_round_trips_as_json(self) -> None:
         (self.repo / "main.go").write_text(
             "package main\nfunc main() {}\n",
