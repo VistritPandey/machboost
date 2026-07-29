@@ -22,6 +22,8 @@ DEFAULT_CHUNK_LINES = 120
 DEFAULT_CHUNK_OVERLAP = 20
 DEFAULT_QUERY_CHARS = 48_000
 DEFAULT_TOP_K = 12
+DEFAULT_CAPSULE_CHARS = 36_000
+DEFAULT_CAPSULE_RATIO = 0.75
 
 SKIP_DIRECTORIES = {
     ".git",
@@ -476,7 +478,10 @@ class WorkspaceStore:
 
         capsule = self.capsule(
             workspace_id,
-            max_chars=min(32_000, max(1_000, (max_chars * 2) // 3)),
+            max_chars=min(
+                DEFAULT_CAPSULE_CHARS,
+                max(1_000, int(max_chars * DEFAULT_CAPSULE_RATIO)),
+            ),
         )
         sections = [capsule]
         used = len(capsule)
