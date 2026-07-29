@@ -55,6 +55,7 @@ struct MachBoostApp: App {
                 Button("Check for Updates…") {
                     updates.checkForUpdates()
                 }
+                .disabled(!updates.isAvailable)
             }
         }
 
