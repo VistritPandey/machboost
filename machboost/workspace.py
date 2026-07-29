@@ -432,7 +432,7 @@ class WorkspaceStore:
                 query=query,
                 context=self.capsule(
                     workspace_id,
-                    max_chars=min(24_000, max(1_000, max_chars)),
+                    max_chars=min(32_000, max(1_000, max_chars)),
                 ),
                 hits=(),
                 truncated=False,
@@ -476,7 +476,7 @@ class WorkspaceStore:
 
         capsule = self.capsule(
             workspace_id,
-            max_chars=min(24_000, max(1_000, max_chars // 2)),
+            max_chars=min(32_000, max(1_000, (max_chars * 2) // 3)),
         )
         sections = [capsule]
         used = len(capsule)
@@ -514,7 +514,7 @@ class WorkspaceStore:
             truncated=truncated,
         )
 
-    def capsule(self, workspace_id: str, *, max_chars: int = 24_000) -> str:
+    def capsule(self, workspace_id: str, *, max_chars: int = 32_000) -> str:
         workspace = self.get(workspace_id)
         language_summary = ", ".join(
             f"{name} ({count})" for name, count in workspace.languages[:8]
