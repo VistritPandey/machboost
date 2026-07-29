@@ -26,7 +26,7 @@ class MLXCausalLMService:
         cache_factory: Optional[Callable[[object], object]] = None,
         cache_trimmer: Optional[Callable[[object, int], object]] = None,
         cache_can_trim: Optional[Callable[[object], bool]] = None,
-        native_prompt_cache_size: int = 8,
+        native_prompt_cache_size: int = 0,
         native_prompt_cache_bytes: int = 2 * 1024 * 1024 * 1024,
     ) -> None:
         self.model = model
@@ -309,6 +309,23 @@ class MLXCausalLMService:
 
     def clear_prompt_cache(self) -> None:
         self._native_prompt_cache = None
+
+    def configure_native_prompt_cache(
+        self,
+        *,
+        enabled: bool,
+        max_size: int = 8,
+        max_bytes: int = 2 * 1024 * 1024 * 1024,
+    ) -> None:
+        next_size = max(0, int(max_size)) if enabled else 0
+        next_bytes = max(0, int(max_bytes)) if enabled else 0
+        if (
+            next_size != self.native_prompt_cache_size
+            or next_bytes != self.native_prompt_cache_bytes
+        ):
+            self.clear_prompt_cache()
+        self.native_prompt_cache_size = next_size
+        self.native_prompt_cache_bytes = next_bytes
 
     def _native_prompt_cache_store(self):
         if self.native_prompt_cache_size <= 0 or self.native_prompt_cache_bytes <= 0:
