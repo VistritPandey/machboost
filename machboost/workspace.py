@@ -24,6 +24,9 @@ DEFAULT_QUERY_CHARS = 48_000
 DEFAULT_TOP_K = 12
 DEFAULT_CAPSULE_CHARS = 36_000
 DEFAULT_CAPSULE_RATIO = 0.75
+DEFAULT_EVIDENCE_CHARS = 8_000
+DEFAULT_HIT_CHARS = 1_600
+DEFAULT_HIT_CONTEXT_LINES = 12
 
 SKIP_DIRECTORIES = {
     ".git",
@@ -485,31 +488,44 @@ class WorkspaceStore:
         )
         sections = [capsule]
         used = len(capsule)
+        evidence_limit = min(DEFAULT_EVIDENCE_CHARS, max(0, max_chars - used))
+        evidence_used = 0
         included: list[SearchHit] = []
         truncated = False
         for hit in selected:
-            header = f"\n\n## {hit.path}:{hit.start_line}-{hit.end_line}\n"
-            available = max_chars - used - len(header)
+            available = evidence_limit - evidence_used
             if available <= 0:
                 truncated = True
                 break
-            body = hit.text[:available]
+            focused = _focus_hit(
+                hit,
+                terms,
+                max_chars=min(DEFAULT_HIT_CHARS, available),
+            )
+            header = (
+                f"\n\n## {focused.path}:"
+                f"{focused.start_line}-{focused.end_line}\n"
+            )
+            available -= len(header)
+            if available <= 0:
+                truncated = True
+                break
+            body = focused.text[:available]
             if len(body) < len(hit.text):
                 truncated = True
             sections.append(header + body)
             used += len(header) + len(body)
+            evidence_used += len(header) + len(body)
             included.append(
                 SearchHit(
-                    path=hit.path,
-                    start_line=hit.start_line,
-                    end_line=hit.end_line,
-                    symbols=hit.symbols,
+                    path=focused.path,
+                    start_line=focused.start_line,
+                    end_line=focused.end_line,
+                    symbols=focused.symbols,
                     text=body,
-                    score=hit.score,
+                    score=focused.score,
                 )
             )
-            if truncated:
-                break
 
         return WorkspaceQuery(
             workspace=workspace,
@@ -813,6 +829,41 @@ def _chunk_text(
         if end >= len(lines):
             break
         start = max(start + 1, end - overlap_lines)
+
+
+def _focus_hit(
+    hit: SearchHit,
+    terms: Sequence[str],
+    *,
+    max_chars: int,
+) -> SearchHit:
+    if len(hit.text) <= max_chars:
+        return hit
+    lines = hit.text.splitlines()
+    matching_lines = [
+        index
+        for index, line in enumerate(lines)
+        if any(term in line.lower() for term in terms)
+    ]
+    center = matching_lines[0] if matching_lines else 0
+    start = max(0, center - DEFAULT_HIT_CONTEXT_LINES)
+    end = start
+    used = 0
+    while end < len(lines):
+        line_size = len(lines[end]) + (1 if end > start else 0)
+        if end > start and used + line_size > max_chars:
+            break
+        used += line_size
+        end += 1
+    excerpt_lines = lines[start:end]
+    return SearchHit(
+        path=hit.path,
+        start_line=hit.start_line + start,
+        end_line=hit.start_line + max(start, end - 1),
+        symbols=_extract_symbols(excerpt_lines),
+        text="\n".join(excerpt_lines),
+        score=hit.score,
+    )
 
 
 def _extract_symbols(lines: Sequence[str]) -> tuple[str, ...]:
