@@ -80,8 +80,8 @@ MachBoost does not place every file into the model context. The bundled daemon:
    binaries, and oversized files;
 2. stores bounded code chunks and extracted symbols in a local SQLite FTS5
    index;
-3. sends a stable repository map plus only the chunks relevant to the current
-   question; and
+3. sends a stable repository map plus focused line windows relevant to the
+   current question, with dynamic evidence capped independently; and
 4. returns file and line citations with the response.
 
 On compatible MLX text models, workspace requests also reuse the longest exact
