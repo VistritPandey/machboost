@@ -186,6 +186,12 @@ tag or starting the workflow manually:
 - `SPARKLE_PRIVATE_KEY_BASE64`
 - `SPARKLE_PUBLIC_ED_KEY`
 
+For automatic signed releases on `v*` tag pushes, also set the repository
+variable `MACHBOOST_SIGNED_RELEASES` to `true`. Without that variable, tag
+pushes skip the credential-gated signing job so unsigned community releases can
+be published separately. Manual workflow dispatch remains available regardless
+of the variable.
+
 The workflow imports signing material into a temporary Keychain, builds and
 notarizes the DMG, validates the bundled runtime without invoking host Python,
 generates release notes, publishes the GitHub release, and then removes the
