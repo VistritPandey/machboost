@@ -20,6 +20,7 @@ struct SettingsView: View {
                         .onChange(of: automaticUpdates) {
                             updates.automaticallyChecksForUpdates = automaticUpdates
                         }
+                        .disabled(!updates.isAvailable)
                     LabeledContent("Version") {
                         Text(version)
                             .foregroundStyle(.secondary)
@@ -29,6 +30,7 @@ struct SettingsView: View {
                     } label: {
                         Label("Check for updates", systemImage: "arrow.down.circle")
                     }
+                    .disabled(!updates.isAvailable)
                 }
 
                 Section("Storage") {
