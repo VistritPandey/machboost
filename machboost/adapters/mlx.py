@@ -26,6 +26,8 @@ class MLXCausalLMService:
         cache_factory: Optional[Callable[[object], object]] = None,
         cache_trimmer: Optional[Callable[[object, int], object]] = None,
         cache_can_trim: Optional[Callable[[object], bool]] = None,
+        native_prompt_cache_size: int = 8,
+        native_prompt_cache_bytes: int = 2 * 1024 * 1024 * 1024,
     ) -> None:
         self.model = model
         self.tokenizer = tokenizer
@@ -35,11 +37,15 @@ class MLXCausalLMService:
         self.cache_factory = cache_factory
         self.cache_trimmer = cache_trimmer
         self.cache_can_trim = cache_can_trim
+        self.native_prompt_cache_size = max(0, int(native_prompt_cache_size))
+        self.native_prompt_cache_bytes = max(0, int(native_prompt_cache_bytes))
         self.forward_calls = 0
         self._cache = None
         self._cache_prefix: Tuple[Token, ...] = ()
         self._cache_logits = None
         self._cache_supported: Optional[bool] = None
+        self._native_prompt_cache = None
+        self._native_prompt_cache_supported: Optional[bool] = None
         self._last_native_metrics: dict[str, float | int | None] = {}
         if hasattr(self.model, "eval"):
             self.model.eval()
@@ -199,15 +205,41 @@ class MLXCausalLMService:
         started = time.perf_counter()
         first_token_at: Optional[float] = None
         last_response = None
+        full_prompt = [int(token) for token in prompt_tokens]
+        prompt = full_prompt
+        prompt_cache = None
+        prompt_cache_store = self._native_prompt_cache_store()
+        cached_prompt_tokens = 0
+        if prompt_cache_store is not None:
+            prompt_cache, prompt = prompt_cache_store.fetch_nearest_cache(
+                self.model,
+                full_prompt,
+            )
+            cached_prompt_tokens = len(full_prompt) - len(prompt)
+            if prompt_cache is None:
+                try:
+                    from mlx_lm.models.cache import make_prompt_cache
+
+                    prompt_cache = make_prompt_cache(self.model)
+                except (ImportError, RuntimeError, TypeError):
+                    prompt_cache_store = None
+                    prompt_cache = None
+                    prompt = full_prompt
+                    cached_prompt_tokens = 0
+        cache_key = list(full_prompt)
+        stream_kwargs = {"max_tokens": max_tokens}
+        if prompt_cache_store is not None and prompt_cache is not None:
+            stream_kwargs["prompt_cache"] = prompt_cache
         try:
             for response in stream_generate(
                 self.model,
                 self.tokenizer,
-                [int(token) for token in prompt_tokens],
-                max_tokens=max_tokens,
+                prompt,
+                **stream_kwargs,
             ):
                 last_response = response
                 token = int(response.token)
+                cache_key.append(token)
                 if token not in stop_set and first_token_at is None:
                     first_token_at = time.perf_counter()
                 text = str(getattr(response, "text", "") or "")
@@ -220,9 +252,25 @@ class MLXCausalLMService:
                 if on_tokens is not None and on_text is None:
                     on_tokens((token,))
         finally:
+            if prompt_cache_store is not None and prompt_cache is not None:
+                prompt_cache_store.insert_cache(
+                    self.model,
+                    cache_key,
+                    prompt_cache,
+                )
             elapsed = max(0.0, time.perf_counter() - started)
-            prompt_count = int(
-                getattr(last_response, "prompt_tokens", 0) or len(prompt_tokens)
+            backend_prompt_count = int(
+                getattr(last_response, "prompt_tokens", 0) or len(prompt)
+            )
+            prompt_count = (
+                len(full_prompt)
+                if prompt_cache_store is not None
+                else backend_prompt_count
+            )
+            evaluated_prompt_count = (
+                len(prompt)
+                if prompt_cache_store is not None
+                else backend_prompt_count
             )
             generation_count = int(
                 getattr(last_response, "generation_tokens", 0) or len(generated)
@@ -232,7 +280,11 @@ class MLXCausalLMService:
                 getattr(last_response, "generation_tps", 0.0) or 0.0
             )
             ttft = None if first_token_at is None else first_token_at - started
-            prompt_seconds = prompt_count / prompt_tps if prompt_tps > 0 else (ttft or 0.0)
+            prompt_seconds = (
+                evaluated_prompt_count / prompt_tps
+                if prompt_tps > 0
+                else (ttft or 0.0)
+            )
             generation_seconds = (
                 generation_count / generation_tps
                 if generation_tps > 0
@@ -240,6 +292,8 @@ class MLXCausalLMService:
             )
             self._last_native_metrics = {
                 "prompt_tokens": prompt_count,
+                "prompt_eval_tokens": evaluated_prompt_count,
+                "cached_prompt_tokens": cached_prompt_tokens,
                 "prompt_eval_seconds": prompt_seconds,
                 "generation_seconds": generation_seconds,
                 "time_to_first_token_seconds": ttft,
@@ -247,6 +301,29 @@ class MLXCausalLMService:
                 "generation_tokens_per_second": generation_tps,
             }
         return tuple(generated)
+
+    def clear_prompt_cache(self) -> None:
+        self._native_prompt_cache = None
+
+    def _native_prompt_cache_store(self):
+        if self.native_prompt_cache_size <= 0 or self.native_prompt_cache_bytes <= 0:
+            return None
+        if self._native_prompt_cache_supported is False:
+            return None
+        if self._native_prompt_cache is not None:
+            return self._native_prompt_cache
+        try:
+            from mlx_lm.models.cache import LRUPromptCache
+
+            self._native_prompt_cache = LRUPromptCache(
+                max_size=self.native_prompt_cache_size,
+                max_bytes=self.native_prompt_cache_bytes,
+            )
+        except (ImportError, RuntimeError, TypeError):
+            self._native_prompt_cache_supported = False
+            return None
+        self._native_prompt_cache_supported = True
+        return self._native_prompt_cache
 
     @property
     def last_native_metrics(self) -> dict[str, float | int | None]:
