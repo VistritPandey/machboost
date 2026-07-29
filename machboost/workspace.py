@@ -430,7 +430,10 @@ class WorkspaceStore:
             return WorkspaceQuery(
                 workspace=workspace,
                 query=query,
-                context=self.capsule(workspace_id),
+                context=self.capsule(
+                    workspace_id,
+                    max_chars=min(24_000, max(1_000, max_chars)),
+                ),
                 hits=(),
                 truncated=False,
             )
@@ -471,7 +474,10 @@ class WorkspaceStore:
             if len(selected) >= max(1, top_k):
                 break
 
-        capsule = self.capsule(workspace_id)
+        capsule = self.capsule(
+            workspace_id,
+            max_chars=min(24_000, max(1_000, max_chars // 2)),
+        )
         sections = [capsule]
         used = len(capsule)
         included: list[SearchHit] = []
@@ -508,13 +514,13 @@ class WorkspaceStore:
             truncated=truncated,
         )
 
-    def capsule(self, workspace_id: str) -> str:
+    def capsule(self, workspace_id: str, *, max_chars: int = 24_000) -> str:
         workspace = self.get(workspace_id)
         language_summary = ", ".join(
             f"{name} ({count})" for name, count in workspace.languages[:8]
         )
         revision = workspace.revision or "unavailable"
-        return (
+        header = (
             f"# Workspace: {workspace.name}\n"
             f"Revision: {revision}\n"
             f"Indexed files: {workspace.file_count}\n"
@@ -523,6 +529,41 @@ class WorkspaceStore:
             "Use only the repository evidence below for repository-specific claims. "
             "Cite evidence as path:start-end. Say when the evidence is insufficient."
         )
+        remaining = max(0, max_chars - len(header) - len("\n\n# Repository map\n"))
+        if remaining <= 0:
+            return header[:max_chars]
+
+        symbols_by_path: dict[str, list[str]] = {}
+        with closing(sqlite3.connect(self._database_path(workspace_id))) as connection:
+            file_paths = [
+                str(row[0])
+                for row in connection.execute("SELECT path FROM files ORDER BY path")
+            ]
+            for path, payload in connection.execute(
+                "SELECT path, symbols FROM chunks ORDER BY path, start_line"
+            ):
+                names = symbols_by_path.setdefault(str(path), [])
+                for symbol in _parse_symbols(str(payload)):
+                    if symbol not in names and len(names) < 24:
+                        names.append(symbol)
+
+        lines: list[str] = []
+        used = 0
+        for path in file_paths:
+            names = symbols_by_path.get(path, ())
+            line = path
+            if names:
+                line += ": " + ", ".join(names)
+            line += "\n"
+            if used + len(line) > remaining:
+                omitted = len(file_paths) - len(lines)
+                suffix = f"... {omitted} additional files omitted\n"
+                if used + len(suffix) <= remaining:
+                    lines.append(suffix)
+                break
+            lines.append(line)
+            used += len(line)
+        return header + "\n\n# Repository map\n" + "".join(lines).rstrip()
 
     def _initialize_database(self, workspace_id: str) -> None:
         self._workspace_dir(workspace_id).mkdir(parents=True, exist_ok=True)
