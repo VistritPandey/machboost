@@ -16,6 +16,8 @@ a separate MachBoost installation.
   memory guidance, cancellation, and unload controls
 - advanced MLX and MLX-VLM repository entry, with compatibility validation
   before download and automatic discovery after a compatible model is cached
+- repository workspaces with local indexing, per-conversation selection,
+  query-specific code retrieval, file and line citations, and manual reindexing
 - one resident daemon for several models, bounded queues, optional replicas,
   OpenAI-compatible and Ollama-compatible routes, and live queue, latency,
   throughput, and memory metrics
@@ -64,6 +66,33 @@ The desktop code is split into explicit targets:
 
 The Swift package manifest mirrors these boundaries for non-Xcode builds.
 
+## Repository Workspaces
+
+Choose **Repository > Open Repository...** in the chat toolbar to index a local
+codebase. The selected workspace is stored with that conversation and remains
+active for follow-up questions until **No Repository** is selected. The same
+menu can refresh the index after code changes or remove MachBoost's local index.
+Removing a workspace never deletes or modifies the source repository.
+
+MachBoost does not place every file into the model context. The bundled daemon:
+
+1. follows Git ignore rules and excludes symlinks, likely credentials,
+   binaries, and oversized files;
+2. stores bounded code chunks and extracted symbols in a local SQLite FTS5
+   index;
+3. sends a stable repository map plus only the chunks relevant to the current
+   question; and
+4. returns file and line citations with the response.
+
+On compatible MLX text models, workspace requests also reuse the longest exact
+prompt prefix held by the resident model. This can reduce prefill for later
+questions even when each question and retrieved suffix is different. It does
+not accelerate the first workspace request, unrelated short prompts, or
+output-token decoding. Plain chat does not opt into this cache.
+
+Workspace metadata and indexes stay in MachBoost Application Support. Source
+files remain in their original location and no repository content is uploaded.
+
 ## Embedded Runtime
 
 The runtime manifest pins the CPython artifact and checksum. Python wheels are
@@ -94,6 +123,11 @@ MachBoost APIs:
 
 - `GET /api/catalog`
 - `GET /api/metrics`
+- `GET /api/workspaces`
+- `POST /api/workspaces`
+- `POST /api/workspaces/index`
+- `POST /api/workspaces/query`
+- `POST /api/workspaces/delete`
 - `POST /api/cancel`
 - streaming `POST /api/pull`
 
