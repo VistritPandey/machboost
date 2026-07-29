@@ -26,7 +26,7 @@
 \maketitle
 
 \begin{abstract}
-MachBoost is a local inference package for conditional acceleration. Its text path drafts from explicit local context and verifies candidate token blocks with the target model. For visual requests, it can either reuse state derived from unchanged image bytes or, experimentally, shorten a new image's visual sequence after Qwen3-VL completes early cross-modal fusion. We evaluate these paths on an Apple M1 Max. A favorable context-backed code fixture with a 3B Qwen model reaches a 1.96$\times$ median paired speedup over native \texttt{mlx-lm}; copied retrieval answers reach 1.58$\times$ with experimental one-token re-entry. A broader Llama 3.2 3B audit, however, records a 1.008$\times$ aggregate median and exact token equality in 20 of 21 pairs. Cache-enabled text drafting is therefore not yet a general exact acceleration path. Across six Qwen vision models, repeated-image paired medians range from 5.14$\times$ to 17.44$\times$. A separate Qwen3-VL 8B pilot uses ten unique TextVQA images with all caches disabled. Retaining a median 35.12\% of visual hidden states after layer 3 yields a 1.67$\times$ aggregate wall-time speedup and a 1.70$\times$ median paired speedup. Native and compressed paths each match an accepted dataset answer on eight of ten questions, although normalized outputs agree on only seven. The package includes workload-aware policy selection, offline calibration gates, and temporal video-frame selection, but these additions do not yet have complete task-level evidence. The first-view result remains approximate, single-model evidence rather than an exact or universal acceleration claim.
+MachBoost is a local inference package for conditional acceleration. Its text paths either draft candidate tokens from explicit context or reuse model state for an unchanged repository prefix. Visual requests can reuse state derived from unchanged image bytes or, experimentally, shorten a new image's visual sequence after Qwen3-VL completes early cross-modal fusion. Repository-prefix experiments on an Apple M5 Pro compare native full prefill with reuse of the longest exact prefix while the question and retrieved code change. Across five different questions, Qwen2.5 3B and 7B reach 2.97$\times$ and 3.23$\times$ median paired speedups; all ten pairs generate identical token sequences. Medians over six rows, including one exact repeat of the priming request, are 3.02$\times$ and 3.28$\times$. This lowers prefill rather than autoregressive decode and does not help the first request. Separate context-drafting experiments on an Apple M1 Max are less consistent: a favorable 3B Qwen code fixture reaches 1.96$\times$, while a broader Llama 3.2 3B audit records a 1.008$\times$ aggregate median and exact token equality in 20 of 21 pairs. Across six Qwen vision models, repeated-image paired medians range from 5.14$\times$ to 17.44$\times$. A ten-image Qwen3-VL 8B TextVQA pilot with all caches disabled reaches a 1.67$\times$ aggregate speedup after retaining a median 35.12\% of visual hidden states. Native and compressed paths each answer eight questions correctly, although normalized outputs agree on seven. The measurements support distinct, workload-dependent contracts rather than universal faster inference.
 \end{abstract}
 
 \section{Introduction}
@@ -36,7 +36,15 @@ Visual assistants add a different cost. One image may expand into roughly a thou
 
 Speculative decoding offers a way around part of this loop. A cheap source guesses several future tokens; the target model checks the guess; accepted tokens are emitted without paying for one full target step each. Prior work usually gets the draft from another model, extra heads, or a reference sequence. MachBoost takes the reference idea and applies it to the local machine. If the user is asking about a repo, config, note, policy, or retrieved passage, the likely continuation may already be present in that local text.
 
-MachBoost does not try to accelerate every prompt or modality with one trick. It accelerates grounded text when a verifier can accept useful drafts, repeated-image queries when the visual input has not changed, and selected Qwen3-VL first-view requests through an opt-in lossy path. Ordinary requests still follow the backend's native implementation.
+A large repository introduces a separate prefill problem. Sending every file is
+both wasteful and likely to exceed the context window, while conventional
+retrieval still re-evaluates a long repository description on each question.
+MachBoost indexes bounded code chunks locally, constructs a deterministic
+file-and-symbol map, retrieves focused line windows, and arranges the prompt so
+the stable map precedes the changing evidence. A resident MLX model can then
+restore the longest exact prompt prefix before evaluating the new suffix.
+
+MachBoost does not try to accelerate every prompt or modality with one trick. It accelerates grounded text when a verifier can accept useful drafts, repository prefill when a stable code map can be reused, repeated-image queries when the visual input has not changed, and selected Qwen3-VL first-view requests through an opt-in lossy path. Ordinary requests still follow the backend's native implementation.
 
 This paper contributes the following:
 \begin{itemize}[leftmargin=*]
@@ -44,6 +52,11 @@ This paper contributes the following:
   \item a cache-aware MLX verifier that fuses continuation and draft scoring, rewinds rejected cache entries in place, and resumes native decoding when useful context ends;
   \item a paired benchmark against native \texttt{mlx-lm} generation with raw rows, run-order alternation, environment provenance, and exact token comparisons;
   \item a resident local server with warm model lifecycle, streaming Ollama-compatible and OpenAI-compatible endpoints, and raw completion support for editor integrations;
+  \item a Git-aware local repository index that combines a deterministic
+  file-and-symbol map with bounded, line-addressable retrieval;
+  \item a repository-prefix path that restores native MLX prompt state only for
+  an exact token prefix, plus paired 3B and 7B artifacts over different
+  questions;
   \item an architecture-aware MLX-VLM adapter with content-addressed image identity, projected-feature reuse where the model interface preserves all required tensors, and image-scoped prompt state;
   \item a whole-prefix checkpoint path for Qwen3.5's mixed recurrent/attention cache, plus a conservative prompt-state-only path for Qwen3-VL's deep-stack visual features;
   \item paired repeated-image artifacts for six Qwen models that record cache hits, matched prefix length, first-token latency, raw outputs, and expected-answer checks;
@@ -64,7 +77,7 @@ Results above 2$\times$ elsewhere generally require more than process tuning. Re
 
 The same distinction appears outside text generation. Diffusion workloads can reuse intermediate transformations across denoising steps; EasyCache reports 2.1--3.3$\times$ for several video models \cite{zhou2025easycache}. That mechanism does not transfer directly to autoregressive text decoding. It does, however, support a broader product design in which one package selects a backend-specific accelerator rather than pretending that a single algorithm fits text, image, audio, and video models.
 
-Attention-state reuse is established. Prompt Cache stores reusable attention states for prompt modules and reports large first-token latency reductions on repeated prefixes \cite{gim2023promptcache}. MLX-VLM supplies prompt-state reuse, automatic prefix caching, and projected-feature caching \cite{mlxvlm2026}. MachBoost composes those facilities behind content identity and adds model-specific safety rules. It is not the origin of feature or prefix caching. The engineering question studied here is whether one local serving layer can apply them without silently dropping architecture-specific visual or recurrent state.
+Attention-state reuse is established. Prompt Cache stores reusable attention states for prompt modules and reports large first-token latency reductions on repeated prefixes \cite{gim2023promptcache}. MLX-VLM supplies prompt-state reuse, automatic prefix caching, and projected-feature caching \cite{mlxvlm2026}. The repository workspace studied here is an application of prefix caching, not a new cache primitive: its contribution is a local index and prompt layout that preserve a large exact prefix while query-specific code evidence changes. MachBoost composes existing cache facilities behind content identity and model-specific safety rules. The engineering question is whether one local serving layer can apply them without silently dropping architecture-specific visual or recurrent state.
 
 Visual token reduction is also an active field rather than a MachBoost invention. AdaptInfer uses dynamic text guidance and layer-dependent pruning \cite{zhang2025adaptinfer}. Wang et al. report that visual-token usefulness changes with depth and task, describing an architecture- and workload-dependent ``information horizon'' \cite{wang2026informationhorizon}. ZOO-Prune estimates token sensitivity without training and reports up to 2.30$\times$ end-to-end acceleration while pruning as much as 94.4\% of visual tokens \cite{kim2026zooprune}. The first-view mechanism studied here is simpler: it uses no calibration data, gradients, or model changes, and targets one MLX Qwen3-VL implementation. Its contribution is the post-deepstack integration and local paired evidence, not the general idea of dropping or merging visual tokens.
 
@@ -80,6 +93,18 @@ Let $M$ be a target autoregressive model and let $x$ be the prompt token sequenc
 for each generation step $t$. MachBoost receives a corpus $C$ derived from prompt text, retrieved context, local files, or user-provided strings. The goal is to reduce wall-clock latency while returning the same sequence $y$ that greedy decoding with $M$ would return.
 
 This paper stays with greedy decoding. Sampling-compatible speculative decoding is possible in principle, but greedy argmax verification gives a simple correctness check: the accelerated sequence must match the serial baseline token-for-token.
+
+For a repository revision $R$, let $m(R)$ be a deterministic file-and-symbol
+map and let $e(R,q)$ be evidence retrieved for question $q$. The complete
+prompt is arranged as
+\[
+  x(R,q)=s \Vert m(R) \Vert e(R,q) \Vert q,
+\]
+where $s$ is fixed instruction text. For two questions over the same revision,
+the model state through $s \Vert m(R)$ can be reused when those tokens match
+exactly. MachBoost evaluates the remaining suffix and then runs the same native
+greedy decoder. This contract concerns prefill latency; it makes no claim about
+faster generation after the first token.
 
 For repeated visual queries, let $I$ be an image and $q_i$ a sequence of questions sent to one resident vision-language model $V$. With identical image bytes, the desired invariant is
 \[
@@ -112,6 +137,29 @@ for a maximum generation length $T$. Batched and scalar floating-point paths can
 
 \subsection{Keeping the Cache Path Stable}
 Verification writes candidate entries to the MLX prompt cache. Accepted entries remain useful; rejected entries must not survive. MachBoost trims the rejected suffix in place when the cache type permits it. If safe trimming is unavailable, the service reconstructs the accepted prefix. Prompt initialization follows \texttt{mlx-lm}'s split prefill trajectory, processing the final prompt token separately. Once no further context candidate exists, the service hands the live verifier cache to \texttt{mlx\_lm.generate\_step}; the remaining response therefore uses the runtime's optimized asynchronous decoder instead of a Python-level \texttt{argmax}/synchronize loop.
+
+\subsection{Indexing and Reusing Repository Prefixes}
+Repository discovery uses \texttt{git ls-files} when possible, preserving normal
+ignore rules. Symlinks, likely credential files, binaries, and oversized files
+are rejected before indexing. Remaining files are split into overlapping,
+line-addressable chunks and stored in SQLite FTS5 with extracted symbol names.
+Reindexing compares file metadata and content digests, then updates only changed
+or deleted entries.
+
+The context begins with a deterministic capsule containing repository
+metadata, sorted paths, and extracted symbols. Query terms select FTS rows, but
+MachBoost sends focused windows around matching lines instead of every complete
+chunk. Dynamic evidence is capped at 8,000 characters and follows the capsule.
+This ordering trades some dynamic context capacity for a longer reusable
+prefix; file and line ranges remain attached to every selected window.
+
+The MLX service keeps a bounded LRU of native prompt states. For a new prompt,
+it finds the stored entry with the longest exact token prefix, trims a copied
+state to that boundary, and evaluates only the suffix. Cache entries are keyed
+to the loaded service and bounded by both count and estimated bytes. Ordinary
+chat leaves this cache disabled; repository requests opt in. Cache types that
+cannot be safely trimmed, including the tested Qwen3.5 hybrid recurrent state,
+fall back to native prefill.
 
 \subsection{Architecture-Aware Reuse for an Unchanged Image}
 The visual adapter computes a SHA-256 identity from the image contents. Local file metadata memoizes hashing but does not define identity; base64 payloads, data URLs, and in-memory images are hashed directly. The first bounded LRU maps this identity to the projected output of the vision tower,
@@ -180,6 +228,16 @@ The core package defines a \texttt{StepService} protocol with \texttt{next\_toke
 
 Version 0.2.0 added a resident HTTP process; version 0.5.1 gives idle models a five-minute lifetime by default and retains them indefinitely only when requested. The process owns loaded accelerators, serializes requests per model, supports explicit unloading, and performs a short text-model compile warm-up before the first prompt. The CLI can start the server automatically, preload an alias such as \texttt{qwen2.5:3b}, and issue chat or raw completion requests without reloading weights. The server exposes \texttt{/api/chat}, \texttt{/api/generate}, model lifecycle endpoints, and OpenAI-compatible chat and completion endpoints. Native MLX streaming forwards \texttt{mlx-lm}'s already-detokenized text segments; verified multi-token spans use a stateful streaming detokenizer. This avoids the earlier cost of decoding the entire token prefix once per emitted token.
 
+The current server also owns the repository index and exposes workspace
+registration, reindex, search, listing, and deletion routes. Chat and generation
+requests can provide a workspace identifier through either the
+Ollama-compatible payload or an OpenAI-compatible extension. Retrieval context
+is inserted into the actual model prompt, response metadata carries the
+selected file and line citations, and an affinity key prefers the same model
+replica for later workspace requests. The SwiftUI macOS client persists a
+workspace identifier per conversation and provides repository selection,
+refresh, and removal controls.
+
 The 0.3 series adds vision-model aliases, image arguments in the CLI and Python client, Ollama-style image payloads, and OpenAI-style image content parts. The current alias set includes Qwen2.5-VL 3B, Qwen3-VL 2B/4B/8B, and Qwen3.5 0.8B/4B/9B. MLX objects are created and used on one dedicated worker thread because MLX arrays and streams are thread-affine. The worker owns model load, image preparation, cache lookup, generation, and cache release. Version 0.4 adds the opt-in \texttt{vision\_tokens} mode and retention telemetry. Version 0.5 adds automatic and calibrated policies, random and shape/depth ablations, and temporal video-frame inputs. Post-fusion compression remains restricted to Qwen3-VL because the wrapper depends on that family's layer and deep-stack interfaces.
 
 The Ollama HTTP adapter remains a wrapper: Ollama's public generation API does not expose the target token IDs, logits, mutable KV cache, and block-verification hook this implementation needs. Native integration would require a runner-level change rather than an HTTP option.
@@ -188,7 +246,56 @@ The Ollama HTTP adapter remains a wrapper: Ollama's public generation API does n
 \subsection{Machine and Model}
 Measurements were collected on an Apple M1 Max with 10 CPU cores and 32 GB unified memory, running macOS 26.5.2. The environment used Python 3.13.3, MLX 0.31.2, \texttt{mlx-lm} 0.31.3, and MLX-VLM 0.5.0. Text experiments used \path{mlx-community/Qwen2.5-3B-Instruct-4bit} and \path{mlx-community/Llama-3.2-3B-Instruct-4bit}. The repeated-image matrix used MLX 4-bit conversions of Qwen3-VL 2B/4B/8B and Qwen3.5 0.8B/4B/9B. The first-view pilot used \path{mlx-community/Qwen3-VL-8B-Instruct-4bit}. Only one model was resident during each run. Model fetch and load time were recorded but excluded from paired request latency.
 
+Repository-prefix measurements use a separate Apple M5 Pro with 18 CPU cores
+and 48 GB unified memory, running macOS 26.6. The environment uses Python
+3.13.3, MLX 0.31.2, and \texttt{mlx-lm} 0.31.3. The tested models are
+\path{mlx-community/Qwen2.5-3B-Instruct-4bit} and
+\path{mlx-community/Qwen2.5-7B-Instruct-4bit}. The JSON artifacts store this
+machine and package provenance.
+
 The benchmark requests 64 greedy tokens for three fixture families: literal Python continuation, retrieval-grounded answering, and open-ended writing. Each family is repeated five times with a fresh nonce under both default and re-entry profiles. Baseline and accelerated order alternate. Wall time includes prompt processing. The baseline calls \texttt{mlx-lm}'s native streaming generator; it is not MachBoost's \texttt{next\_token} loop. The artifacts \path{results/mlx_native_default_qwen25_3b_20260713.json} and \path{results/mlx_native_reentry_qwen25_3b_20260713.json} contain prompts, token previews, raw times, package versions, hardware data, and each run's order.
+
+\subsection{Repository Workspace Prefix Results}
+The workspace harness indexes one 183-file revision into 961 chunks, primes the
+accelerated service once, and then measures six questions. The first measured
+row exactly repeats the prime; the other five questions are different from the
+prime and from one another. Both services wrap the same loaded model and receive
+the same complete prompt. The baseline disables native prefix reuse, while the
+accelerated service restores the longest exact prompt state. Request order
+alternates, generation is greedy, and each response is capped at 16 tokens.
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{lrrrrr}
+\toprule
+Model & Exact & All rows & Different questions & Native & MachBoost \\
+\midrule
+Qwen2.5 3B & 6/6 & 3.021$\times$ & 2.971$\times$ & 3.144 s & 1.024 s \\
+Qwen2.5 7B & 6/6 & 3.282$\times$ & 3.232$\times$ & 6.587 s & 1.998 s \\
+\bottomrule
+\end{tabular}
+\caption{Repository-prefix results. ``All rows'' is the median of six paired
+ratios and includes one exact repeat of the priming request. The
+different-question median covers the other five rows. Native and MachBoost
+columns are all-row median wall times.}
+\label{tab:workspaceprefix}
+\end{table}
+
+The median complete prompt contains 10,405 tokens, of which the accelerated
+path reuses 7,901. Different-question speedups range from 2.873$\times$ to
+3.078$\times$ on 3B and 3.090$\times$ to 3.365$\times$ on 7B. The repeated
+prime reaches 13.055$\times$ and 16.637$\times$, respectively. Every pair
+produces the same generated token IDs. The artifacts
+\path{results/workspace_prefix_qwen25_3b_20260729.json} and
+\path{results/workspace_prefix_qwen25_7b_20260729.json} retain prompt sizes,
+cache counters, timings, output hashes, citations, execution order, model,
+machine, packages, and repository revision.
+
+These rows test exact prefill reuse, not answer quality or faster decoding. The
+questions retrieve different evidence but share a long repository map. A first
+workspace request, an unrelated prompt, or a long answer dominated by decode
+does not inherit the reported ratio.
 
 \subsection{Native-Baseline Results}
 \begin{table}[H]
@@ -388,7 +495,20 @@ Lossless Q4 compression & 1.08--1.15$\times$ ideal entropy bound & The quantized
 The failures share a simple accounting problem. A draft only helps when the time removed from target decoding exceeds draft generation, verification, synchronization, and cache repair. A smaller model is not automatically a cheap enough draft. Moving it to another processor is not sufficient either if it predicts one token at a time. The strongest published results solve this with trained multi-token prediction, high acceptance, or concurrent heterogeneous execution rather than with process priority.
 
 \section{Limitations}
-The text evidence begins with 30 controlled Qwen rows and adds a 21-pair Llama 3.2 audit on the same machine. The favorable Qwen code fixture substantially contains the desired continuation; it demonstrates the mechanism but does not estimate real-world eligibility. In the broader Llama suite, most fixtures accept no tokens, the aggregate median is 1.008$\times$, and one cache-enabled JSON pair is not token-identical. The strict verifier restores equality in its smaller control but is about 4.8$\times$ slower than native generation. Longer repository sessions, additional 3B--9B architectures, prefill-heavy prompts, concurrent clients, and energy measurements remain untested.
+The text-drafting evidence begins with 30 controlled Qwen rows and adds a 21-pair Llama 3.2 audit on the same machine. The favorable Qwen code fixture substantially contains the desired continuation; it demonstrates the mechanism but does not estimate real-world eligibility. In the broader Llama suite, most fixtures accept no tokens, the aggregate median is 1.008$\times$, and one cache-enabled JSON pair is not token-identical. The strict verifier restores equality in its smaller control but is about 4.8$\times$ slower than native generation.
+
+The repository-prefix evidence covers one repository snapshot, six short
+questions, two Qwen2.5 models, greedy generation, and one M5 Pro. Token equality
+shows that cache reuse did not change these continuations; it does not measure
+whether retrieval found all required code or whether the answers were correct.
+The first row is an exact prompt repeat and is reported separately. The five
+different questions still share a deterministic repository map and request
+wrapper, so the result does not apply to an unrelated first prompt. The
+8,000-character evidence cap may omit relevant code in a broad or cross-cutting
+question. Longer sessions, repository revisions, multiple concurrent replicas,
+additional 3B--32B architectures, energy, and peak cache memory remain
+untested. A Qwen3.5 9B probe could not safely trim its hybrid recurrent cache
+and produced no valid speedup.
 
 The latest resident comparison alternates seven measured Llama requests between MachBoost and Ollama, but the stacks use different model files and templates. It measures serving suitability rather than an algorithmic speedup or quality comparison. The earlier Qwen resident artifact adds ten requests but does not broaden hardware coverage.
 
@@ -400,17 +520,26 @@ The video adapter selects image frames; it is not a video-language architecture.
 
 Only greedy decoding is evaluated. Even then, cold and warm kernels can use different reduction shapes; the Qwen3.5 0.8B punctuation drift and the Llama structured-JSON tail mismatch are concrete examples of literal non-invariance. The latter artifact does not retain enough information to establish whether cache trajectory, a near-tied logit, or another implementation detail caused the difference. This does not establish equivalence for sampling or beam search. Ollama is also not accelerated through its public HTTP API.
 
-Finally, this work introduces neither prompt lookup, prompt caching, nor visual-token pruning. The contribution is a set of local integrations, safety boundaries, and paired artifacts: context drafting, architecture-aware cache handling, and post-deepstack Qwen3-VL compression. A stronger research claim needs broader comparisons with LLMA, Prompt Lookup Decoding, PLD+, MLX-VLM's current server, production prefix-cache systems, and established VLM pruning baselines.
+Finally, this work introduces neither prompt lookup, prompt caching, nor visual-token pruning. The contribution is a set of local integrations, prompt layouts, safety boundaries, and paired artifacts: context drafting, repository retrieval with exact-prefix reuse, architecture-aware cache handling, and post-deepstack Qwen3-VL compression. A stronger research claim needs broader comparisons with LLMA, Prompt Lookup Decoding, PLD+, MLX-VLM's current server, production prefix-cache systems, and established VLM pruning baselines.
 
 \section{Next Experiments}
 There are two plausible tracks. The first keeps models unchanged. Before expanding re-entry, it should identify and eliminate the cache-trajectory mismatch seen in the Llama audit, then test an online eligibility predictor and native verifier hooks for llama.cpp/Ollama. The resident server makes this testable under long sessions; evaluation should report request coverage, cold and warm time to first token, decode throughput, peak memory, concurrency, energy, and exact outputs against each backend's own optimized generator.
+
+Repository workspaces need a retrieval-quality evaluation independent of the
+latency harness. A next run should use issue-resolution and repository
+question-answering datasets, compare full-context, conventional RAG, and
+prefix-oriented prompt layouts, and score citation recall and answer
+correctness. It should sweep map size, evidence cap, chunk focusing, context
+length, answer length, repository revision, model size, and concurrent clients.
+Block-level KV reuse or continuous batching could extend the gain beyond a
+single exact prefix, but neither is implemented here.
 
 The second track accepts model-specific preparation. A multi-token drafter distilled from the target could run on the Apple Neural Engine while target verification runs on the GPU, following the heterogeneous lesson of Mirror-SD. Quantized draft weights and KV state could reduce memory traffic in long contexts. Both ideas exceed the scope of a wrapper and should be treated as separate research prototypes with quality and compatibility tests.
 
 The immediate visual work is external validity. After resolving or isolating the observed native high-resolution MLX failure, the checkpointed harness should run ChartQA, DocVQA, MMMU, TextVQA, spatial reasoning, and hallucination-sensitive datasets independently. It should add non-Qwen VLMs, sweep layer, retention ratio, image size, and answer length, and report confidence intervals, memory, energy, and task metrics. The implemented random control is the first comparison; attention ranking, AdaptInfer, and ZOO-Prune remain necessary to determine whether query-weighted merging contributes beyond token count alone. Automatic policies should remain disabled unless a model/task calibration set clears both latency and quality gates. Video evaluation should compare uniform sampling, RGB change selection, query-aware selection, PruneVid, and EchoPrune on temporal question-answering benchmarks.
 
 \section{Conclusion}
-MachBoost has three measured conditional paths and one unvalidated temporal adapter. On a favorable 3B Qwen fixture, literal context-backed code continuation reaches a 1.96$\times$ median over five paired runs; one-token re-entry reaches 1.58$\times$ on copied retrieval answers. A broader Llama 3.2 3B suite is more restrained: 20 of 21 pairs are exact and the aggregate median is 1.008$\times$. The current cache-enabled text path is therefore experimental. Across six visual models, short repeated questions over one unchanged image produce model-level paired medians from 5.14$\times$ to 17.44$\times$. For a new image, post-fusion Qwen3-VL compression reaches 1.67$\times$ aggregate speedup on a ten-row TextVQA pilot while both modes score 8/10. That path is approximate: normalized output equality is 70\%, and the experiment is too small to establish quality parity. Version 0.5 adds controls for broader evidence, but the failed native high-resolution run is not a result. The useful claim remains narrower than universal faster inference: context overlap can sometimes reduce text decode, unchanged content can remove repeated visual prefill, and post-fusion token reduction can lower first-view prefill for a tested Qwen3-VL workload. Each mechanism has a separate eligibility and correctness contract.
+MachBoost now has four measured conditional paths and one unvalidated temporal adapter. Repository workspaces are the strongest exact text result: five different questions over one stable codebase reach 2.97$\times$ and 3.23$\times$ median paired speedups on Qwen2.5 3B and 7B, with exact generated tokens in all ten pairs. The gain comes from reusing 7,901 of 10,405 median prompt tokens; it lowers later-request prefill, not first-request cost or decode time. Token drafting remains less settled. A favorable Qwen code fixture reaches 1.96$\times$, while a broader Llama 3.2 3B suite is exact in 20 of 21 pairs and has a 1.008$\times$ aggregate median. Across six visual models, short repeated questions over one unchanged image produce model-level paired medians from 5.14$\times$ to 17.44$\times$. For a new image, post-fusion Qwen3-VL compression reaches 1.67$\times$ aggregate speedup on a ten-row TextVQA pilot while both modes score 8/10; this path is approximate and normalized outputs agree on 70\%. The evidence supports a local serving layer that selects among narrow mechanisms. It does not support a universal faster-inference claim.
 
 \bibliographystyle{plain}
 \small
