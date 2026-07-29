@@ -302,6 +302,102 @@ class MLXAdapterTest(unittest.TestCase):
             service.last_native_metrics["time_to_first_token_seconds"], 0.2
         )
 
+    def test_native_mlx_stream_reuses_longest_cached_prompt_prefix(self):
+        mlx_lm = ModuleType("mlx_lm")
+        models_module = ModuleType("mlx_lm.models")
+        cache_module = ModuleType("mlx_lm.models.cache")
+        observed_prompts = []
+
+        class FakePromptCache:
+            nbytes = 64
+
+        class FakeLRUPromptCache:
+            def __init__(self, max_size, max_bytes):
+                self.entries = []
+
+            def fetch_nearest_cache(self, model, tokens):
+                if not self.entries:
+                    return None, tokens
+                previous_tokens, cache = self.entries[-1]
+                common = 0
+                for left, right in zip(previous_tokens, tokens):
+                    if left != right:
+                        break
+                    common += 1
+                return cache, tokens[common:]
+
+            def insert_cache(self, model, tokens, prompt_cache):
+                self.entries.append((list(tokens), prompt_cache))
+
+        def make_prompt_cache(model):
+            return [FakePromptCache()]
+
+        def stream_generate(
+            model,
+            tokenizer,
+            prompt,
+            *,
+            max_tokens,
+            prompt_cache,
+        ):
+            observed_prompts.append(list(prompt))
+            for index, token in enumerate((1, 2), start=1):
+                yield SimpleNamespace(
+                    token=token,
+                    text=str(token),
+                    prompt_tokens=len(prompt),
+                    prompt_tps=100.0,
+                    generation_tokens=index,
+                    generation_tps=50.0,
+                )
+
+        mlx_lm.stream_generate = stream_generate
+        cache_module.LRUPromptCache = FakeLRUPromptCache
+        cache_module.make_prompt_cache = make_prompt_cache
+        service = MLXCausalLMService(object(), object())
+
+        with patch.dict(
+            "sys.modules",
+            {
+                "mlx_lm": mlx_lm,
+                "mlx_lm.models": models_module,
+                "mlx_lm.models.cache": cache_module,
+            },
+        ):
+            first = service.generate_tokens((10, 11, 12, 13), max_tokens=2)
+            second = service.generate_tokens((10, 11, 12, 99), max_tokens=2)
+
+        self.assertEqual(first, second)
+        self.assertEqual(observed_prompts, [[10, 11, 12, 13], [99]])
+        self.assertEqual(service.last_native_metrics["prompt_tokens"], 4)
+        self.assertEqual(service.last_native_metrics["prompt_eval_tokens"], 1)
+        self.assertEqual(service.last_native_metrics["cached_prompt_tokens"], 3)
+
+    def test_native_prompt_cache_can_be_disabled(self):
+        observed = []
+        mlx_lm = ModuleType("mlx_lm")
+
+        def stream_generate(model, tokenizer, prompt, *, max_tokens):
+            observed.append(list(prompt))
+            yield SimpleNamespace(token=1, text="one")
+
+        mlx_lm.stream_generate = stream_generate
+        service = MLXCausalLMService(
+            object(),
+            object(),
+            native_prompt_cache_size=0,
+        )
+
+        with patch.dict("sys.modules", {"mlx_lm": mlx_lm}):
+            service.generate_tokens((10, 11, 12, 13), max_tokens=1)
+            service.generate_tokens((10, 11, 12, 99), max_tokens=1)
+
+        self.assertEqual(
+            observed,
+            [[10, 11, 12, 13], [10, 11, 12, 99]],
+        )
+        self.assertEqual(service.last_native_metrics["cached_prompt_tokens"], 0)
+
     def test_cached_verify_commits_accepted_candidate(self):
         prompt = (100, 101, 102)
         service = cache_service((1, 2, 3, 4, 5), prompt_len=len(prompt))
