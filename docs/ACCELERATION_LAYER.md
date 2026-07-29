@@ -74,8 +74,8 @@ Each workspace request has two context regions:
 
 1. A stable repository map that remains byte-identical while the indexed
    revision is unchanged.
-2. Query-specific retrieved chunks, with file and line citations, that follow
-   the map.
+2. Focused query-specific line windows, capped independently at 8,000
+   characters and carrying file and line citations, that follow the map.
 
 The resident MLX adapter keeps a bounded LRU of native prompt states. It finds
 the longest exact token prefix for the current request, restores that state,
@@ -455,13 +455,13 @@ loop. All 12 generated token sequences match exactly.
 
 | Model | All-row median | Different-question median | Median native | Median MachBoost |
 |---|---:|---:|---:|---:|
-| Qwen2.5 3B | 2.659x | 2.378x | 2.258s | 0.853s |
-| Qwen2.5 7B | 2.867x | 2.577x | 4.785s | 1.660s |
+| Qwen2.5 3B | 3.021x | 2.971x | 3.144s | 1.024s |
+| Qwen2.5 7B | 3.282x | 3.232x | 6.587s | 1.998s |
 
-The first of six rows repeats the priming question and reaches 10.145x on 3B
-and 12.474x on 7B. The other five questions are distinct and range from
-1.947x to 3.295x on 3B and 1.994x to 3.523x on 7B. The median complete prompt
-contains 7,823 tokens and the accelerated path reuses 5,668. These measurements
+The first of six rows repeats the priming question and reaches 13.055x on 3B
+and 16.637x on 7B. The other five questions are distinct and range from
+2.873x to 3.078x on 3B and 3.090x to 3.365x on 7B. The median complete prompt
+contains 10,405 tokens and the accelerated path reuses 7,901. These measurements
 show reusable repository prefill, not universal first-request or decode
 acceleration. A Qwen3.5 9B probe could not safely trim the hybrid cache and
 produced no valid gain.
