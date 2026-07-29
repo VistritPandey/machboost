@@ -17,6 +17,7 @@ public final class Conversation {
     @Attribute(.unique) public var id: UUID
     public var title: String
     public var model: String
+    public var workspaceID: String?
     public var createdAt: Date
     public var updatedAt: Date
     @Relationship(deleteRule: .cascade, inverse: \ChatMessage.conversation)
@@ -28,11 +29,13 @@ public final class Conversation {
         id: UUID = UUID(),
         title: String = "New chat",
         model: String = "llama3.2:3b",
+        workspaceID: String? = nil,
         createdAt: Date = .now
     ) {
         self.id = id
         self.title = title
         self.model = model
+        self.workspaceID = workspaceID
         self.createdAt = createdAt
         self.updatedAt = createdAt
         self.messages = []
