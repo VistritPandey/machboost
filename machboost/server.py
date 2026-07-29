@@ -461,6 +461,7 @@ class RuntimeManager:
             if on_admitted is not None:
                 on_admitted()
             accelerator = lease.resource
+            configure_native_prompt_cache(accelerator, options)
             if entry.config.backend.endswith("-vlm"):
                 text, stats = accelerator.generate_chat(
                     messages,
@@ -560,6 +561,7 @@ class RuntimeManager:
             if on_admitted is not None:
                 on_admitted()
             accelerator = lease.resource
+            configure_native_prompt_cache(accelerator, options)
             if entry.config.backend.endswith("-vlm"):
                 text, stats = accelerator.generate(
                     prompt,
@@ -1204,6 +1206,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
             messages = inject_workspace_messages(messages, workspace)
             context = merge_draft_context(context, workspace)
             options.setdefault("affinity_key", f"workspace:{workspace.workspace.id}")
+            options.setdefault("workspace_prefix_cache", True)
         request_id = request_identifier(payload, "chat")
         if not bool(payload.get("stream", True)):
             result = self.runtime.run_operation(
@@ -1315,6 +1318,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
             prompt = inject_workspace_prompt(prompt, workspace)
             context = merge_draft_context(context, workspace)
             options.setdefault("affinity_key", f"workspace:{workspace.workspace.id}")
+            options.setdefault("workspace_prefix_cache", True)
         request_id = request_identifier(payload, "generate")
         if not bool(payload.get("stream", True)):
             result = self.runtime.run_operation(
@@ -1428,6 +1432,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
             messages = inject_workspace_messages(messages, workspace)
             context = merge_draft_context(context, workspace)
             options.setdefault("affinity_key", f"workspace:{workspace.workspace.id}")
+            options.setdefault("workspace_prefix_cache", True)
         request_id = request_identifier(payload, "chatcmpl")
         if not bool(payload.get("stream", False)):
             result = self.runtime.run_operation(
@@ -1543,6 +1548,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
             prompt = inject_workspace_prompt(prompt, workspace)
             context = merge_draft_context(context, workspace)
             options.setdefault("affinity_key", f"workspace:{workspace.workspace.id}")
+            options.setdefault("workspace_prefix_cache", True)
         request_id = request_identifier(payload, "cmpl")
         if not bool(payload.get("stream", False)):
             result = self.runtime.run_operation(
@@ -2003,6 +2009,23 @@ def scheduler_result(lease: Any, replicas: int) -> dict[str, Any]:
         "replicas": int(replicas),
         "queue_wait_seconds": float(lease.queue_wait_seconds),
     }
+
+
+def configure_native_prompt_cache(
+    accelerator: Any,
+    options: dict[str, Any],
+) -> None:
+    service = getattr(accelerator, "service", None)
+    configure = getattr(service, "configure_native_prompt_cache", None)
+    if not callable(configure):
+        return
+    configure(
+        enabled=bool(options.get("workspace_prefix_cache", False)),
+        max_size=int(options.get("prompt_cache_size", 8)),
+        max_bytes=int(
+            options.get("prompt_cache_bytes", 2 * 1024 * 1024 * 1024)
+        ),
+    )
 
 
 def messages_have_images(messages: Sequence[dict[str, Any]]) -> bool:
