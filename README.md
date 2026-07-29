@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/VistritPandey/machboost/actions/workflows/ci.yml/badge.svg)](https://github.com/VistritPandey/machboost/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Website](https://img.shields.io/badge/Website-MachBoost-22c55e)](https://vistritpandey.github.io/machboost/)
 
 MachBoost is an alpha-stage, local-first inference server and Python package for MLX, MLX-VLM, and Hugging Face models. It offers an Ollama-like model workflow, keeps models resident between requests, and streams text and visual chat. Optional acceleration paths target reusable local text, repeated image inputs, and selected Qwen3-VL visual-prefill workloads.
 
@@ -101,9 +102,19 @@ Release builds bundle pinned arm64 CPython 3.13, MLX, `mlx-lm`, `mlx-vlm`, and
 MachBoost dependencies. They do not depend on Homebrew, system Python, or an
 existing package install. The source is under [apps/macos](apps/macos/); see the
 [native app guide](apps/macos/README.md) for local builds, runtime verification,
-signing, notarization, DMG creation, and Sparkle updates. A public signed DMG is
-not claimed until those release steps have completed with the project owner's
-Apple credentials.
+signing, notarization, DMG creation, and Sparkle updates.
+
+An unsigned Apple Silicon community preview is available from the
+[MachBoost website](https://vistritpandey.github.io/machboost/) and
+[GitHub Releases](https://github.com/VistritPandey/machboost/releases/latest).
+Drag the app from the DMG into Applications and attempt to open it once. Because
+the community build is not Apple-notarized, open **System Settings → Privacy &
+Security** and choose **Open Anyway**. This creates a local exception for future
+launches. Verify the accompanying SHA-256 checksum before overriding Gatekeeper.
+
+A public Developer ID-signed and notarized DMG is not claimed until those
+credential-gated release steps have completed with the project owner's Apple
+credentials.
 
 ## Quick Start
 
