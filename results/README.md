@@ -29,11 +29,12 @@ Models:
 Hardware: Apple M5 Pro, 48 GB unified memory
 
 MachBoost indexes one Git repository into a local SQLite FTS5 store. Each
-request receives a deterministic repository map followed by query-specific
-retrieved chunks. The accelerated path reuses the longest exact MLX prompt
-prefix from the resident model; the baseline evaluates the same complete
-prompt with native `mlx-lm` prefix reuse disabled. Both paths use the same
-loaded weights, tokenizer, prompt, greedy generation, and 16-token limit.
+request receives a deterministic repository map followed by focused,
+query-specific line windows capped at 8,000 characters. The accelerated path
+reuses the longest exact MLX prompt prefix from the resident model; the
+baseline evaluates the same complete prompt with native `mlx-lm` prefix reuse
+disabled. Both paths use the same loaded weights, tokenizer, prompt, greedy
+generation, and 16-token limit.
 
 The first measured request exactly repeats the unrecorded priming request. The
 remaining five questions are different from the prime and from one another,
@@ -41,14 +42,14 @@ although they share the same repository-map prefix.
 
 | Model | Exact pairs | All-row median | Different-question median | Repeated-prime row |
 |---|---:|---:|---:|---:|
-| Qwen2.5 3B | 6/6 | 2.659x | 2.378x | 10.145x |
-| Qwen2.5 7B | 6/6 | 2.867x | 2.577x | 12.474x |
+| Qwen2.5 3B | 6/6 | 3.021x | 2.971x | 13.055x |
+| Qwen2.5 7B | 6/6 | 3.282x | 3.232x | 16.637x |
 
-For 3B, median native and MachBoost wall times across all six rows are 2.258
-seconds and 0.853 seconds. For 7B they are 4.785 seconds and 1.660 seconds.
-The median prompt contains 7,823 tokens and the accelerated path reuses a
-median 5,668 tokens. Different-question pair ratios range from 1.947x to
-3.295x on 3B and 1.994x to 3.523x on 7B.
+For 3B, median native and MachBoost wall times across all six rows are 3.144
+seconds and 1.024 seconds. For 7B they are 6.587 seconds and 1.998 seconds.
+The median prompt contains 10,405 tokens and the accelerated path reuses a
+median 7,901 tokens. Different-question pair ratios range from 2.873x to
+3.078x on 3B and 3.090x to 3.365x on 7B.
 
 This is an exact prefill-reuse result, not faster autoregressive decode. It
 applies when a resident session repeatedly sends a long unchanged repository
