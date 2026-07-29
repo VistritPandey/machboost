@@ -48,7 +48,8 @@ final class MachBoostTests: XCTestCase {
             model: "llama3.2:3b",
             messages: [.init(role: "user", content: "Hello", images: nil)],
             context: ["/tmp/context.txt"],
-            options: .init(maxTokens: 64, temperature: 0.2, affinityKey: "thread-1")
+            options: .init(maxTokens: 64, temperature: 0.2, affinityKey: "thread-1"),
+            workspaceID: "workspace-123"
         )
 
         let object = try XCTUnwrap(
@@ -58,8 +59,36 @@ final class MachBoostTests: XCTestCase {
 
         XCTAssertEqual(object["request_id"] as? String, "chat-123")
         XCTAssertEqual(object["keep_alive"] as? String, "forever")
+        XCTAssertEqual(object["workspace_id"] as? String, "workspace-123")
         XCTAssertEqual(options["num_predict"] as? Int, 64)
         XCTAssertEqual(options["affinity_key"] as? String, "thread-1")
+    }
+
+    func testWorkspaceSchemaDecodesRepositoryMetadata() throws {
+        let data = Data(
+            """
+            {
+              "id":"0123456789abcdef",
+              "name":"MachBoost",
+              "path":"/tmp/machboost",
+              "created_at":"2026-07-29T12:00:00Z",
+              "updated_at":"2026-07-29T12:01:00Z",
+              "indexed_at":"2026-07-29T12:01:00Z",
+              "revision":"abc123",
+              "file_count":181,
+              "chunk_count":944,
+              "total_bytes":1048576,
+              "languages":[{"name":"Python","files":32}]
+            }
+            """.utf8
+        )
+
+        let workspace = try JSONDecoder().decode(WorkspaceSummary.self, from: data)
+
+        XCTAssertEqual(workspace.name, "MachBoost")
+        XCTAssertEqual(workspace.revision, "abc123")
+        XCTAssertEqual(workspace.fileCount, 181)
+        XCTAssertEqual(workspace.languages.first?.name, "Python")
     }
 
     @MainActor
@@ -93,6 +122,22 @@ final class MachBoostTests: XCTestCase {
         try context.save()
 
         XCTAssertEqual(conversation.orderedMessages.map(\.content), ["First", "Second"])
+    }
+
+    @MainActor
+    func testConversationPersistsSelectedWorkspace() throws {
+        let configuration = ModelConfiguration(isStoredInMemoryOnly: true)
+        let container = try ModelContainer(
+            for: Conversation.self,
+            ChatMessage.self,
+            ChatAttachment.self,
+            configurations: configuration
+        )
+        let conversation = Conversation(workspaceID: "0123456789abcdef")
+        container.mainContext.insert(conversation)
+        try container.mainContext.save()
+
+        XCTAssertEqual(conversation.workspaceID, "0123456789abcdef")
     }
 
     @MainActor
