@@ -3,11 +3,15 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.metadata
 import json
+import platform
 import statistics
+import subprocess
 import sys
 import tempfile
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -94,6 +98,44 @@ def timed_generate(
 
 def median(values: list[float]) -> float:
     return statistics.median(values) if values else 0.0
+
+
+def command_output(*command: str) -> str | None:
+    try:
+        result = subprocess.run(
+            command,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return result.stdout.strip() or None
+
+
+def package_versions() -> dict[str, str | None]:
+    versions: dict[str, str | None] = {}
+    for package in ("machboost", "mlx", "mlx-lm"):
+        try:
+            versions[package] = importlib.metadata.version(package)
+        except importlib.metadata.PackageNotFoundError:
+            versions[package] = None
+    return versions
+
+
+def system_metadata() -> dict[str, Any]:
+    memory_bytes = command_output("sysctl", "-n", "hw.memsize")
+    return {
+        "platform": platform.platform(),
+        "machine": platform.machine(),
+        "processor": command_output("sysctl", "-n", "machdep.cpu.brand_string")
+        or platform.processor(),
+        "cpu_count": command_output("sysctl", "-n", "hw.ncpu"),
+        "memory_bytes": int(memory_bytes) if memory_bytes else None,
+        "macos": platform.mac_ver()[0],
+        "python": platform.python_version(),
+    }
 
 
 def main() -> int:
@@ -219,6 +261,7 @@ def main() -> int:
                 "run": index + 1,
                 "order": order,
                 "question": retrieval_rows[index]["question"],
+                "repeats_prime": index == 0,
                 "citations": retrieval_rows[index]["citations"],
                 "exact_tokens": exact,
                 "speedup": speedup,
@@ -240,9 +283,24 @@ def main() -> int:
     valid = len(exact_rows) == len(rows) and any(
         row["machboost"]["cached_prompt_tokens"] > 0 for row in rows
     )
+    different_question_rows = [
+        row for row in exact_rows if not row["repeats_prime"]
+    ]
     summary = {
         "schema": "machboost.workspace-prefix-benchmark.v1",
+        "recorded_at": datetime.now(timezone.utc).isoformat(),
         "model": args.model,
+        "system": system_metadata(),
+        "packages": package_versions(),
+        "settings": {
+            "max_tokens": args.max_tokens,
+            "top_k": args.top_k,
+            "max_context_chars": args.max_context_chars,
+            "prompt_cache_size": args.prompt_cache_size,
+            "prompt_cache_bytes": args.prompt_cache_bytes,
+            "generation": "greedy",
+            "prime_question": questions[0],
+        },
         "workspace": workspace_path.name,
         "workspace_revision": report.workspace.revision,
         "runs": len(rows),
@@ -255,6 +313,11 @@ def main() -> int:
             [row["machboost"]["wall_seconds"] for row in rows]
         ),
         "median_speedup": median([row["speedup"] for row in exact_rows]),
+        "different_question_rows": len(different_question_rows),
+        "median_different_question_speedup": median(
+            [row["speedup"] for row in different_question_rows]
+        ),
+        "prime_speedup": rows[0]["speedup"] if rows else 0.0,
         "median_cached_prompt_tokens": median(
             [row["machboost"]["cached_prompt_tokens"] for row in rows]
         ),
