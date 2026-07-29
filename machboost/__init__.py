@@ -30,6 +30,14 @@ from .models import ModelAlias, ModelResolution, resolve_model
 from .server import RuntimeManager
 from .video import TemporalVideoSampler, VideoFrame, VideoSelection
 from .vision import ContentAddressedVisionCache, VisualAssetStore, VisionCacheInfo
+from .workspace import (
+    IndexReport,
+    SearchHit,
+    Workspace,
+    WorkspaceError,
+    WorkspaceQuery,
+    WorkspaceStore,
+)
 
 __all__ = [
     "Accelerator",
@@ -52,6 +60,7 @@ __all__ = [
     "ModelAlias",
     "ModelResolution",
     "RunStats",
+    "SearchHit",
     "RuntimeManager",
     "TemporalVideoSampler",
     "VideoFrame",
@@ -59,6 +68,11 @@ __all__ = [
     "VisualAssetStore",
     "VisionCacheInfo",
     "VisionRunStats",
+    "Workspace",
+    "WorkspaceError",
+    "WorkspaceQuery",
+    "WorkspaceStore",
+    "IndexReport",
     "benchmark",
     "benchmark_cases",
     "benchmark_chat_latency",
