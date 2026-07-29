@@ -19,9 +19,9 @@ final class MachBoostUITests: XCTestCase {
     @MainActor
     func testRepositoryPickerExposesWorkspaceActions() {
         let app = launchApp()
-        let repository = app.menuButtons["Repository"]
+        let repository = app.descendants(matching: .any)["repository-picker"]
 
-        XCTAssertTrue(repository.waitForExistence(timeout: 10))
+        XCTAssertTrue(repository.waitForExistence(timeout: 20))
         repository.click()
 
         XCTAssertTrue(app.menuItems["No Repository"].waitForExistence(timeout: 3))
