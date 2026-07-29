@@ -63,7 +63,7 @@ Reproduce either artifact with:
 ```sh
 python3 scripts/benchmark_workspace_prefix.py \
   --model mlx-community/Qwen2.5-3B-Instruct-4bit \
-  --repo . \
+  --workspace . \
   --output results/local/workspace_prefix_qwen25_3b.json
 ```
 
