@@ -65,6 +65,7 @@ apps/macos/.swiftpm/
 apps/macos/Resources/runtime/
 apps/macos/DerivedData/
 apps/macos/build/
+apps/macos/MachBoost.xcodeproj/project.xcworkspace/
 apps/macos/*.xcarchive/
 apps/macos/*.dmg
 apps/macos/*.zip
