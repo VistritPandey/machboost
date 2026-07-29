@@ -13,7 +13,7 @@ MachBoost does not upload telemetry, mutate global runtime settings, or change m
 
 MachBoost is not a universal `2x-8x` switch. A speedup measured on a context-backed completion or repeated image must not be applied to unrelated prompts, new images, different models, or different machines.
 
-For text, the accelerated path helps only when the model's next tokens are recoverable from caller-supplied local context and the target model accepts those draft tokens. The user's wording can be new; the likely answer or continuation must overlap useful text in retrieved documents, source code, templates, policies, logs, or other nearby material. A genuinely novel open-ended message normally falls back to native generation, where expected algorithmic speedup is about `1.0x` and the server layer can add latency.
+Text drafting helps only when the model's next tokens are recoverable from caller-supplied local context and the target model accepts those draft tokens. Repository workspaces use a separate mechanism: a stable file/symbol map and query-specific code retrieval stay within a bounded prompt, while MLX can reuse the exact stable prefix on later workspace requests. The question itself can be new, but the first request still pays normal indexing and prefill costs. A novel message outside a workspace normally falls back to native generation, where expected algorithmic speedup is about `1.0x` and the server layer can add latency.
 
 | Likely fit | Why it can help |
 |---|---|
@@ -25,7 +25,7 @@ For text, the accelerated path helps only when the model's next tokens are recov
 
 | Usually not a fit | Expected behavior |
 |---|---|
-| A first-time greeting or unrelated unique question | Native generation; context drafting may not engage. |
+| A first workspace question or unrelated unique question | Normal prefill; no reusable prefix exists yet. |
 | Brainstorming, creative writing, or novel reasoning | Little recoverable continuation, so usually near native speed. |
 | A changed or first-seen image | Repeated-image cache does not apply. |
 | An external backend without verifier hooks | Wrapper and measurement only; no native MachBoost token verification. |
@@ -38,6 +38,7 @@ Treat every workload as uncalibrated until it passes a same-model paired benchma
 |---|---|---|
 | Plain resident text chat | Native MLX decode through a local server; no drafting without context | usable, with measurable server/streaming overhead versus direct `mlx-lm` |
 | Concurrent text API serving | bounded FIFO admission, explicit overload responses, and isolated model replicas | usable; replicas consume additional memory and do not guarantee higher GPU throughput |
+| Repository workspace prefix reuse | same-snapshot Qwen2.5 3B and 7B audits reached 2.659x and 2.867x medians with 6/6 exact token pairs each | promising for later questions over a stable indexed repo; not a first-request, arbitrary-model, or decode-throughput claim |
 | Context-backed MLX text | latest broad Llama 3.2 3B suite was 1.008x aggregate with 20/21 exact pairs; favorable controlled continuations can be materially faster | experimental; never generalize a fixture result beyond its workload |
 | Repeated unchanged image | 5.14x-17.44x model-level paired medians on one synthetic image and short extraction prompts | promising for repeated-image prefill; not a first-view or decode result |
 | New-image Qwen3-VL compression | 1.70x median on ten TextVQA rows, with 70% normalized output equality and equal 8/10 aggregate task scores | approximate, opt-in, and not quality-equivalence evidence |
@@ -90,7 +91,7 @@ python -m machboost self-test --json
 
 The repository also contains a SwiftUI app for Apple Silicon Macs running
 macOS 14 or newer. It provides streaming chat, local conversation history,
-text/code/folder/image attachments, model downloads, resident-model controls,
+repository workspaces, text/code/folder/image attachments, model downloads, resident-model controls,
 server metrics, a developer API view, and a menu-bar controller. Chats and
 imported attachments remain local, model downloads always require confirmation,
 and closing the window leaves the selected models available until they expire,
@@ -163,6 +164,70 @@ curl http://127.0.0.1:11435/api/chat -d '{
 }'
 ```
 
+### Repository Workspaces
+
+A workspace indexes a repository outside the model context window. Git
+repositories use `git ls-files --cached --others --exclude-standard`, so normal
+ignore rules apply. MachBoost also rejects symlinks, likely credential files,
+binaries, and files larger than the configured limit. SQLite FTS stores bounded
+line chunks and extracted symbols locally. The model receives a deterministic
+repository map plus only the best query-specific chunks, never every file.
+
+Register and index a repository:
+
+```sh
+curl http://127.0.0.1:11435/api/workspaces \
+  -H "Content-Type: application/json" \
+  -d '{"path":"/absolute/path/to/repository","name":"My service"}'
+```
+
+Use the returned workspace ID with either the Ollama-compatible or
+OpenAI-compatible chat route:
+
+```sh
+curl http://127.0.0.1:11435/api/chat \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model":"qwen2.5:7b",
+    "workspace_id":"0123456789abcdef",
+    "messages":[{"role":"user","content":"Where is request cancellation handled?"}],
+    "stream":false
+  }'
+```
+
+The response includes retrieved `path`, `start_line`, and `end_line` citations
+under `machboost.workspace`. `GET /api/workspaces`,
+`POST /api/workspaces/index`, `POST /api/workspaces/query`, and
+`POST /api/workspaces/delete` provide lifecycle and direct-search operations.
+OpenAI-compatible requests can place `workspace_id`, `workspace_top_k`, and
+`workspace_max_chars` in a top-level `machboost` object.
+
+Workspace requests opt into a bounded MLX prompt-prefix cache and use workspace
+affinity. Plain MLX chat keeps native cache behavior. On one Apple Silicon run
+over the same 181-file snapshot, six alternating-order Qwen2.5 3B pairs reduced
+median wall time from `2.258s` to `0.853s` (`2.659x`), and Qwen2.5 7B reduced it
+from `4.785s` to `1.660s` (`2.867x`). All 12 pairs matched generated token IDs.
+Five rows per model used different questions and retrieved evidence; the
+remaining row repeated the priming question. These are short, warm,
+prefill-heavy requests with 7.5K-9.0K-token prompts, not claims about first
+requests, decode rate, every repository, or every architecture. Qwen3.5 9B
+could not safely trim its hybrid recurrent cache and produced no valid speedup,
+so that path remains native.
+
+Reproduce the same-model comparison:
+
+```sh
+python3 scripts/benchmark_workspace_prefix.py \
+  --model mlx-community/Qwen2.5-7B-Instruct-4bit \
+  --workspace . \
+  --runs 6 \
+  --max-tokens 16 \
+  --max-context-chars 32000
+```
+
+See the [3B artifact](results/workspace_prefix_qwen25_3b_20260729.json) and
+[7B artifact](results/workspace_prefix_qwen25_7b_20260729.json).
+
 ### Concurrent API Serving
 
 Run MachBoost as a long-lived inference endpoint for multiple application clients:
@@ -222,7 +287,7 @@ its LAN token locally, stores it in Keychain, and passes it to the daemon withou
 placing it in process arguments or logs.
 
 Discovery and control clients can use `GET /api/catalog`, `GET /api/metrics`,
-and `POST /api/cancel`. Chat, generation, and pull requests accept an optional
+`GET /api/workspaces`, and `POST /api/cancel`. Chat, generation, and pull requests accept an optional
 `request_id`, which is echoed in streaming events. `/api/pull` supports NDJSON
 progress and cancellation while retaining its non-streaming response contract.
 
