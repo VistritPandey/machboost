@@ -1,6 +1,6 @@
 # MachBoost Acceleration Layer
 
-MachBoost is a backend-aware local inference package with three distinct optimization contracts. Text generation can draft candidate tokens from nearby context and ask the target runtime to verify them before committing them. Repeated-image question answering can reuse process-local work derived from unchanged image bytes. Experimental first-view Qwen3-VL compression is approximate and is evaluated separately.
+MachBoost is a backend-aware local inference package with four distinct optimization contracts. Text generation can draft candidate tokens from nearby context and ask the target runtime to verify them before committing them. Repository workspaces can retrieve bounded code context while reusing an unchanged prompt prefix. Repeated-image question answering can reuse process-local work derived from unchanged image bytes. Experimental first-view Qwen3-VL compression is approximate and is evaluated separately.
 
 The central question is:
 
@@ -60,6 +60,40 @@ Resident serving removes repeated model-loading costs and makes MachBoost usable
 Text replicas own separate accelerator and mutable cache instances. This prevents one request's KV or verifier state from contaminating another request, at the cost of another model allocation in unified memory. An optional affinity key prefers the same available replica for related requests but falls back to another idle replica instead of introducing head-of-line blocking. Model stop and expiry close admission first, drain active work, and only then release accelerator resources.
 
 MLX-VLM remains at one replica. Its projected-feature and prompt-state caches are mutable, and its generation path has a process-wide safety lock. Concurrent visual requests therefore queue on one worker. MachBoost does not claim that replica concurrency is continuous batching: independent MLX replicas can contend for the same GPU, and increased replica count may improve queueing or first-token latency without materially improving aggregate decode throughput.
+
+### Repository Workspace Reuse
+
+A repository is not copied wholesale into every model request. MachBoost keeps a
+local SQLite FTS5 index of bounded, line-addressable code chunks and a
+deterministic repository map containing paths and extracted symbols. Git
+repositories are enumerated with `git ls-files --cached --others
+--exclude-standard`; symlinks, likely credentials, binaries, and oversized
+files are excluded.
+
+Each workspace request has two context regions:
+
+1. A stable repository map that remains byte-identical while the indexed
+   revision is unchanged.
+2. Query-specific retrieved chunks, with file and line citations, that follow
+   the map.
+
+The resident MLX adapter keeps a bounded LRU of native prompt states. It finds
+the longest exact token prefix for the current request, restores that state,
+and evaluates only the unmatched suffix. New questions can therefore benefit
+when they share the repository map and part of the request wrapper; they do not
+need to repeat the previous question or retrieved chunks. The generated token
+loop is unchanged.
+
+Prefix reuse is opt-in for workspace requests and disabled for ordinary chat.
+An index revision change produces a different repository map and naturally
+reduces or invalidates the reusable prefix. Models whose cache representation
+cannot be safely trimmed remain on native prefill. The current Qwen3.5 hybrid
+cache is in that category.
+
+This mechanism lowers prefill and time to first token for long, repeated
+repository requests. It does not help the first request, a short unrelated
+prompt, or generation dominated by a long answer. Index files remain on the
+machine and repository contents are not uploaded.
 
 ### Repeated-Image Acceleration
 
@@ -141,6 +175,21 @@ Image-scoped prompt state ---> KV prefix or whole-state checkpoint
         |
         v
 Native MLX-VLM decoder ---> streamed output + cache metrics
+```
+
+Repository workspaces use a separate retrieval and prefill path:
+
+```text
+Repository files ---> local FTS index ---> stable repository map
+                              |                     |
+New question ----------------+--> retrieved chunks |
+                                                    v
+                                      complete grounded prompt
+                                                    |
+                              longest exact MLX prefix cache hit
+                                                    |
+                                                    v
+                                    unmatched prefill + native decode
 ```
 
 First-view and video requests add two optional transformations before native decoding:
@@ -248,6 +297,41 @@ accel = Accelerator.from_mlx(
 text, stats = accel.generate(prompt, max_tokens=128)
 ```
 
+### Repository Workspace API
+
+Register and index a local repository:
+
+```sh
+curl http://127.0.0.1:11435/api/workspaces \
+  -H "Content-Type: application/json" \
+  -d '{"path":"/absolute/path/to/repository"}'
+```
+
+Use the returned identifier in an Ollama-compatible request:
+
+```sh
+curl http://127.0.0.1:11435/api/chat \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model":"qwen2.5:7b",
+    "workspace_id":"0123456789abcdef",
+    "messages":[{"role":"user","content":"Where is cancellation handled?"}],
+    "stream":false
+  }'
+```
+
+The final response includes retrieved file and line citations under
+`machboost.workspace`. Lifecycle and direct-search routes are:
+
+- `GET /api/workspaces`
+- `POST /api/workspaces`
+- `POST /api/workspaces/index`
+- `POST /api/workspaces/query`
+- `POST /api/workspaces/delete`
+
+OpenAI-compatible requests place the same fields in a top-level `machboost`
+object. `workspace_top_k` and `workspace_max_chars` bound retrieved evidence.
+
 ### Resident Client
 
 ```python
@@ -352,7 +436,7 @@ go run ./cmd/machboost bench command -- sleep 1
 | Backend | Resident serving | Native speculation | Status |
 |---|---:|---:|---|
 | Hugging Face | yes | yes | native adapter, streaming server, and research benchmarks exist |
-| MLX / `mlx-lm` | yes | experimental | native adapter, fast text streaming, cache-enabled drafting, and slower strict controls exist |
+| MLX / `mlx-lm` | yes | workspace prefix reuse is exact on tested Qwen2.5 models; token drafting remains experimental | native adapter, bounded native prompt cache, fast text streaming, cache-enabled drafting, and slower strict controls exist |
 | MLX-VLM | yes | repeated-image reuse and approximate first-view compression | image/video-frame chat, streaming, policy calibration, and paired benchmarks exist |
 | Custom Python service | caller-owned | yes, if verifier exists | supported through `machboost(...)` |
 | External Ollama HTTP | already resident | no | compatibility wrapper and benchmarks only |
@@ -361,6 +445,26 @@ go run ./cmd/machboost bench command -- sleep 1
 Protocol compatibility does not imply full feature parity. MachBoost does not provide Ollama model creation, copy, deletion, embeddings, tool calling, or thinking-field semantics. Image input is supported for Ollama-style chat/generate requests and OpenAI-style content parts when the selected backend is MLX-VLM. Video is accepted by the MachBoost CLI and expanded into image frames before the request.
 
 ## Text And Serving Evidence
+
+The repository-prefix artifacts
+`results/workspace_prefix_qwen25_3b_20260729.json` and
+`results/workspace_prefix_qwen25_7b_20260729.json` compare native full prefill
+with bounded prompt-prefix reuse on one M5 Pro with 48 GB unified memory. Both
+paths use the same loaded model, tokenizer, complete prompts, and greedy token
+loop. All 12 generated token sequences match exactly.
+
+| Model | All-row median | Different-question median | Median native | Median MachBoost |
+|---|---:|---:|---:|---:|
+| Qwen2.5 3B | 2.659x | 2.378x | 2.258s | 0.853s |
+| Qwen2.5 7B | 2.867x | 2.577x | 4.785s | 1.660s |
+
+The first of six rows repeats the priming question and reaches 10.145x on 3B
+and 12.474x on 7B. The other five questions are distinct and range from
+1.947x to 3.295x on 3B and 1.994x to 3.523x on 7B. The median complete prompt
+contains 7,823 tokens and the accelerated path reuses 5,668. These measurements
+show reusable repository prefill, not universal first-request or decode
+acceleration. A Qwen3.5 9B probe could not safely trim the hybrid cache and
+produced no valid gain.
 
 The latest cache-enabled text audit is `results/llama32_3b_mlx_context_benchmark_20260716.json`: 21 Llama 3.2 3B pairs across seven fixture families produced a 1.008x aggregate median and 95.24% exact output equality. Code and policy were exact in all three repeats and reached 1.33x and 1.23x medians. One of three JSON rows diverged. RAG, repo quote, creative, and short-answer fixtures accepted no useful drafts and stayed near native speed.
 
@@ -430,6 +534,18 @@ Status: done for 0.2.
 - Ollama-compatible and OpenAI-compatible local APIs.
 - Isolated text replicas, bounded admission, overload responses, and scheduler metrics.
 - End-to-end resident latency evidence.
+
+### P2.5: Repository Workspaces
+
+Status: local index, native app selection, API retrieval, and MLX prefix reuse
+implemented.
+
+- Git-aware local file discovery and incremental SQLite FTS5 indexing.
+- Stable repository maps plus bounded query-specific code chunks.
+- File and line citations in Ollama-compatible and OpenAI-compatible responses.
+- Native macOS repository picker with persisted conversation association.
+- Bounded, opt-in MLX prompt-prefix reuse for workspace requests.
+- Exact same-model 3B and 7B benchmark artifacts.
 
 ### P3: Runtime Expansion
 
