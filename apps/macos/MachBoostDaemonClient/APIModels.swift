@@ -123,6 +123,150 @@ public struct APIChatMessage: Encodable, Sendable {
     }
 }
 
+public struct WorkspaceLanguage: Codable, Hashable, Sendable {
+    public let name: String
+    public let files: Int
+
+    public init(name: String, files: Int) {
+        self.name = name
+        self.files = files
+    }
+}
+
+public struct WorkspaceSummary: Codable, Identifiable, Hashable, Sendable {
+    public let id: String
+    public let name: String
+    public let path: String
+    public let createdAt: String
+    public let updatedAt: String
+    public let indexedAt: String?
+    public let revision: String?
+    public let fileCount: Int
+    public let chunkCount: Int
+    public let totalBytes: Int64
+    public let languages: [WorkspaceLanguage]
+
+    public init(
+        id: String,
+        name: String,
+        path: String,
+        createdAt: String,
+        updatedAt: String,
+        indexedAt: String?,
+        revision: String?,
+        fileCount: Int,
+        chunkCount: Int,
+        totalBytes: Int64,
+        languages: [WorkspaceLanguage]
+    ) {
+        self.id = id
+        self.name = name
+        self.path = path
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.indexedAt = indexedAt
+        self.revision = revision
+        self.fileCount = fileCount
+        self.chunkCount = chunkCount
+        self.totalBytes = totalBytes
+        self.languages = languages
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case path
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+        case indexedAt = "indexed_at"
+        case revision
+        case fileCount = "file_count"
+        case chunkCount = "chunk_count"
+        case totalBytes = "total_bytes"
+        case languages
+    }
+}
+
+public struct WorkspacesResponse: Decodable, Sendable {
+    public let schema: String
+    public let workspaces: [WorkspaceSummary]
+}
+
+public struct WorkspaceIndexResponse: Decodable, Sendable {
+    public let status: String
+    public let workspace: WorkspaceSummary
+    public let scannedFiles: Int?
+    public let indexedFiles: Int?
+    public let unchangedFiles: Int?
+    public let removedFiles: Int?
+    public let skippedFiles: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case status
+        case workspace
+        case scannedFiles = "scanned_files"
+        case indexedFiles = "indexed_files"
+        case unchangedFiles = "unchanged_files"
+        case removedFiles = "removed_files"
+        case skippedFiles = "skipped_files"
+    }
+}
+
+public struct WorkspaceCitation: Decodable, Hashable, Sendable {
+    public let path: String
+    public let startLine: Int
+    public let endLine: Int
+    public let score: Double
+
+    public init(path: String, startLine: Int, endLine: Int, score: Double) {
+        self.path = path
+        self.startLine = startLine
+        self.endLine = endLine
+        self.score = score
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case path
+        case startLine = "start_line"
+        case endLine = "end_line"
+        case score
+    }
+}
+
+public struct WorkspaceResult: Decodable, Sendable {
+    public let id: String
+    public let name: String
+    public let revision: String?
+    public let retrievedChunks: Int
+    public let truncated: Bool
+    public let citations: [WorkspaceCitation]
+
+    public init(
+        id: String,
+        name: String,
+        revision: String?,
+        retrievedChunks: Int,
+        truncated: Bool,
+        citations: [WorkspaceCitation]
+    ) {
+        self.id = id
+        self.name = name
+        self.revision = revision
+        self.retrievedChunks = retrievedChunks
+        self.truncated = truncated
+        self.citations = citations
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case revision
+        case retrievedChunks = "retrieved_chunks"
+        case truncated
+        case citations
+    }
+}
+
 public struct ChatRequest: Encodable, Sendable {
     public let requestID: String
     public let model: String
@@ -131,19 +275,22 @@ public struct ChatRequest: Encodable, Sendable {
     public let stream = true
     public let keepAlive = "forever"
     public let options: Options
+    public let workspaceID: String?
 
     public init(
         requestID: String,
         model: String,
         messages: [APIChatMessage],
         context: [String],
-        options: Options
+        options: Options,
+        workspaceID: String? = nil
     ) {
         self.requestID = requestID
         self.model = model
         self.messages = messages
         self.context = context
         self.options = options
+        self.workspaceID = workspaceID
     }
 
     public struct Options: Encodable, Sendable {
@@ -172,6 +319,7 @@ public struct ChatRequest: Encodable, Sendable {
         case stream
         case keepAlive = "keep_alive"
         case options
+        case workspaceID = "workspace_id"
     }
 }
 
@@ -190,21 +338,25 @@ public struct ChatEvent: Decodable, Sendable {
         public let backend: String?
         public let stats: GenerationStats?
         public let timeToFirstTokenSeconds: Double?
+        public let workspace: WorkspaceResult?
 
         public init(
             backend: String?,
             stats: GenerationStats?,
-            timeToFirstTokenSeconds: Double?
+            timeToFirstTokenSeconds: Double?,
+            workspace: WorkspaceResult? = nil
         ) {
             self.backend = backend
             self.stats = stats
             self.timeToFirstTokenSeconds = timeToFirstTokenSeconds
+            self.workspace = workspace
         }
 
         enum CodingKeys: String, CodingKey {
             case backend
             case stats
             case timeToFirstTokenSeconds = "time_to_first_token_seconds"
+            case workspace
         }
     }
 
