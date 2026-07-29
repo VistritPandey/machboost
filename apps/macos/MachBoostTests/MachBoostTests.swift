@@ -92,6 +92,17 @@ final class MachBoostTests: XCTestCase {
     }
 
     @MainActor
+    func testUpdaterStaysDisabledWithoutPublicKey() {
+        let updates = UpdateController(
+            startingUpdater: true,
+            publicKey: "   "
+        )
+
+        XCTAssertFalse(updates.isAvailable)
+        XCTAssertFalse(updates.automaticallyChecksForUpdates)
+    }
+
+    @MainActor
     func testConversationMessagesPersistInOrder() throws {
         let configuration = ModelConfiguration(isStoredInMemoryOnly: true)
         let container = try ModelContainer(
