@@ -14,6 +14,59 @@ The artifacts measure different mechanisms and should not be combined into one h
 
 Results below are single-machine experiments unless stated otherwise. Ratios of medians and medians of paired ratios are different statistics and are labeled separately.
 
+## Repository Workspace Prefix Reuse, July 29 2026
+
+Artifacts:
+
+- `workspace_prefix_qwen25_3b_20260729.json`
+- `workspace_prefix_qwen25_7b_20260729.json`
+
+Models:
+
+- `mlx-community/Qwen2.5-3B-Instruct-4bit`
+- `mlx-community/Qwen2.5-7B-Instruct-4bit`
+
+Hardware: Apple M5 Pro, 48 GB unified memory
+
+MachBoost indexes one Git repository into a local SQLite FTS5 store. Each
+request receives a deterministic repository map followed by query-specific
+retrieved chunks. The accelerated path reuses the longest exact MLX prompt
+prefix from the resident model; the baseline evaluates the same complete
+prompt with native `mlx-lm` prefix reuse disabled. Both paths use the same
+loaded weights, tokenizer, prompt, greedy generation, and 16-token limit.
+
+The first measured request exactly repeats the unrecorded priming request. The
+remaining five questions are different from the prime and from one another,
+although they share the same repository-map prefix.
+
+| Model | Exact pairs | All-row median | Different-question median | Repeated-prime row |
+|---|---:|---:|---:|---:|
+| Qwen2.5 3B | 6/6 | 2.659x | 2.378x | 10.145x |
+| Qwen2.5 7B | 6/6 | 2.867x | 2.577x | 12.474x |
+
+For 3B, median native and MachBoost wall times across all six rows are 2.258
+seconds and 0.853 seconds. For 7B they are 4.785 seconds and 1.660 seconds.
+The median prompt contains 7,823 tokens and the accelerated path reuses a
+median 5,668 tokens. Different-question pair ratios range from 1.947x to
+3.295x on 3B and 1.994x to 3.523x on 7B.
+
+This is an exact prefill-reuse result, not faster autoregressive decode. It
+applies when a resident session repeatedly sends a long unchanged repository
+prefix while changing the question and retrieved suffix. It does not speed up
+an unrelated first prompt, a short prompt dominated by output decoding, or a
+model whose cache representation cannot be safely trimmed. The tested
+Qwen3.5 hybrid cache did not produce a valid reusable prefix, so no Qwen3.5
+speedup is claimed.
+
+Reproduce either artifact with:
+
+```sh
+python3 scripts/benchmark_workspace_prefix.py \
+  --model mlx-community/Qwen2.5-3B-Instruct-4bit \
+  --repo . \
+  --output results/local/workspace_prefix_qwen25_3b.json
+```
+
 ## Same-Model Context Benchmark, July 20 2026
 
 Artifact: `context_bench_llama32_3b_20260720.json`
