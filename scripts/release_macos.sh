@@ -27,7 +27,7 @@ case "$MODE" in
     ;;
   --local)
     LOCAL_BUILD=true
-    SPARKLE_PUBLIC_ED_KEY="${SPARKLE_PUBLIC_ED_KEY:-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=}"
+    SPARKLE_PUBLIC_ED_KEY="${SPARKLE_PUBLIC_ED_KEY:-}"
     ;;
   *)
     echo "usage: $0 VERSION [--local]" >&2
