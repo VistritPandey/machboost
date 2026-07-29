@@ -202,6 +202,23 @@ under `machboost.workspace`. `GET /api/workspaces`,
 OpenAI-compatible requests can place `workspace_id`, `workspace_top_k`, and
 `workspace_max_chars` in a top-level `machboost` object.
 
+The Python client exposes the same workflow:
+
+```python
+from machboost import MachBoostClient
+
+client = MachBoostClient()
+workspace = client.register_workspace("/absolute/path/to/repository")
+response = client.chat(
+    "qwen2.5:7b",
+    [{"role": "user", "content": "Where is cancellation handled?"}],
+    workspace_id=workspace["id"],
+    stream=False,
+)
+print(response["message"]["content"])
+print(response["machboost"]["workspace"]["citations"])
+```
+
 Workspace requests opt into a bounded MLX prompt-prefix cache and use workspace
 affinity. Plain MLX chat keeps native cache behavior. On one Apple M5 Pro run
 over the same 183-file snapshot, six alternating-order Qwen2.5 3B pairs reduced
