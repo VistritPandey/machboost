@@ -208,7 +208,10 @@ over the same 181-file snapshot, six alternating-order Qwen2.5 3B pairs reduced
 median wall time from `2.258s` to `0.853s` (`2.659x`), and Qwen2.5 7B reduced it
 from `4.785s` to `1.660s` (`2.867x`). All 12 pairs matched generated token IDs.
 Five rows per model used different questions and retrieved evidence; the
-remaining row repeated the priming question. These are short, warm,
+remaining row repeated the priming question. Across only those five different
+questions, the median paired speedup was `2.378x` on 3B and `2.577x` on 7B;
+the repeated-prime row reached `10.145x` and `12.474x`, respectively. These are
+short, warm,
 prefill-heavy requests with 7.5K-9.0K-token prompts, not claims about first
 requests, decode rate, every repository, or every architecture. Qwen3.5 9B
 could not safely trim its hybrid recurrent cache and produced no valid speedup,
