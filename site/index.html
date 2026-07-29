@@ -1,0 +1,472 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta
+      name="description"
+      content="MachBoost is a native Apple Silicon app and local inference server for resident MLX models, repository-aware assistants, and repeated-context acceleration."
+    >
+    <meta name="theme-color" content="#111713">
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="MachBoost — Faster local inference on Apple Silicon">
+    <meta
+      property="og:description"
+      content="Run local text, vision, and repository-aware AI from one native macOS app and compatible API."
+    >
+    <meta
+      property="og:image"
+      content="https://vistritpandey.github.io/machboost/assets/machboost-app.webp"
+    >
+    <meta property="og:url" content="https://vistritpandey.github.io/machboost/">
+    <meta name="twitter:card" content="summary_large_image">
+    <title>MachBoost — Faster local inference on Apple Silicon</title>
+    <link rel="icon" href="assets/machboost-icon.webp">
+    <link rel="apple-touch-icon" href="assets/machboost-icon.webp">
+    <link rel="stylesheet" href="styles.css">
+    <script
+      defer
+      src="https://cdn.jsdelivr.net/npm/lucide@0.468.0/dist/umd/lucide.min.js"
+    ></script>
+    <script defer src="app.js"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <header class="site-header">
+      <nav class="nav shell" aria-label="Main navigation">
+        <a class="brand" href="#top" aria-label="MachBoost home">
+          <img src="assets/machboost-icon.webp" alt="" width="36" height="36">
+          <span>MachBoost</span>
+        </a>
+        <div class="nav-links">
+          <a href="#product">Product</a>
+          <a href="#benchmarks">Benchmarks</a>
+          <a href="#install">Install</a>
+          <a
+            class="nav-github"
+            href="https://github.com/VistritPandey/machboost"
+            target="_blank"
+            rel="noreferrer"
+          >
+            <i data-lucide="github" aria-hidden="true"></i>
+            <span>GitHub</span>
+          </a>
+        </div>
+        <button class="mobile-menu" type="button" aria-expanded="false" aria-controls="mobile-nav">
+          <i data-lucide="menu" aria-hidden="true"></i>
+          <span class="sr-only">Open navigation</span>
+        </button>
+      </nav>
+      <nav id="mobile-nav" class="mobile-nav shell" aria-label="Mobile navigation" hidden>
+        <a href="#product">Product</a>
+        <a href="#benchmarks">Benchmarks</a>
+        <a href="#install">Install</a>
+        <a href="https://github.com/VistritPandey/machboost">GitHub</a>
+      </nav>
+    </header>
+
+    <main id="main">
+      <section id="top" class="hero" aria-labelledby="hero-title">
+        <div class="hero-backdrop" aria-hidden="true"></div>
+        <div class="hero-content shell">
+          <p class="eyebrow"><span></span> Local-first · Apple Silicon · Open source</p>
+          <h1 id="hero-title">MachBoost</h1>
+          <p class="hero-copy">
+            Resident local models, repository-aware answers, and exact repeated-context
+            acceleration in one native macOS app.
+          </p>
+          <div class="hero-actions">
+            <a
+              id="download-button"
+              class="button button-primary"
+              href="https://github.com/VistritPandey/machboost/releases/latest"
+            >
+              <i data-lucide="download" aria-hidden="true"></i>
+              <span>Download for macOS</span>
+            </a>
+            <a
+              class="button button-secondary"
+              href="https://github.com/VistritPandey/machboost"
+              target="_blank"
+              rel="noreferrer"
+            >
+              <i data-lucide="github" aria-hidden="true"></i>
+              <span>View source</span>
+            </a>
+          </div>
+          <p id="release-status" class="release-status" aria-live="polite">
+            Unsigned community preview · arm64 · macOS 14+
+          </p>
+        </div>
+      </section>
+
+      <section class="signal-band" aria-label="MachBoost benchmark highlights">
+        <div class="shell signal-grid">
+          <div>
+            <strong>3.23×</strong>
+            <span>7B repository questions</span>
+          </div>
+          <div>
+            <strong>3.02×</strong>
+            <span>3B repository workload</span>
+          </div>
+          <div>
+            <strong>13.51×</strong>
+            <span>repeated-image median</span>
+          </div>
+          <div>
+            <strong>Exact</strong>
+            <span>tokens in repository runs</span>
+          </div>
+        </div>
+      </section>
+
+      <section id="product" class="product-section section">
+        <div class="shell">
+          <div class="section-heading">
+            <p class="kicker">Native control surface</p>
+            <h2>Your Mac becomes the inference server.</h2>
+            <p>
+              Chat locally, keep models resident, attach persistent context, index a
+              codebase, or serve the same runtime through familiar APIs.
+            </p>
+          </div>
+          <figure class="app-preview">
+            <img
+              src="assets/machboost-app.webp"
+              alt="MachBoost native macOS app showing a Qwen vision model, repository selector, persistent text and image context, and chat composer."
+              width="1162"
+              height="768"
+              loading="lazy"
+            >
+            <figcaption>
+              Native SwiftUI app with resident MLX text and vision models. No separate
+              Python installation is required in the packaged build.
+            </figcaption>
+          </figure>
+          <div class="feature-list" aria-label="Product capabilities">
+            <article>
+              <i data-lucide="folder-git-2" aria-hidden="true"></i>
+              <h3>Repository intelligence</h3>
+              <p>
+                Index tracked source once, retrieve focused evidence per question, and
+                keep the reusable repository prefix stable.
+              </p>
+            </article>
+            <article>
+              <i data-lucide="server" aria-hidden="true"></i>
+              <h3>Resident serving</h3>
+              <p>
+                Keep multiple models warm behind one bounded, concurrent gateway with
+                cancellation and resource metrics.
+              </p>
+            </article>
+            <article>
+              <i data-lucide="scan-eye" aria-hidden="true"></i>
+              <h3>Text and vision</h3>
+              <p>
+                Run MLX and MLX-VLM models with persistent files and images that remain
+                attached until you remove them.
+              </p>
+            </article>
+            <article>
+              <i data-lucide="braces" aria-hidden="true"></i>
+              <h3>Drop-in APIs</h3>
+              <p>
+                Connect existing tools through OpenAI- and Ollama-compatible endpoints
+                or use the Python client directly.
+              </p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section id="benchmarks" class="benchmarks-section section">
+        <div class="shell">
+          <div class="section-heading section-heading-light">
+            <p class="kicker">Measured, not hand-waved</p>
+            <h2>Speed where context repeats.</h2>
+            <p>
+              MachBoost accelerates exact reusable prefixes. It does not claim every
+              first request or every unique prompt becomes faster.
+            </p>
+          </div>
+
+          <div class="benchmark-table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th scope="col">Workload</th>
+                  <th scope="col">Model</th>
+                  <th scope="col">Native</th>
+                  <th scope="col">MachBoost</th>
+                  <th scope="col">Median</th>
+                  <th scope="col">Validation</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Repository context</td>
+                  <td>Qwen2.5 3B 4-bit</td>
+                  <td>3.144s</td>
+                  <td>1.024s</td>
+                  <td class="speedup">3.02×</td>
+                  <td>6/6 exact tokens</td>
+                </tr>
+                <tr>
+                  <td>Repository context</td>
+                  <td>Qwen2.5 7B 4-bit</td>
+                  <td>6.587s</td>
+                  <td>1.998s</td>
+                  <td class="speedup">3.28×</td>
+                  <td>6/6 exact tokens</td>
+                </tr>
+                <tr>
+                  <td>Different repo questions</td>
+                  <td>Qwen2.5 7B 4-bit</td>
+                  <td colspan="2">Five distinct questions</td>
+                  <td class="speedup">3.23×</td>
+                  <td>Exact tokens</td>
+                </tr>
+                <tr>
+                  <td>Repeated-image matrix</td>
+                  <td>Six Qwen models</td>
+                  <td colspan="2">72 paired requests</td>
+                  <td class="speedup">13.51×</td>
+                  <td>100% expected answers</td>
+                </tr>
+                <tr class="control-row">
+                  <td>First-view control</td>
+                  <td>Qwen3-VL</td>
+                  <td colspan="2">No reusable prefix</td>
+                  <td>0.99×</td>
+                  <td>No acceleration claim</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="benchmark-notes">
+            <p>
+              Repository results use the same loaded MLX model, weights, prompts, and
+              tokenization. Median prompt length was 10,405 tokens; 7,901 tokens were
+              reused. The visual figure is the median of six model-level paired medians.
+            </p>
+            <div class="artifact-links">
+              <a
+                href="https://github.com/VistritPandey/machboost/blob/main/results/workspace_prefix_qwen25_7b_20260729.json"
+              >
+                7B artifact <i data-lucide="arrow-up-right" aria-hidden="true"></i>
+              </a>
+              <a
+                href="https://github.com/VistritPandey/machboost/blob/main/results/vision_cache_qwen_matrix_20260714.json"
+              >
+                Vision matrix <i data-lucide="arrow-up-right" aria-hidden="true"></i>
+              </a>
+              <a href="https://github.com/VistritPandey/machboost/tree/main/paper">
+                Research paper <i data-lucide="arrow-up-right" aria-hidden="true"></i>
+              </a>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="workflow-section section">
+        <div class="shell workflow-layout">
+          <div class="section-heading">
+            <p class="kicker">How it works</p>
+            <h2>Reuse the expensive part safely.</h2>
+          </div>
+          <ol class="workflow">
+            <li>
+              <span>01</span>
+              <div>
+                <h3>Load once</h3>
+                <p>The resident server keeps selected MLX models in unified memory.</p>
+              </div>
+            </li>
+            <li>
+              <span>02</span>
+              <div>
+                <h3>Build stable context</h3>
+                <p>
+                  Repository maps, documents, images, and chat prefixes are organized
+                  so exact reusable regions remain identifiable.
+                </p>
+              </div>
+            </li>
+            <li>
+              <span>03</span>
+              <div>
+                <h3>Restore model state</h3>
+                <p>
+                  Compatible MLX caches skip repeated prefill work while preserving the
+                  same target-model generation path.
+                </p>
+              </div>
+            </li>
+            <li>
+              <span>04</span>
+              <div>
+                <h3>Retrieve what changed</h3>
+                <p>
+                  Focused evidence and the new question are evaluated normally, with
+                  citations returned to the client.
+                </p>
+              </div>
+            </li>
+          </ol>
+        </div>
+      </section>
+
+      <section id="install" class="install-section section">
+        <div class="shell">
+          <div class="section-heading">
+            <p class="kicker">Community preview</p>
+            <h2>Download. Drag. Approve once.</h2>
+            <p>
+              The preview DMG is free and ad-hoc signed. Apple has not notarized it, so
+              macOS asks you to approve the app manually on first launch.
+            </p>
+          </div>
+
+          <div class="install-grid">
+            <ol class="install-steps">
+              <li>
+                <span>1</span>
+                <div>
+                  <h3>Download the DMG</h3>
+                  <p>Apple Silicon and macOS 14 or newer are required.</p>
+                </div>
+              </li>
+              <li>
+                <span>2</span>
+                <div>
+                  <h3>Drag MachBoost to Applications</h3>
+                  <p>The bundled runtime means no Homebrew or Python setup.</p>
+                </div>
+              </li>
+              <li>
+                <span>3</span>
+                <div>
+                  <h3>Attempt the first launch</h3>
+                  <p>macOS will block the unidentified community build initially.</p>
+                </div>
+              </li>
+              <li>
+                <span>4</span>
+                <div>
+                  <h3>Choose Open Anyway</h3>
+                  <p>
+                    Go to System Settings → Privacy &amp; Security, then approve
+                    MachBoost. Future launches open normally.
+                  </p>
+                </div>
+              </li>
+            </ol>
+
+            <aside class="download-panel" aria-labelledby="download-title">
+              <img src="assets/machboost-icon.webp" alt="" width="80" height="80">
+              <p class="download-label">Latest community build</p>
+              <h3 id="download-title">MachBoost for macOS</h3>
+              <dl>
+                <div>
+                  <dt>Version</dt>
+                  <dd id="release-version">Latest</dd>
+                </div>
+                <div>
+                  <dt>Architecture</dt>
+                  <dd>Apple Silicon</dd>
+                </div>
+                <div>
+                  <dt>Package</dt>
+                  <dd id="release-size">DMG</dd>
+                </div>
+              </dl>
+              <a
+                id="install-download-button"
+                class="button button-primary button-wide"
+                href="https://github.com/VistritPandey/machboost/releases/latest"
+              >
+                <i data-lucide="download" aria-hidden="true"></i>
+                <span>Download DMG</span>
+              </a>
+              <a
+                class="checksum-link"
+                href="https://github.com/VistritPandey/machboost/releases/latest"
+              >
+                View release and checksum
+              </a>
+            </aside>
+          </div>
+        </div>
+      </section>
+
+      <section class="developer-section section">
+        <div class="shell developer-layout">
+          <div class="section-heading section-heading-light">
+            <p class="kicker">Use your existing tools</p>
+            <h2>One local endpoint.</h2>
+            <p>
+              The app and CLI speak through the same daemon. Point OpenAI-compatible
+              clients at MachBoost or call the Ollama-style routes directly.
+            </p>
+          </div>
+          <div class="code-samples">
+            <div class="code-block">
+              <div class="code-header">
+                <span>OpenAI Python</span>
+                <button type="button" class="copy-button" data-copy-target="openai-code">
+                  <i data-lucide="copy" aria-hidden="true"></i>
+                  <span class="sr-only">Copy OpenAI example</span>
+                </button>
+              </div>
+              <pre id="openai-code"><code>from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://127.0.0.1:11435/v1",
+    api_key="machboost"
+)
+
+response = client.chat.completions.create(
+    model="qwen2.5:3b",
+    messages=[{"role": "user", "content": "Explain this repo"}]
+)</code></pre>
+            </div>
+            <div class="code-block">
+              <div class="code-header">
+                <span>Terminal</span>
+                <button type="button" class="copy-button" data-copy-target="terminal-code">
+                  <i data-lucide="copy" aria-hidden="true"></i>
+                  <span class="sr-only">Copy terminal example</span>
+                </button>
+              </div>
+              <pre id="terminal-code"><code>machboost serve
+machboost pull qwen2.5:3b
+machboost run qwen2.5:3b</code></pre>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <div class="shell footer-layout">
+        <div class="footer-brand">
+          <img src="assets/machboost-icon.webp" alt="" width="40" height="40">
+          <div>
+            <strong>MachBoost</strong>
+            <span>Local inference, measured honestly.</span>
+          </div>
+        </div>
+        <div class="footer-links">
+          <a href="https://github.com/VistritPandey/machboost">GitHub</a>
+          <a href="https://github.com/VistritPandey/machboost/issues">Issues</a>
+          <a href="https://github.com/VistritPandey/machboost/blob/main/LICENSE">MIT License</a>
+        </div>
+        <p>Built by Vistrit Pandey.</p>
+      </div>
+    </footer>
+  </body>
+</html>
