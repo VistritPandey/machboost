@@ -153,6 +153,59 @@ class WorkspaceStoreTests(unittest.TestCase):
         self.assertIn("billing.py: capture_payment", auth_prefix)
         self.assertNotEqual(auth.hits[0].path, billing.hits[0].path)
 
+    def test_query_focuses_long_chunks_around_matching_lines(self) -> None:
+        lines = [
+            f"PADDING_{index} = '{'x' * 80}'"
+            for index in range(180)
+        ]
+        lines[100] = "def cancellation_handler(request_id):"
+        lines[101] = "    return cancel_request(request_id)"
+        (self.repo / "server.py").write_text(
+            "\n".join(lines) + "\n",
+            encoding="utf-8",
+        )
+        workspace = self.store.register(self.repo)
+        self.store.index(workspace.id)
+
+        result = self.store.query(workspace.id, "cancellation handler")
+        hit = result.hits[0]
+
+        self.assertEqual(hit.path, "server.py")
+        self.assertGreater(hit.start_line, 1)
+        self.assertLessEqual(len(hit.text), 1_600)
+        self.assertIn("cancellation_handler", hit.text)
+        self.assertIn(
+            f"server.py:{hit.start_line}-{hit.end_line}",
+            result.context,
+        )
+
+    def test_query_caps_dynamic_evidence_independently(self) -> None:
+        for index in range(12):
+            (self.repo / f"service_{index}.py").write_text(
+                "\n".join(
+                    item
+                    for line in range(80)
+                    for item in (
+                        f"def shared_needle_{index}_{line}():",
+                        f"    return 'shared needle value {line}'",
+                    )
+                ),
+                encoding="utf-8",
+            )
+        workspace = self.store.register(self.repo)
+        self.store.index(workspace.id)
+
+        result = self.store.query(
+            workspace.id,
+            "shared needle value",
+            top_k=12,
+            max_chars=48_000,
+        )
+        stable_prefix = result.context.split("\n\n## ", maxsplit=1)[0]
+
+        self.assertLessEqual(len(result.context) - len(stable_prefix), 8_000)
+        self.assertGreater(len(result.hits), 1)
+
     def test_metadata_schema_round_trips_as_json(self) -> None:
         (self.repo / "main.go").write_text(
             "package main\nfunc main() {}\n",
