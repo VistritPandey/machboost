@@ -38,7 +38,7 @@ Treat every workload as uncalibrated until it passes a same-model paired benchma
 |---|---|---|
 | Plain resident text chat | Native MLX decode through a local server; no drafting without context | usable, with measurable server/streaming overhead versus direct `mlx-lm` |
 | Concurrent text API serving | bounded FIFO admission, explicit overload responses, and isolated model replicas | usable; replicas consume additional memory and do not guarantee higher GPU throughput |
-| Repository workspace prefix reuse | same-snapshot Qwen2.5 3B and 7B audits reached 2.659x and 2.867x medians with 6/6 exact token pairs each | promising for later questions over a stable indexed repo; not a first-request, arbitrary-model, or decode-throughput claim |
+| Repository workspace prefix reuse | same-snapshot Qwen2.5 3B and 7B audits reached 3.021x and 3.282x medians with 6/6 exact token pairs each | promising for later questions over a stable indexed repo; not a first-request, arbitrary-model, or decode-throughput claim |
 | Context-backed MLX text | latest broad Llama 3.2 3B suite was 1.008x aggregate with 20/21 exact pairs; favorable controlled continuations can be materially faster | experimental; never generalize a fixture result beyond its workload |
 | Repeated unchanged image | 5.14x-17.44x model-level paired medians on one synthetic image and short extraction prompts | promising for repeated-image prefill; not a first-view or decode result |
 | New-image Qwen3-VL compression | 1.70x median on ten TextVQA rows, with 70% normalized output equality and equal 8/10 aggregate task scores | approximate, opt-in, and not quality-equivalence evidence |
@@ -203,16 +203,16 @@ OpenAI-compatible requests can place `workspace_id`, `workspace_top_k`, and
 `workspace_max_chars` in a top-level `machboost` object.
 
 Workspace requests opt into a bounded MLX prompt-prefix cache and use workspace
-affinity. Plain MLX chat keeps native cache behavior. On one Apple Silicon run
-over the same 181-file snapshot, six alternating-order Qwen2.5 3B pairs reduced
-median wall time from `2.258s` to `0.853s` (`2.659x`), and Qwen2.5 7B reduced it
-from `4.785s` to `1.660s` (`2.867x`). All 12 pairs matched generated token IDs.
+affinity. Plain MLX chat keeps native cache behavior. On one Apple M5 Pro run
+over the same 183-file snapshot, six alternating-order Qwen2.5 3B pairs reduced
+median wall time from `3.144s` to `1.024s` (`3.021x`), and Qwen2.5 7B reduced it
+from `6.587s` to `1.998s` (`3.282x`). All 12 pairs matched generated token IDs.
 Five rows per model used different questions and retrieved evidence; the
 remaining row repeated the priming question. Across only those five different
-questions, the median paired speedup was `2.378x` on 3B and `2.577x` on 7B;
-the repeated-prime row reached `10.145x` and `12.474x`, respectively. These are
+questions, the median paired speedup was `2.971x` on 3B and `3.232x` on 7B;
+the repeated-prime row reached `13.055x` and `16.637x`, respectively. These are
 short, warm,
-prefill-heavy requests with 7.5K-9.0K-token prompts, not claims about first
+prefill-heavy requests with 10.2K-10.6K-token prompts, not claims about first
 requests, decode rate, every repository, or every architecture. Qwen3.5 9B
 could not safely trim its hybrid recurrent cache and produced no valid speedup,
 so that path remains native.
