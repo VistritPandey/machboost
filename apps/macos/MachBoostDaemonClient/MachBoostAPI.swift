@@ -21,6 +21,10 @@ public protocol MachBoostAPIProtocol: AnyObject, Sendable {
     func catalog() async throws -> [CatalogModel]
     func metrics() async throws -> ServerMetrics
     func models() async throws -> [ModelInstance]
+    func workspaces() async throws -> [WorkspaceSummary]
+    func registerWorkspace(path: String, name: String?) async throws -> WorkspaceSummary
+    func reindexWorkspace(id: String) async throws -> WorkspaceSummary
+    func removeWorkspace(id: String) async throws
     func preflight(model: String) async throws -> ModelPreflightResponse.Preflight
     func stop(model: String?) async throws
     func cancel(requestID: String) async throws -> Bool
@@ -31,6 +35,31 @@ public protocol MachBoostAPIProtocol: AnyObject, Sendable {
 public extension MachBoostAPIProtocol {
     func stop() async throws {
         try await stop(model: nil)
+    }
+
+    func workspaces() async throws -> [WorkspaceSummary] {
+        []
+    }
+
+    func registerWorkspace(path: String, name: String?) async throws -> WorkspaceSummary {
+        throw MachBoostAPIError.server(
+            status: 501,
+            message: "This client does not support repository workspaces."
+        )
+    }
+
+    func reindexWorkspace(id: String) async throws -> WorkspaceSummary {
+        throw MachBoostAPIError.server(
+            status: 501,
+            message: "This client does not support repository workspaces."
+        )
+    }
+
+    func removeWorkspace(id: String) async throws {
+        throw MachBoostAPIError.server(
+            status: 501,
+            message: "This client does not support repository workspaces."
+        )
     }
 }
 
@@ -81,6 +110,45 @@ public final class MachBoostAPI: MachBoostAPIProtocol, @unchecked Sendable {
     public func models() async throws -> [ModelInstance] {
         let response: ModelsResponse = try await get("/api/ps")
         return response.models
+    }
+
+    public func workspaces() async throws -> [WorkspaceSummary] {
+        let response: WorkspacesResponse = try await get("/api/workspaces")
+        return response.workspaces
+    }
+
+    public func registerWorkspace(
+        path: String,
+        name: String? = nil
+    ) async throws -> WorkspaceSummary {
+        var payload: [String: Any] = ["path": path, "index": true]
+        if let name, !name.isEmpty {
+            payload["name"] = name
+        }
+        let response: WorkspaceIndexResponse = try await post(
+            "/api/workspaces",
+            jsonObject: payload
+        )
+        return response.workspace
+    }
+
+    public func reindexWorkspace(id: String) async throws -> WorkspaceSummary {
+        let response: WorkspaceIndexResponse = try await post(
+            "/api/workspaces/index",
+            jsonObject: ["workspace_id": id]
+        )
+        return response.workspace
+    }
+
+    public func removeWorkspace(id: String) async throws {
+        struct RemoveResponse: Decodable { let removed: Bool }
+        let response: RemoveResponse = try await post(
+            "/api/workspaces/delete",
+            jsonObject: ["workspace_id": id]
+        )
+        guard response.removed else {
+            throw MachBoostAPIError.invalidResponse
+        }
     }
 
     public func preflight(model: String) async throws -> ModelPreflightResponse.Preflight {
