@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
+import tempfile
 import threading
 import time
 import unittest
@@ -17,6 +19,7 @@ from machboost.server import (
     RuntimeManager,
     parse_keep_alive,
 )
+from machboost.workspace import WorkspaceStore
 
 
 @dataclass
@@ -475,9 +478,17 @@ class RuntimeManagerTests(unittest.TestCase):
 
 class HTTPServerTests(unittest.TestCase):
     def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.workspace_store = WorkspaceStore(
+            Path(self.temporary.name) / "workspaces"
+        )
         self.loaded = []
         manager = RuntimeManager(loader=lambda config: self._load(config))
-        self.server = MachBoostHTTPServer(("127.0.0.1", 0), manager=manager)
+        self.server = MachBoostHTTPServer(
+            ("127.0.0.1", 0),
+            manager=manager,
+            workspace_store=self.workspace_store,
+        )
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
         host, port = self.server.server_address
@@ -487,6 +498,7 @@ class HTTPServerTests(unittest.TestCase):
         self.server.shutdown()
         self.server.server_close()
         self.thread.join(timeout=2.0)
+        self.temporary.cleanup()
 
     def _load(self, config):
         if config.model.endswith("failing"):
@@ -534,6 +546,137 @@ class HTTPServerTests(unittest.TestCase):
         self.assertTrue(any(item["name"] == "llama3.2:3b" for item in catalog["models"]))
         self.assertEqual(metrics["schema"], "machboost.metrics.v1")
         self.assertIn("peak_resident_memory_bytes", metrics["process"])
+
+    def test_workspace_lifecycle_endpoints(self):
+        repository = Path(self.temporary.name) / "repository"
+        repository.mkdir()
+        source = repository / "payments.py"
+        source.write_text(
+            "def capture_payment(invoice_id):\n"
+            "    return gateway.capture(invoice_id)\n",
+            encoding="utf-8",
+        )
+
+        status, _, body = self.request(
+            "/api/workspaces",
+            {"path": str(repository), "name": "Payments"},
+        )
+        created = json.loads(body)
+        workspace_id = created["workspace"]["id"]
+        self.assertEqual(status, 201)
+        self.assertEqual(created["schema"], "machboost.workspace-index.v1")
+        self.assertEqual(created["workspace"]["file_count"], 1)
+
+        _, _, body = self.request("/api/workspaces")
+        listed = json.loads(body)
+        self.assertEqual(listed["schema"], "machboost.workspaces.v1")
+        self.assertEqual(listed["workspaces"][0]["id"], workspace_id)
+
+        _, _, body = self.request(
+            "/api/workspaces/query",
+            {
+                "workspace_id": workspace_id,
+                "query": "Where is capture_payment implemented?",
+            },
+        )
+        query = json.loads(body)
+        self.assertEqual(query["schema"], "machboost.workspace-query.v1")
+        self.assertEqual(query["hits"][0]["path"], "payments.py")
+
+        source.write_text(
+            "def settle_invoice(invoice_id):\n"
+            "    return gateway.settle(invoice_id)\n",
+            encoding="utf-8",
+        )
+        _, _, body = self.request(
+            "/api/workspaces/index",
+            {"workspace_id": workspace_id},
+        )
+        reindexed = json.loads(body)
+        self.assertEqual(reindexed["indexed_files"], 1)
+
+        _, _, body = self.request(
+            "/api/workspaces/delete",
+            {"workspace_id": workspace_id},
+        )
+        self.assertTrue(json.loads(body)["removed"])
+        self.assertTrue(source.exists())
+
+    def test_workspace_chat_injects_retrieved_evidence_and_returns_citations(self):
+        repository = Path(self.temporary.name) / "repository"
+        repository.mkdir()
+        (repository / "auth.py").write_text(
+            "def authenticate_user(token):\n"
+            "    payload = decode_token(token)\n"
+            "    return lookup_user(payload['sub'])\n",
+            encoding="utf-8",
+        )
+        workspace = self.workspace_store.register(repository)
+        self.workspace_store.index(workspace.id)
+
+        _, _, body = self.request(
+            "/api/chat",
+            {
+                "model": "mlx-community/example",
+                "workspace_id": workspace.id,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "Where is authenticate_user handled?",
+                    }
+                ],
+                "stream": False,
+            },
+        )
+
+        response = json.loads(body)
+        accelerator = self.loaded[0][1]
+        messages, _, draft_context = accelerator.chat_calls[0]
+        evidence = next(
+            message["content"]
+            for message in messages
+            if message["role"] == "system"
+        )
+        self.assertIn("auth.py:1-3", evidence)
+        self.assertIn("authenticate_user", evidence)
+        self.assertTrue(
+            any("authenticate_user" in item for item in draft_context)
+        )
+        workspace_result = response["machboost"]["workspace"]
+        self.assertEqual(workspace_result["id"], workspace.id)
+        self.assertEqual(workspace_result["retrieved_chunks"], 1)
+        self.assertEqual(workspace_result["citations"][0]["path"], "auth.py")
+
+    def test_openai_workspace_extension_is_backward_compatible(self):
+        repository = Path(self.temporary.name) / "repository"
+        repository.mkdir()
+        (repository / "jobs.go").write_text(
+            "package jobs\nfunc ScheduleCleanup() {}\n",
+            encoding="utf-8",
+        )
+        workspace = self.workspace_store.register(repository)
+        self.workspace_store.index(workspace.id)
+
+        _, _, body = self.request(
+            "/v1/chat/completions",
+            {
+                "model": "mlx-community/example",
+                "messages": [
+                    {"role": "user", "content": "Where is cleanup scheduled?"}
+                ],
+                "machboost": {
+                    "workspace_id": workspace.id,
+                    "workspace_top_k": 4,
+                },
+            },
+        )
+
+        response = json.loads(body)
+        self.assertEqual(response["object"], "chat.completion")
+        self.assertEqual(
+            response["machboost"]["workspace"]["citations"][0]["path"],
+            "jobs.go",
+        )
 
     def test_ollama_chat_supports_non_streaming_and_reuses_model(self):
         payload = {
