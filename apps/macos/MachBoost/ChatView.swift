@@ -165,6 +165,7 @@ struct ChatView: View {
             }
         }
         .menuStyle(.borderlessButton)
+        .accessibilityIdentifier("repository-picker")
         .fixedSize(horizontal: true, vertical: false)
         .help(workspaceHelp)
     }
