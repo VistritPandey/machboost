@@ -21,6 +21,7 @@ concurrency:
 jobs:
   release:
     name: Sign, notarize, and publish
+    if: github.event_name == 'workflow_dispatch' || vars.MACHBOOST_SIGNED_RELEASES == 'true'
     runs-on: macos-15
     timeout-minutes: 120
     steps:
