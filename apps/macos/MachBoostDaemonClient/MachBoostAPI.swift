@@ -48,6 +48,11 @@ public protocol MachBoostAPIProtocol: AnyObject, Sendable {
         model: String?
     ) async throws -> TraceEvaluation
     func preflight(model: String) async throws -> ModelPreflightResponse.Preflight
+    func load(
+        model: String,
+        keepAlive: String,
+        warmup: Bool
+    ) async throws -> ModelLoadResponse
     func stop(model: String?) async throws
     func cancel(requestID: String) async throws -> Bool
     func streamChat(_ request: ChatRequest) -> AsyncThrowingStream<ChatEvent, Error>
@@ -298,6 +303,22 @@ public final class MachBoostAPI: MachBoostAPIProtocol, @unchecked Sendable {
             jsonObject: payload
         )
         return response.preflight
+    }
+
+    public func load(
+        model: String,
+        keepAlive: String = "forever",
+        warmup: Bool = true
+    ) async throws -> ModelLoadResponse {
+        try await post(
+            "/api/load",
+            jsonObject: [
+                "model": model,
+                "keep_alive": keepAlive,
+                "warmup": warmup,
+                "options": ["backend": "auto"],
+            ]
+        )
     }
 
     public func stop(model: String? = nil) async throws {
