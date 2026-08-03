@@ -223,6 +223,14 @@ struct ChatView: View {
                         .accessibilityIdentifier("chat-scroll-bottom")
                 }
                 .padding(.vertical, 10)
+                .background {
+                    GeometryReader { geometry in
+                        Color.clear.preference(
+                            key: ChatContentHeightKey.self,
+                            value: geometry.size.height
+                        )
+                    }
+                }
             }
             .defaultScrollAnchor(.bottom)
             .onAppear {
@@ -242,6 +250,9 @@ struct ChatView: View {
                     proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
                 }
             )
+            .onPreferenceChange(ChatContentHeightKey.self) { _ in
+                proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
+            }
         }
     }
 
@@ -575,6 +586,14 @@ struct ChatView: View {
         AttachmentStore.remove(attachment)
         modelContext.delete(attachment)
         try? modelContext.save()
+    }
+}
+
+private struct ChatContentHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
     }
 }
 
