@@ -21,6 +21,8 @@ final class AppState {
     private(set) var evaluations: [TraceEvaluation] = []
     private(set) var lastCreatedTeamToken: String?
     private(set) var downloads: [String: PullEvent] = [:]
+    private(set) var loadingModels: Set<String> = []
+    private(set) var lastModelLoad: ModelLoadResponse?
     private(set) var indexingWorkspaces: Set<String> = []
     private(set) var isRefreshing = false
     var showOnboarding = false
@@ -272,6 +274,29 @@ final class AppState {
         _ = try? await api.cancel(requestID: requestID)
     }
 
+    func load(
+        model: String,
+        keepAlive: String = "forever",
+        warmup: Bool = true
+    ) async {
+        guard serverIsRunning else {
+            presentedError = AppStateError.serverNotRunning.localizedDescription
+            return
+        }
+        loadingModels.insert(model)
+        defer { loadingModels.remove(model) }
+        do {
+            lastModelLoad = try await api.load(
+                model: model,
+                keepAlive: keepAlive,
+                warmup: warmup
+            )
+            await refreshMetrics()
+        } catch {
+            presentedError = error.localizedDescription
+        }
+    }
+
     func stop(model: String) async {
         do {
             try await api.stop(model: model)
@@ -373,10 +398,13 @@ final class AppState {
 }
 
 enum AppStateError: LocalizedError {
+    case serverNotRunning
     case unsupportedModel(String)
 
     var errorDescription: String? {
         switch self {
+        case .serverNotRunning:
+            "Start the MachBoost server before loading a model."
         case let .unsupportedModel(reason):
             "This model is not compatible with the bundled MLX runtime: \(reason)"
         }
