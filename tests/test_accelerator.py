@@ -80,7 +80,11 @@ class FakeChatTokenizer:
     all_special_ids = [0]
     unk_token_id = -1
 
+    def __init__(self):
+        self.last_kwargs = {}
+
     def apply_chat_template(self, messages, tokenize=False, add_generation_prompt=True, **kwargs):
+        self.last_kwargs = kwargs
         rendered = "".join(f"<{message['role']}>{message['content']}</{message['role']}>" for message in messages)
         if add_generation_prompt:
             rendered += "<assistant>"
@@ -264,6 +268,32 @@ class AcceleratorTests(unittest.TestCase):
         self.assertEqual(text, "hello there")
         self.assertEqual("".join(chunks), "hello there")
         self.assertGreater(stats.accepted_draft_tokens, 0)
+
+    def test_generate_chat_passes_tool_definitions_to_native_template(self):
+        completion = '<tool_call>{"name":"read_file","arguments":{"path":"a.py"}}</tool_call>'
+        rendered_prompt = "<user>inspect a.py</user><assistant>"
+        service = ScriptedService(rendered_prompt, completion)
+        tokenizer = FakeChatTokenizer()
+        service.tokenizer = tokenizer
+        accelerator = Accelerator(service, context_texts=[rendered_prompt + completion])
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "read_file",
+                    "parameters": {"type": "object"},
+                },
+            }
+        ]
+
+        text, _ = accelerator.generate_chat(
+            [{"role": "user", "content": "inspect a.py"}],
+            max_tokens=len(completion),
+            tools=tools,
+        )
+
+        self.assertIn("read_file", text)
+        self.assertEqual(tokenizer.last_kwargs["tools"], tools)
 
     def test_benchmark_uses_accelerator_context(self):
         prompt = "Complete: "
