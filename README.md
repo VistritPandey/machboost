@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Website](https://img.shields.io/badge/Website-MachBoost-22c55e)](https://vistritpandey.github.io/machboost/)
 
-MachBoost is an alpha-stage, local-first inference server and Python package for MLX, MLX-VLM, and Hugging Face models. It offers an Ollama-like model workflow, keeps models resident between requests, and streams text and visual chat. Optional acceleration paths target reusable local text, repeated image inputs, and selected Qwen3-VL visual-prefill workloads.
+MachBoost is an alpha-stage, local-first inference server, team gateway, native macOS app, and Python package for MLX, MLX-VLM, and Hugging Face models. It offers an Ollama-like model workflow, keeps models resident between requests, and streams text and visual chat. Team Mode adds scoped employee keys, fair admission, private traces, and local evaluations. Optional acceleration paths target reusable local text, repeated image inputs, and selected Qwen3-VL visual-prefill workloads.
 
 The paths have different contracts. Plain chat delegates generation to the selected backend and mainly provides residency and API compatibility. Text drafting proposes tokens from caller-supplied context and verifies them with the target model, but the cache-enabled MLX path remains experimental because a recent Llama 3.2 audit found one token-sequence mismatch in 21 pairs. Repeated-image acceleration reuses process-local visual work for unchanged image bytes. First-view Qwen3-VL compression is explicitly approximate and can change answers.
 
@@ -38,7 +38,8 @@ Treat every workload as uncalibrated until it passes a same-model paired benchma
 | Path | Current evidence | Product status |
 |---|---|---|
 | Plain resident text chat | Native MLX decode through a local server; no drafting without context | usable, with measurable server/streaming overhead versus direct `mlx-lm` |
-| Concurrent text API serving | bounded FIFO admission, explicit overload responses, and isolated model replicas | usable; replicas consume additional memory and do not guarantee higher GPU throughput |
+| Concurrent text API serving | bounded tenant-fair admission, explicit overload responses, per-key limits, and isolated model replicas | usable; replicas consume additional memory and do not guarantee higher GPU throughput |
+| Team gateway | hashed scoped keys, model allowlists, fair queueing, configurable local traces, and evaluations | usable on a trusted private network; MachBoost does not terminate TLS |
 | Repository workspace prefix reuse | same-snapshot Qwen2.5 3B and 7B audits reached 3.021x and 3.282x medians with 6/6 exact token pairs each | promising for later questions over a stable indexed repo; not a first-request, arbitrary-model, or decode-throughput claim |
 | Context-backed MLX text | latest broad Llama 3.2 3B suite was 1.008x aggregate with 20/21 exact pairs; favorable controlled continuations can be materially faster | experimental; never generalize a fixture result beyond its workload |
 | Repeated unchanged image | 5.14x-17.44x model-level paired medians on one synthetic image and short extraction prompts | promising for repeated-image prefill; not a first-view or decode result |
@@ -93,7 +94,7 @@ python -m machboost self-test --json
 The repository also contains a SwiftUI app for Apple Silicon Macs running
 macOS 14 or newer. It provides streaming chat, local conversation history,
 repository workspaces, text/code/folder/image attachments, model downloads, resident-model controls,
-server metrics, a developer API view, and a menu-bar controller. Chats and
+server metrics, employee-key management, trace/evaluation views, a developer API view, and a menu-bar controller. Chats and
 imported attachments remain local, model downloads always require confirmation,
 and closing the window leaves the selected models available until they expire,
 are unloaded, or MachBoost is quit.
@@ -281,7 +282,7 @@ curl -H "Authorization: Bearer $MACHBOOST_API_TOKEN" \
   http://127.0.0.1:11435/api/metrics
 ```
 
-Each text-model replica owns an independent accelerator and mutable generation cache. Requests are admitted through a bounded FIFO queue, then routed to an available replica. When every replica is busy and the queue is full, MachBoost returns HTTP `503` with `{"code":"queue_full"}` before starting a streaming response. Per-request queue wait and replica selection are returned under `machboost.scheduler`; aggregate active, queued, rejected, timed-out, and per-worker counts are available from `/api/ps` and `machboost ps --json`.
+Each text-model replica owns an independent accelerator and mutable generation cache. Requests are admitted through a bounded queue that rotates between authenticated tenant keys, then routed to an available replica. This prevents one employee's queued burst from blocking every other employee while preserving FIFO behavior for ordinary local clients. When every replica is busy and the queue is full, MachBoost returns HTTP `503` with `{"code":"queue_full"}` before starting a streaming response. Per-request queue wait and replica selection are returned under `machboost.scheduler`; aggregate active, queued, rejected, timed-out, per-tenant, and per-worker counts are available from `/api/ps` and `machboost ps --json`.
 
 Use `affinity_key` for best-effort routing of a user, document, or session to the same available replica:
 
@@ -321,6 +322,61 @@ Discovery and control clients can use `GET /api/catalog`, `GET /api/metrics`,
 `GET /api/workspaces`, and `POST /api/cancel`. Chat, generation, and pull requests accept an optional
 `request_id`, which is echoed in streaming events. `/api/pull` supports NDJSON
 progress and cancellation while retaining its non-streaming response contract.
+
+### Team Gateway
+
+One Apple Silicon Mac can serve several employees through their existing coding
+agents without sharing the administrator credential:
+
+```sh
+export MACHBOOST_API_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+machboost serve \
+  --team \
+  --host 0.0.0.0 \
+  --replicas 2 \
+  --max-queue 64
+```
+
+Create employee keys from the native app's **Server → Team** view or the Python
+client. Each key can limit scopes, allowed models, concurrent requests, and
+requests per minute. Plaintext employee tokens are returned only once; the local
+SQLite database stores their hashes.
+
+```python
+from machboost import MachBoostClient
+
+admin = MachBoostClient(api_token="ADMIN_TOKEN")
+created = admin.create_team_key(
+    "Alice - coding agent",
+    allowed_models=("qwen2.5-coder:7b",),
+    max_concurrent=2,
+    requests_per_minute=60,
+)
+print(created["token"])
+```
+
+Connect Cline, Kilo Code, or another OpenAI-compatible tool with:
+
+```sh
+export OPENAI_BASE_URL="http://TEAM-MAC:11435/v1"
+export OPENAI_API_KEY="mbk_employee_key"
+```
+
+OpenAI and Ollama chat routes accept function tool definitions and return
+multiple requested tool calls. MachBoost does not execute tools; the calling
+agent retains its normal permission boundary.
+
+Trace storage is opt-in by content level: `off`, `metadata`, `redacted`, or
+`full`. Metadata-only is the default, with seven-day retention and a 256 MiB
+payload cap. Selected traces can receive deterministic latency/throughput
+evaluations or an optional score from a resident local judge model. Redaction is
+best effort, not a DLP system.
+
+See the [Team Gateway guide](docs/TEAM_GATEWAY.md) and the
+[administration example](examples/python/team_gateway_admin.py) for scopes,
+API routes, private-network deployment, retention, and client setup. Team Mode
+does not change the acceleration contract: unique first prompts still run at
+native model speed unless they qualify for a documented reuse path.
 
 ### Visual Chat
 
