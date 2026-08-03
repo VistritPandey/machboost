@@ -723,6 +723,22 @@ public struct ModelLoadResponse: Decodable, Sendable {
     public let warmupPerformed: Bool
     public let instance: ModelInstance
 
+    public init(
+        status: String,
+        model: String,
+        loadDurationSeconds: Double,
+        warmupDurationSeconds: Double,
+        warmupPerformed: Bool,
+        instance: ModelInstance
+    ) {
+        self.status = status
+        self.model = model
+        self.loadDurationSeconds = loadDurationSeconds
+        self.warmupDurationSeconds = warmupDurationSeconds
+        self.warmupPerformed = warmupPerformed
+        self.instance = instance
+    }
+
     enum CodingKeys: String, CodingKey {
         case status, model, instance
         case loadDurationSeconds = "load_duration_seconds"
