@@ -92,14 +92,28 @@ final class MachBoostTests: XCTestCase {
     }
 
     @MainActor
-    func testUpdaterStaysDisabledWithoutPublicKey() {
+    func testCommunityUpdaterRejectsPlaceholderKeyAndOpensReleases() {
+        let releasesURL = URL(string: "https://example.com/releases/latest")!
+        var openedURL: URL?
         let updates = UpdateController(
             startingUpdater: true,
-            publicKey: "   "
+            publicKey: "$(SPARKLE_PUBLIC_ED_KEY)",
+            releasesURL: releasesURL,
+            openRelease: { openedURL = $0 }
         )
 
-        XCTAssertFalse(updates.isAvailable)
+        XCTAssertTrue(updates.isAvailable)
+        XCTAssertFalse(updates.supportsAutomaticUpdates)
         XCTAssertFalse(updates.automaticallyChecksForUpdates)
+        XCTAssertEqual(updates.actionTitle, "View latest release")
+        XCTAssertEqual(
+            updates.deliveryDescription,
+            "Community builds update through GitHub Releases"
+        )
+
+        updates.checkForUpdates()
+
+        XCTAssertEqual(openedURL, releasesURL)
     }
 
     @MainActor
