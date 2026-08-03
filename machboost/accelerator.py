@@ -192,13 +192,14 @@ class Accelerator:
 
     def generate_chat(
         self,
-        messages: Sequence[dict[str, str]],
+        messages: Sequence[dict[str, Any]],
         *,
         max_tokens: int = 128,
         context: Optional[Union[Iterable[str], str]] = None,
         on_text: Optional[Callable[[str], None]] = None,
+        tools: Optional[Sequence[dict[str, Any]]] = None,
     ):
-        prompt = render_chat_prompt(self.service, messages)
+        prompt = render_chat_prompt(self.service, messages, tools=tools)
         stop_tokens = service_stop_token_ids(self.service)
         streamer = ChatTextStreamer(on_text, CHAT_STOP_STRINGS) if on_text is not None else None
         result = self.generate_result(
@@ -488,29 +489,58 @@ CHAT_STOP_STRINGS = (
 )
 
 
-def render_chat_prompt(service, messages: Sequence[dict[str, str]]) -> str:
+def render_chat_prompt(
+    service,
+    messages: Sequence[dict[str, Any]],
+    *,
+    tools: Optional[Sequence[dict[str, Any]]] = None,
+) -> str:
     tokenizer = getattr(service, "tokenizer", None)
     apply_chat_template = getattr(tokenizer, "apply_chat_template", None)
     if callable(apply_chat_template):
-        try:
-            rendered = apply_chat_template(
-                list(messages),
-                tokenize=False,
-                add_generation_prompt=True,
-                enable_thinking=False,
-            )
-            if rendered:
-                return str(rendered)
-        except Exception:
-            pass
-    return fallback_chat_prompt(messages)
+        kwargs: dict[str, Any] = {
+            "tokenize": False,
+            "add_generation_prompt": True,
+            "enable_thinking": False,
+        }
+        if tools:
+            kwargs["tools"] = list(tools)
+        for optional_key in ("enable_thinking", "tools", None):
+            try:
+                rendered = apply_chat_template(list(messages), **kwargs)
+                if rendered:
+                    return str(rendered)
+            except TypeError:
+                if optional_key is not None:
+                    kwargs.pop(optional_key, None)
+            except Exception:
+                break
+    return fallback_chat_prompt(messages, tools=tools)
 
 
-def fallback_chat_prompt(messages: Sequence[dict[str, str]]) -> str:
+def fallback_chat_prompt(
+    messages: Sequence[dict[str, Any]],
+    *,
+    tools: Optional[Sequence[dict[str, Any]]] = None,
+) -> str:
     lines: list[str] = []
+    if tools:
+        import json
+
+        lines.append(
+            "System: Available tools are listed as JSON below. To call tools, emit one "
+            "or more <tool_call> objects with name and arguments, then stop."
+        )
+        lines.append(json.dumps(list(tools), separators=(",", ":"), ensure_ascii=True))
     for message in messages:
         role = message.get("role", "user").strip().capitalize()
         content = message.get("content", "")
+        if content is None:
+            content = ""
+        if message.get("tool_calls"):
+            import json
+
+            content = f"{content}\n{json.dumps(message['tool_calls'], separators=(',', ':'))}"
         lines.append(f"{role}: {content}")
     lines.append("Assistant:")
     return "\n".join(lines)
