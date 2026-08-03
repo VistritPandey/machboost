@@ -126,6 +126,41 @@ class ClientTests(unittest.TestCase):
             12_000,
         )
 
+    def test_client_exposes_team_key_and_evaluation_helpers(self):
+        with (
+            patch.object(
+                self.client,
+                "post",
+                side_effect=[
+                    {"token": "mbk_once", "key": {"id": "key-1"}},
+                    {"evaluation": {"id": "eval-1", "evaluator": "deterministic"}},
+                ],
+            ) as post,
+            patch.object(
+                self.client,
+                "get",
+                side_effect=[
+                    {"traces": [{"id": "trace-1"}]},
+                    {"evaluations": [{"id": "eval-old"}]},
+                ],
+            ) as get,
+        ):
+            created = self.client.create_team_key(
+                "Agent",
+                allowed_models=("llama3.2:3b",),
+                max_concurrent=3,
+            )
+            traces = self.client.traces(limit=25)
+            evaluations = self.client.evaluations(limit=10)
+            evaluation = self.client.evaluate_traces(["trace-1"])
+
+        self.assertEqual(created["token"], "mbk_once")
+        self.assertEqual(traces[0]["id"], "trace-1")
+        self.assertEqual(evaluations[0]["id"], "eval-old")
+        self.assertEqual(evaluation["id"], "eval-1")
+        self.assertEqual(post.call_args_list[0].args[1]["max_concurrent"], 3)
+        self.assertEqual(get.call_args_list[0].args[0], "/api/traces?limit=25")
+
     def test_client_forwards_workspace_chat_options(self):
         with patch.object(self.client, "post", return_value={"done": True}) as post:
             self.client.chat(
