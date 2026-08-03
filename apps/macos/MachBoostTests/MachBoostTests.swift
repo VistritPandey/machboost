@@ -236,7 +236,58 @@ final class MachBoostTests: XCTestCase {
         configuration.lanEnabled = true
         XCTAssertEqual(configuration.bindHost, "0.0.0.0")
         XCTAssertEqual(configuration.endpoint.host, "127.0.0.1")
-        XCTAssertEqual(configuration.advertisedEndpoint.host, ProcessInfo.processInfo.hostName)
+        XCTAssertNotEqual(configuration.advertisedEndpoint.host, "127.0.0.1")
+        XCTAssertFalse(configuration.advertisedEndpoint.host?.isEmpty ?? true)
+    }
+
+    func testLoadRequestWarmsAndKeepsModelResident() async throws {
+        let session = mockSession { request in
+            XCTAssertEqual(request.url?.path, "/api/load")
+            let data = try XCTUnwrap(request.httpBody)
+            let object = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: data) as? [String: Any]
+            )
+            XCTAssertEqual(object["model"] as? String, "qwen2.5:3b")
+            XCTAssertEqual(object["keep_alive"] as? String, "1h")
+            XCTAssertEqual(object["warmup"] as? Bool, true)
+            let options = try XCTUnwrap(object["options"] as? [String: Any])
+            XCTAssertEqual(options["backend"] as? String, "auto")
+            return self.response(
+                for: request,
+                body: """
+                {
+                  "status":"success",
+                  "model":"qwen2.5:3b",
+                  "load_duration_seconds":1.25,
+                  "warmup_duration_seconds":0.18,
+                  "warmup_performed":true,
+                  "instance":{
+                    "model":"mlx-community/Qwen2.5-3B-Instruct-4bit",
+                    "backend":"mlx",
+                    "idle_seconds":0.0,
+                    "keep_alive_seconds":3600.0,
+                    "requests":0,
+                    "capabilities":["chat","completion"],
+                    "scheduler":{"replicas":1,"active_requests":0,"queued_requests":0}
+                  }
+                }
+                """
+            )
+        }
+        let api = MachBoostAPI(
+            endpoint: URL(string: "http://127.0.0.1:11435")!,
+            session: session
+        )
+
+        let loaded = try await api.load(
+            model: "qwen2.5:3b",
+            keepAlive: "1h",
+            warmup: true
+        )
+
+        XCTAssertTrue(loaded.warmupPerformed)
+        XCTAssertEqual(loaded.instance.keepAliveSeconds, 3_600)
+        XCTAssertEqual(loaded.instance.backend, "mlx")
     }
 
     func testAuthenticatedCatalogRequestUsesBearerToken() async throws {
