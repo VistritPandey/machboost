@@ -277,6 +277,25 @@ final class UITestMachBoostAPI: MachBoostAPIProtocol, @unchecked Sendable {
         for request: ChatRequest,
         requestNumber: Int
     ) -> String {
+        if request.messages.last?.content == "Show a long Markdown response" {
+            let lines = (1...18).map {
+                "- Check \($0): validated the repository path and retained its citation."
+            }
+            return """
+            ## Repository review
+
+            This response exercises a long, selectable Markdown surface while tokens stream.
+
+            \(lines.joined(separator: "\n"))
+
+            ```swift
+            let endpoint = URL(string: "http://127.0.0.1:11435/v1")!
+            let model = "qwen2.5:3b"
+            ```
+
+            STREAM END MARKER
+            """
+        }
         let imageCount = request.messages.last?.images?.count ?? 0
         let contextCount = request.context.count
         guard imageCount > 0 || contextCount > 0 else {
