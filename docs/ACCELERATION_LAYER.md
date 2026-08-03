@@ -414,7 +414,7 @@ machboost serve --replicas 2 --max-queue 64 --queue-timeout 120
 python3 scripts/benchmark_concurrency.py qwen2.5:3b --clients 4 --requests 8 --rounds 3
 ```
 
-The server returns queue and replica metadata with each completed request and exposes aggregate scheduler state through `/api/ps`. A full queue produces HTTP `503` before NDJSON or SSE headers are emitted. The server has no authentication or TLS and must not be exposed directly to an untrusted network.
+The server returns queue and replica metadata with each completed request and exposes aggregate scheduler state through `/api/ps`. A full queue produces HTTP `503` before NDJSON or SSE headers are emitted. Non-loopback binds require bearer authentication. Team Mode adds hashed scoped employee keys, per-key limits, tenant-fair queueing, private traces, and evaluations. MachBoost does not terminate TLS and must not be exposed directly to an untrusted network; see [Team Gateway](TEAM_GATEWAY.md).
 
 The external Ollama wrapper remains available separately:
 
@@ -442,7 +442,7 @@ go run ./cmd/machboost bench command -- sleep 1
 | External Ollama HTTP | already resident | no | compatibility wrapper and benchmarks only |
 | llama.cpp | planned | possible | needs verifier/KV hooks or patch |
 
-Protocol compatibility does not imply full feature parity. MachBoost does not provide Ollama model creation, copy, deletion, embeddings, tool calling, or thinking-field semantics. Image input is supported for Ollama-style chat/generate requests and OpenAI-style content parts when the selected backend is MLX-VLM. Video is accepted by the MachBoost CLI and expanded into image frames before the request.
+Protocol compatibility does not imply full feature parity. MachBoost does not provide Ollama model creation, copy, deletion, embeddings, or thinking-field semantics. OpenAI and Ollama chat routes accept function definitions and can return multiple tool calls, but MachBoost does not execute tools. Image input is supported for Ollama-style chat/generate requests and OpenAI-style content parts when the selected backend is MLX-VLM. Video is accepted by the MachBoost CLI and expanded into image frames before the request.
 
 ## Text And Serving Evidence
 
