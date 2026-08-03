@@ -33,6 +33,7 @@ final class DaemonManager {
         }
 
         let launch = try runtimeLaunch()
+        let teamDatabase = try teamDatabaseURL()
         let process = Process()
         process.executableURL = launch.executable
         process.arguments = launch.prefixArguments + [
@@ -42,6 +43,8 @@ final class DaemonManager {
             "--replicas", String(configuration.replicas),
             "--max-queue", String(configuration.maxQueue),
             "--queue-timeout", String(configuration.queueTimeout),
+            "--team",
+            "--team-db", teamDatabase.path,
         ]
         if configuration.lanEnabled {
             process.arguments?.append("--require-auth")
@@ -97,6 +100,21 @@ final class DaemonManager {
             state = .failed(error.localizedDescription)
             throw error
         }
+    }
+
+    private func teamDatabaseURL() throws -> URL {
+        let root = try FileManager.default.url(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        )
+        .appendingPathComponent("MachBoost", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: true
+        )
+        return root.appendingPathComponent("team.sqlite3")
     }
 
     func restart(
