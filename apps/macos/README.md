@@ -116,6 +116,21 @@ except `/health` and `/healthz` requires
 `Authorization: Bearer <token>`. The token is passed to the daemon through its
 process environment and is not placed in arguments or logs.
 
+`127.0.0.1` is reachable only from the host Mac. To serve another computer,
+open **Server → Developer**, choose **Enable authenticated LAN access**, and
+copy the LAN endpoint and token shown by the app. MachBoost discovers the Mac's
+active IPv4 address and produces remote-client settings such as:
+
+```sh
+export OPENAI_BASE_URL="http://192.168.1.50:11435/v1"
+export OPENAI_API_KEY="YOUR_MACHBOOST_KEY"
+export OLLAMA_HOST="http://192.168.1.50:11435"
+```
+
+The Models view and **Server → Overview/Developer** can explicitly load a
+downloaded model, choose its keep-alive window, and run a compile warm-up before
+the first client request.
+
 LAN traffic is authenticated but not encrypted. Use only a trusted private
 network, or terminate TLS in an authenticated reverse proxy. Never expose the
 plain HTTP listener directly to the public internet.
