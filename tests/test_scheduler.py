@@ -98,6 +98,36 @@ class ReplicaPoolTests(unittest.TestCase):
             pool.acquire()
         self.assertEqual(raised.exception.reason, "scheduler_closed")
 
+    def test_tenant_round_robin_prevents_one_key_from_blocking_another(self) -> None:
+        pool = ReplicaPool(["worker"], max_queue=3, queue_timeout=1.0)
+        active = pool.acquire(tenant_key="busy-key")
+        admitted: list[str] = []
+
+        def wait_for_slot(tenant: str) -> None:
+            with pool.slot(tenant_key=tenant):
+                admitted.append(tenant)
+
+        threads = []
+        for tenant in ("busy-key", "busy-key", "other-key"):
+            thread = threading.Thread(target=wait_for_slot, args=(tenant,))
+            thread.start()
+            threads.append(thread)
+            expected = len(threads)
+            self.assertTrue(
+                _wait_for(lambda: pool.snapshot()["queued_requests"] == expected)
+            )
+
+        snapshot = pool.snapshot()
+        self.assertEqual(snapshot["queued_by_tenant"]["busy-key"], 2)
+        self.assertEqual(snapshot["queued_by_tenant"]["other-key"], 1)
+
+        pool.release(active.index)
+        for thread in threads:
+            thread.join(timeout=1.0)
+
+        self.assertEqual(admitted[0], "other-key")
+        self.assertEqual(sorted(admitted), ["busy-key", "busy-key", "other-key"])
+
 
 def _wait_for(predicate, timeout: float = 1.0) -> bool:
     deadline = time.monotonic() + timeout
