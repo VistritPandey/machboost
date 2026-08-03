@@ -5,14 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta
       name="description"
-      content="MachBoost is a native Apple Silicon app and local inference server for resident MLX models, repository-aware assistants, and repeated-context acceleration."
+      content="MachBoost turns one Apple Silicon Mac into a private team inference gateway with resident MLX models, scoped keys, repository-aware assistants, traces, and local evaluations."
     >
     <meta name="theme-color" content="#111713">
     <meta property="og:type" content="website">
     <meta property="og:title" content="MachBoost — Faster local inference on Apple Silicon">
     <meta
       property="og:description"
-      content="Run local text, vision, and repository-aware AI from one native macOS app and compatible API."
+      content="Serve local text, vision, coding agents, and repository-aware AI from one native macOS app and compatible API."
     >
     <meta
       property="og:image"
@@ -41,6 +41,7 @@
         </a>
         <div class="nav-links">
           <a href="#product">Product</a>
+          <a href="#team">Teams</a>
           <a href="#benchmarks">Benchmarks</a>
           <a href="#install">Install</a>
           <a
@@ -60,6 +61,7 @@
       </nav>
       <nav id="mobile-nav" class="mobile-nav shell" aria-label="Mobile navigation" hidden>
         <a href="#product">Product</a>
+        <a href="#team">Teams</a>
         <a href="#benchmarks">Benchmarks</a>
         <a href="#install">Install</a>
         <a href="https://github.com/VistritPandey/machboost">GitHub</a>
@@ -73,8 +75,8 @@
           <p class="eyebrow"><span></span> Local-first · Apple Silicon · Open source</p>
           <h1 id="hero-title">MachBoost</h1>
           <p class="hero-copy">
-            Resident local models, repository-aware answers, and exact repeated-context
-            acceleration in one native macOS app.
+            Turn one powerful Mac into a private AI endpoint for your team, with
+            resident models, repository-aware answers, and measured acceleration.
           </p>
           <div class="hero-actions">
             <a
@@ -158,8 +160,8 @@
               <i data-lucide="server" aria-hidden="true"></i>
               <h3>Resident serving</h3>
               <p>
-                Keep multiple models warm behind one bounded, concurrent gateway with
-                cancellation and resource metrics.
+                Keep multiple models warm behind one bounded, tenant-fair gateway with
+                cancellation, employee limits, and resource metrics.
               </p>
             </li>
             <li>
@@ -179,6 +181,60 @@
               </p>
             </li>
           </ul>
+        </div>
+      </section>
+
+      <section id="team" class="team-section section">
+        <div class="shell team-layout">
+          <div class="team-copy">
+            <p class="kicker">Team Gateway</p>
+            <h2>One Mac. Your team's coding agents.</h2>
+            <p>
+              Give each employee a scoped key and point Cline, Kilo Code, or another
+              OpenAI-compatible client at the same private endpoint. Models stay
+              resident while MachBoost enforces model access, concurrency, request
+              rates, and fair queueing between employees.
+            </p>
+            <a
+              class="text-link"
+              href="https://github.com/VistritPandey/machboost/blob/main/docs/TEAM_GATEWAY.md"
+            >
+              Team Gateway guide <i data-lucide="arrow-up-right" aria-hidden="true"></i>
+            </a>
+          </div>
+
+          <div class="team-console" aria-label="Team gateway configuration example">
+            <div class="team-console-header">
+              <span><i data-lucide="server" aria-hidden="true"></i> Team node</span>
+              <strong>Private network</strong>
+            </div>
+            <dl class="team-stats">
+              <div><dt>Identity</dt><dd>Scoped keys</dd></div>
+              <div><dt>Admission</dt><dd>Tenant-fair</dd></div>
+              <div><dt>Protocols</dt><dd>OpenAI + Ollama</dd></div>
+              <div><dt>Tools</dt><dd>Parallel calls</dd></div>
+            </dl>
+            <pre><code>export OPENAI_BASE_URL="http://TEAM-MAC:11435/v1"
+export OPENAI_API_KEY="mbk_employee_key"</code></pre>
+          </div>
+        </div>
+
+        <div class="shell team-capabilities">
+          <div>
+            <i data-lucide="users" aria-hidden="true"></i>
+            <h3>Govern access</h3>
+            <p>Model allowlists, scoped keys, per-minute limits, and revocation from the native app.</p>
+          </div>
+          <div>
+            <i data-lucide="git-branch" aria-hidden="true"></i>
+            <h3>Share repository context</h3>
+            <p>Register a codebase once, retrieve bounded evidence, and keep reusable prefixes stable.</p>
+          </div>
+          <div>
+            <i data-lucide="activity" aria-hidden="true"></i>
+            <h3>Inspect and evaluate</h3>
+            <p>Choose metadata, redacted, full, or no traces, then evaluate selected requests locally.</p>
+          </div>
         </div>
       </section>
 
