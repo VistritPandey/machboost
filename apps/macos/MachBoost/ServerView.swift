@@ -619,6 +619,7 @@ struct ServerView: View {
                         }
                     }
                     .frame(maxWidth: 340)
+                    .accessibilityIdentifier("resident-model-picker")
 
                     Picker("Keep loaded", selection: $loadKeepAlive) {
                         Text("15 minutes").tag("15m")
@@ -658,6 +659,14 @@ struct ServerView: View {
                 Text("Loading keeps the model in unified memory before the first client request. Warm-up compiles its initial generation path.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                if let result = appState.lastModelLoad, result.model == loadModel {
+                    Label(
+                        "Resident model ready",
+                        systemImage: "checkmark.circle.fill"
+                    )
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.green)
+                }
             }
         }
     }
