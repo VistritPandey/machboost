@@ -99,6 +99,12 @@ imported attachments remain local, model downloads always require confirmation,
 and closing the window leaves the selected models available until they expire,
 are unloaded, or MachBoost is quit.
 
+Downloaded models can be loaded and compile-warmed explicitly from **Models**
+or **Server → Developer**. The Server view also makes the network boundary
+visible: `127.0.0.1` is local to the host Mac, while authenticated LAN mode
+shows the active LAN IPv4 address and copyable OpenAI/Ollama client settings for
+other computers.
+
 Release builds bundle pinned arm64 CPython 3.13, MLX, `mlx-lm`, `mlx-vlm`, and
 MachBoost dependencies. They do not depend on Homebrew, system Python, or an
 existing package install. The source is under [apps/macos](apps/macos/); see the
@@ -319,6 +325,19 @@ private network or an authenticated TLS reverse proxy, and never expose the
 plain HTTP listener directly to the public internet. The native app generates
 its LAN token locally, stores it in Keychain, and passes it to the daemon without
 placing it in process arguments or logs.
+
+To connect from another machine, enable authenticated LAN access under
+**Server → Developer** and use the displayed address instead of loopback:
+
+```sh
+export OPENAI_BASE_URL="http://192.168.1.50:11435/v1"
+export OPENAI_API_KEY="YOUR_MACHBOOST_KEY"
+export OLLAMA_HOST="http://192.168.1.50:11435"
+```
+
+The address above is illustrative; the app displays the current host Mac's
+reachable LAN address. The client and server must be able to reach each other
+on the selected network and port.
 
 Discovery and control clients can use `GET /api/catalog`, `GET /api/metrics`,
 `GET /api/workspaces`, and `POST /api/cancel`. Chat, generation, and pull requests accept an optional
