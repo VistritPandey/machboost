@@ -16,12 +16,19 @@ from dataclasses import asdict, dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Callable, Iterable, Optional, Sequence
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from . import __version__
 from .accelerator import Accelerator
 from .models import catalog_rows, model_targets, preflight_model, resolve_model
 from .scheduler import ReplicaPool, RequestAdmissionError
+from .team import (
+    TeamAccessError,
+    TeamAdmissionController,
+    TeamPrincipal,
+    TeamStore,
+    performance_evaluation,
+)
 from .vision_auto import load_vision_calibration
 from .workspace import WorkspaceQuery, WorkspaceStore
 
@@ -46,6 +53,7 @@ class ActiveOperation:
     model: str
     started_at: float
     cancel_event: threading.Event
+    principal_id: Optional[str] = None
 
 
 class OperationRegistry:
@@ -67,13 +75,21 @@ class OperationRegistry:
             "generated_tokens": 0,
         }
 
-    def begin(self, request_id: str, kind: str, model: str) -> ActiveOperation:
+    def begin(
+        self,
+        request_id: str,
+        kind: str,
+        model: str,
+        *,
+        principal_id: Optional[str] = None,
+    ) -> ActiveOperation:
         operation = ActiveOperation(
             request_id=request_id,
             kind=kind,
             model=model,
             started_at=self.clock(),
             cancel_event=threading.Event(),
+            principal_id=principal_id,
         )
         with self._lock:
             if request_id in self._active:
@@ -107,10 +123,23 @@ class OperationRegistry:
                 }
             )
 
-    def cancel(self, request_id: str) -> bool:
+    def cancel(
+        self,
+        request_id: str,
+        *,
+        principal_id: Optional[str] = None,
+        admin: bool = False,
+    ) -> bool:
         with self._lock:
             operation = self._active.get(request_id)
             if operation is None:
+                return False
+            if (
+                not admin
+                and principal_id is not None
+                and operation.principal_id is not None
+                and operation.principal_id != principal_id
+            ):
                 return False
             operation.cancel_event.set()
             return True
@@ -125,6 +154,7 @@ class OperationRegistry:
                     "model": operation.model,
                     "elapsed_seconds": max(0.0, now - operation.started_at),
                     "cancelling": operation.cancel_event.is_set(),
+                    "principal_id": operation.principal_id,
                 }
                 for operation in self._active.values()
             ]
@@ -327,8 +357,15 @@ class RuntimeManager:
         kind: str,
         model: str,
         callback: Callable[[threading.Event], Any],
+        *,
+        principal_id: Optional[str] = None,
     ) -> Any:
-        operation = self.operations.begin(request_id, kind, model)
+        operation = self.operations.begin(
+            request_id,
+            kind,
+            model,
+            principal_id=principal_id,
+        )
         try:
             result = callback(operation.cancel_event)
         except RequestCancelled:
@@ -454,6 +491,7 @@ class RuntimeManager:
         )
         with entry.scheduler.slot(
             affinity_key=affinity_key,
+            tenant_key=_optional_string(options.get("_tenant_key")),
             timeout=_optional_float(options.get("queue_timeout")),
             cancel_event=cancel_event,
         ) as lease:
@@ -554,6 +592,7 @@ class RuntimeManager:
         affinity_key = request_affinity_key(options, image_sources=images)
         with entry.scheduler.slot(
             affinity_key=affinity_key,
+            tenant_key=_optional_string(options.get("_tenant_key")),
             timeout=_optional_float(options.get("queue_timeout")),
             cancel_event=cancel_event,
         ) as lease:
@@ -928,11 +967,14 @@ class MachBoostHTTPServer(ThreadingHTTPServer):
         api_token: Optional[str] = None,
         require_auth: bool = False,
         workspace_store: Optional[WorkspaceStore] = None,
+        team_store: Optional[TeamStore] = None,
     ) -> None:
         self.manager = manager or RuntimeManager()
         self.workspace_store = workspace_store or WorkspaceStore()
         self.api_token = api_token or os.environ.get("MACHBOOST_API_TOKEN")
         self.require_auth = bool(require_auth)
+        self.team_store = team_store
+        self.team_admission = TeamAdmissionController()
         if self.require_auth and not self.api_token:
             raise ValueError("secured serving requires MACHBOOST_API_TOKEN")
         super().__init__(server_address, MachBoostRequestHandler)
@@ -952,6 +994,8 @@ class MachBoostHTTPServer(ThreadingHTTPServer):
         self._reaper_stop.set()
         self._reaper.join(timeout=2.0)
         self.manager.close()
+        if self.team_store is not None:
+            self.team_store.close()
         super().server_close()
 
 
@@ -967,13 +1011,26 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
     def workspaces(self) -> WorkspaceStore:
         return self.server.workspace_store  # type: ignore[attr-defined]
 
+    @property
+    def teams(self) -> Optional[TeamStore]:
+        return self.server.team_store  # type: ignore[attr-defined]
+
+    @property
+    def principal(self) -> TeamPrincipal:
+        principal = getattr(self, "_principal", None)
+        if principal is None:
+            raise RuntimeError("request was not authenticated")
+        return principal
+
     def do_GET(self) -> None:
-        path = urlparse(self.path).path
+        parsed = urlparse(self.path)
+        path = parsed.path
         status = {
             "status": "ok",
             "version": __version__,
             "serving": self.runtime.serving_config(),
             "authentication": "required" if self.server.require_auth else "local",  # type: ignore[attr-defined]
+            "team_mode": self.teams is not None,
         }
         if path in {"/health", "/healthz"}:
             self.send_json(status)
@@ -987,6 +1044,8 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
             self.send_json({"version": __version__})
             return
         if path == "/api/catalog":
+            if not self.require_scope("models:read"):
+                return
             self.send_json(
                 {
                     "schema": "machboost.catalog.v1",
@@ -995,12 +1054,22 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
             )
             return
         if path == "/api/metrics":
-            self.send_json(self.runtime.metrics())
+            metrics = self.runtime.metrics()
+            if self.teams is not None:
+                metrics["team"] = {
+                    **self.teams.status(),
+                    **self.server.team_admission.snapshot(),  # type: ignore[attr-defined]
+                }
+            self.send_json(metrics)
             return
         if path == "/api/ps":
+            if not self.require_scope("models:read"):
+                return
             self.send_json({"models": self.runtime.ps()})
             return
         if path == "/api/workspaces":
+            if not self.require_scope("workspaces:read"):
+                return
             self.send_json(
                 {
                     "schema": "machboost.workspaces.v1",
@@ -1010,7 +1079,63 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                 }
             )
             return
+        if path == "/api/team/status":
+            if not self.require_team_admin():
+                return
+            self.send_json(self.teams.status())
+            return
+        if path == "/api/team/keys":
+            if not self.require_team_admin():
+                return
+            self.send_json({"schema": "machboost.team-keys.v1", "keys": self.teams.list_keys()})
+            return
+        if path == "/api/traces":
+            if not self.require_scope("traces:read"):
+                return
+            query = parse_qs(parsed.query)
+            principal_id = _query_value(query, "principal_id")
+            if self.principal.kind == "key":
+                principal_id = self.principal.id
+            traces = self.teams.list_traces(
+                limit=int(_query_value(query, "limit") or 100),
+                principal_id=principal_id,
+                model=_query_value(query, "model"),
+            )
+            self.send_json({"schema": "machboost.traces.v1", "traces": traces})
+            return
+        if path.startswith("/api/traces/"):
+            if not self.require_scope("traces:read"):
+                return
+            trace = self.teams.trace(path.rsplit("/", 1)[-1])
+            if trace is None or (
+                self.principal.kind == "key"
+                and trace["principal"]["id"] != self.principal.id
+            ):
+                self.send_error_json(404, "trace not found")
+                return
+            self.send_json({"schema": "machboost.trace.v1", "trace": trace})
+            return
+        if path == "/api/evaluations":
+            if not self.require_scope("evaluations:read"):
+                return
+            query = parse_qs(parsed.query)
+            self.send_json(
+                {
+                    "schema": "machboost.evaluations.v1",
+                    "evaluations": self.teams.list_evaluations(
+                        limit=int(_query_value(query, "limit") or 50)
+                    ),
+                }
+            )
+            return
+        if path == "/api/integrations":
+            if not self.require_scope("models:read"):
+                return
+            self.send_json(integration_catalog(self.headers.get("Host", "127.0.0.1:11435")))
+            return
         if path in {"/api/tags", "/v1/models"}:
+            if not self.require_scope("models:read"):
+                return
             models = self.runtime.ps()
             if path == "/v1/models":
                 self.send_json(
@@ -1040,11 +1165,17 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                 self.handle_ollama_generate(payload)
                 return
             if path == "/api/pull":
+                if not self.require_scope("models:write"):
+                    return
                 self.handle_pull(payload)
                 return
             if path == "/api/cancel":
                 request_id = required_string(payload, "request_id")
-                cancelled = self.runtime.operations.cancel(request_id)
+                cancelled = self.runtime.operations.cancel(
+                    request_id,
+                    principal_id=self.principal.id,
+                    admin=self.principal.kind == "admin",
+                )
                 self.send_json(
                     {
                         "status": "cancelling" if cancelled else "not_found",
@@ -1054,7 +1185,58 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                     status=202 if cancelled else 404,
                 )
                 return
+            if path == "/api/team/keys":
+                if not self.require_team_admin():
+                    return
+                created = self.teams.create_key(
+                    required_string(payload, "name"),
+                    scopes=tuple(payload.get("scopes") or ("inference", "models:read", "workspaces:read")),
+                    allowed_models=tuple(payload.get("allowed_models") or ()),
+                    max_concurrent=int(payload.get("max_concurrent") or 2),
+                    requests_per_minute=int(payload.get("requests_per_minute") or 60),
+                )
+                self.send_json(
+                    {"schema": "machboost.team-key.v1", **created.to_dict()},
+                    status=201,
+                )
+                return
+            if path == "/api/team/keys/revoke":
+                if not self.require_team_admin():
+                    return
+                key_id = required_string(payload, "key_id")
+                revoked = self.teams.revoke_key(key_id)
+                self.send_json(
+                    {"key_id": key_id, "revoked": revoked},
+                    status=200 if revoked else 404,
+                )
+                return
+            if path == "/api/team/settings":
+                if not self.require_team_admin():
+                    return
+                kwargs: dict[str, Any] = {}
+                if "trace_mode" in payload:
+                    kwargs["trace_mode"] = str(payload["trace_mode"])
+                if "retention_days" in payload:
+                    kwargs["retention_days"] = payload["retention_days"]
+                if "max_storage_bytes" in payload:
+                    kwargs["max_storage_bytes"] = int(payload["max_storage_bytes"])
+                settings = self.teams.update_settings(**kwargs)
+                self.send_json({"settings": settings.to_dict()})
+                return
+            if path == "/api/traces/delete":
+                if not self.require_team_admin():
+                    return
+                removed = self.teams.delete_traces(payload.get("trace_ids"))
+                self.send_json({"removed": removed})
+                return
+            if path == "/api/evaluations":
+                if not self.require_scope("evaluations:write"):
+                    return
+                self.handle_evaluation(payload)
+                return
             if path == "/api/workspaces":
+                if not self.require_scope("workspaces:write"):
+                    return
                 workspace = self.workspaces.register(
                     required_string(payload, "path"),
                     name=str(payload.get("name") or "").strip() or None,
@@ -1081,6 +1263,8 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                     )
                 return
             if path == "/api/workspaces/index":
+                if not self.require_scope("workspaces:write"):
+                    return
                 report = self.workspaces.index(
                     required_string(payload, "workspace_id"),
                     max_file_bytes=int(payload.get("max_file_bytes") or 1_000_000),
@@ -1094,6 +1278,8 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                 )
                 return
             if path == "/api/workspaces/query":
+                if not self.require_scope("workspaces:read"):
+                    return
                 result = self.workspaces.query(
                     required_string(payload, "workspace_id"),
                     required_string(payload, "query"),
@@ -1108,6 +1294,8 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                 )
                 return
             if path == "/api/workspaces/delete":
+                if not self.require_scope("workspaces:write"):
+                    return
                 workspace_id = required_string(payload, "workspace_id")
                 removed = self.workspaces.remove(workspace_id)
                 self.send_json(
@@ -1120,6 +1308,8 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                 )
                 return
             if path == "/api/load":
+                if not self.require_scope("models:write"):
+                    return
                 model = required_string(payload, "model", aliases=("name",))
                 entry, load_duration = self.runtime.get_or_load(
                     model,
@@ -1142,16 +1332,22 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                 )
                 return
             if path == "/api/stop":
+                if not self.require_scope("models:write"):
+                    return
                 model = payload.get("model") or payload.get("name")
                 unloaded = self.runtime.stop(str(model)) if model else self.runtime.stop()
                 self.send_json({"status": "success", "unloaded": unloaded})
                 return
             if path == "/api/shutdown":
+                if self.teams is not None and not self.require_team_admin():
+                    return
                 unloaded = self.runtime.stop()
                 self.send_json({"status": "success", "unloaded": unloaded})
                 threading.Thread(target=self.server.shutdown, daemon=True).start()
                 return
             if path == "/api/show":
+                if not self.require_scope("models:read"):
+                    return
                 model = str(payload.get("model") or payload.get("name") or "")
                 resolved_model = resolve_model(model).model
                 matches = [item for item in self.runtime.ps() if item["model"] == resolved_model]
@@ -1185,6 +1381,9 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
         except RequestCancelled as exc:
             if not self.wfile.closed:
                 self.send_error_json(409, str(exc), code="request_cancelled")
+        except TeamAccessError as exc:
+            if not self.wfile.closed:
+                self.send_error_json(exc.status, str(exc), code=exc.reason)
         except (ImportError, RuntimeError, TypeError, ValueError) as exc:
             if not self.wfile.closed:
                 self.send_error_json(400, str(exc))
@@ -1196,6 +1395,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
         model = required_string(payload, "model")
         messages = normalize_messages(payload.get("messages") or ())
         options = dict(payload.get("options") or {})
+        options["_tenant_key"] = self.principal.id
         context = payload.get("context")
         workspace = workspace_query_for_request(
             self.workspaces,
@@ -1209,7 +1409,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
             options.setdefault("workspace_prefix_cache", True)
         request_id = request_identifier(payload, "chat")
         if not bool(payload.get("stream", True)):
-            result = self.runtime.run_operation(
+            result = self.run_traced_operation(
                 request_id,
                 "chat",
                 model,
@@ -1221,6 +1421,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                     context=context,
                     cancel_event=cancel_event,
                 ),
+                input_data=messages,
             )
             body = {
                 "request_id": request_id,
@@ -1253,7 +1454,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
             )
 
         try:
-            result = self.runtime.run_operation(
+            result = self.run_traced_operation(
                 request_id,
                 "chat",
                 model,
@@ -1267,6 +1468,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                     on_admitted=on_admitted,
                     cancel_event=cancel_event,
                 ),
+                input_data=messages,
             )
         except RequestAdmissionError:
             raise
@@ -1308,6 +1510,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
         model = required_string(payload, "model")
         prompt = str(payload.get("prompt") or "")
         options = dict(payload.get("options") or {})
+        options["_tenant_key"] = self.principal.id
         context = payload.get("context")
         workspace = workspace_query_for_request(
             self.workspaces,
@@ -1321,7 +1524,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
             options.setdefault("workspace_prefix_cache", True)
         request_id = request_identifier(payload, "generate")
         if not bool(payload.get("stream", True)):
-            result = self.runtime.run_operation(
+            result = self.run_traced_operation(
                 request_id,
                 "generate",
                 model,
@@ -1334,6 +1537,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                     images=normalize_image_list(payload.get("images")),
                     cancel_event=cancel_event,
                 ),
+                input_data=prompt,
             )
             body = {
                 "request_id": request_id,
@@ -1366,7 +1570,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
             )
 
         try:
-            result = self.runtime.run_operation(
+            result = self.run_traced_operation(
                 request_id,
                 "generate",
                 model,
@@ -1381,6 +1585,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                     on_admitted=on_admitted,
                     cancel_event=cancel_event,
                 ),
+                input_data=prompt,
             )
         except RequestAdmissionError:
             raise
@@ -1422,6 +1627,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
         model = required_string(payload, "model")
         messages = normalize_messages(payload.get("messages") or ())
         options = openai_options(payload)
+        options["_tenant_key"] = self.principal.id
         workspace = workspace_query_for_request(
             self.workspaces,
             payload,
@@ -1435,7 +1641,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
             options.setdefault("workspace_prefix_cache", True)
         request_id = request_identifier(payload, "chatcmpl")
         if not bool(payload.get("stream", False)):
-            result = self.runtime.run_operation(
+            result = self.run_traced_operation(
                 request_id,
                 "chat",
                 model,
@@ -1446,6 +1652,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                     context=context,
                     cancel_event=cancel_event,
                 ),
+                input_data=messages,
             )
             self.send_json(
                 {
@@ -1481,7 +1688,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
             )
 
         try:
-            result = self.runtime.run_operation(
+            result = self.run_traced_operation(
                 request_id,
                 "chat",
                 model,
@@ -1494,6 +1701,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                     on_admitted=on_admitted,
                     cancel_event=cancel_event,
                 ),
+                input_data=messages,
             )
         except RequestAdmissionError:
             raise
@@ -1538,6 +1746,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
         model = required_string(payload, "model")
         prompt = str(payload.get("prompt") or "")
         options = openai_options(payload)
+        options["_tenant_key"] = self.principal.id
         workspace = workspace_query_for_request(
             self.workspaces,
             payload,
@@ -1551,7 +1760,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
             options.setdefault("workspace_prefix_cache", True)
         request_id = request_identifier(payload, "cmpl")
         if not bool(payload.get("stream", False)):
-            result = self.runtime.run_operation(
+            result = self.run_traced_operation(
                 request_id,
                 "generate",
                 model,
@@ -1563,6 +1772,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                     images=normalize_image_list(payload.get("images")),
                     cancel_event=cancel_event,
                 ),
+                input_data=prompt,
             )
             self.send_json(
                 {
@@ -1596,7 +1806,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
             )
 
         try:
-            result = self.runtime.run_operation(
+            result = self.run_traced_operation(
                 request_id,
                 "generate",
                 model,
@@ -1610,6 +1820,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                     on_admitted=on_admitted,
                     cancel_event=cancel_event,
                 ),
+                input_data=prompt,
             )
         except RequestAdmissionError:
             raise
@@ -1663,6 +1874,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                     revision=payload.get("revision"),
                     cancel_event=cancel_event,
                 ),
+                principal_id=self.principal.id,
             )
             self.send_json({"request_id": request_id, **result})
             return
@@ -1685,6 +1897,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                     progress=progress,
                     cancel_event=cancel_event,
                 ),
+                principal_id=self.principal.id,
             )
         except RequestCancelled:
             self.write_json_line(
@@ -1702,17 +1915,172 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
             return
         self.write_json_line({"request_id": request_id, "done": True, **result})
 
-    def authorize(self) -> bool:
-        if not self.server.require_auth:  # type: ignore[attr-defined]
+    def run_traced_operation(
+        self,
+        request_id: str,
+        kind: str,
+        model: str,
+        callback: Callable[[threading.Event], Any],
+        *,
+        input_data: Any,
+    ) -> Any:
+        started_at = time.time()
+        status = "failed"
+        result: Any = None
+        try:
+            admission = self.server.team_admission  # type: ignore[attr-defined]
+            with admission.slot(self.principal, model):
+                result = self.runtime.run_operation(
+                    request_id,
+                    kind,
+                    model,
+                    callback,
+                    principal_id=self.principal.id,
+                )
+            status = "completed"
+            return result
+        except RequestCancelled:
+            status = "cancelled"
+            raise
+        finally:
+            if self.teams is not None:
+                stats = getattr(result, "stats", {}) if result is not None else {}
+                self.teams.record_trace(
+                    request_id=request_id,
+                    principal=self.principal,
+                    endpoint=urlparse(self.path).path,
+                    model=model,
+                    status=status,
+                    started_at=started_at,
+                    finished_at=time.time(),
+                    prompt_tokens=int(stats.get("prompt_tokens") or 0),
+                    completion_tokens=int(stats.get("generated_tokens") or 0),
+                    time_to_first_token_s=(
+                        getattr(result, "time_to_first_token_s", None)
+                        if result is not None
+                        else None
+                    ),
+                    input_data=input_data,
+                    output_text=getattr(result, "text", None),
+                    metadata={"kind": kind, "client": self.headers.get("User-Agent", "")},
+                )
+
+    def handle_evaluation(self, payload: dict[str, Any]) -> None:
+        trace_ids = tuple(str(item) for item in payload.get("trace_ids") or ())
+        if not trace_ids:
+            raise ValueError("trace_ids must contain at least one trace")
+        traces = []
+        for trace_id in trace_ids:
+            trace = self.teams.trace(trace_id)
+            if trace is not None:
+                traces.append(trace)
+        if not traces:
+            raise ValueError("none of the requested traces were found")
+        summary = performance_evaluation(traces)
+        evaluator_model = str(payload.get("model") or "").strip()
+        scores: list[dict[str, Any]] = []
+        evaluator = "deterministic"
+        if evaluator_model:
+            evaluator = f"local-model:{evaluator_model}"
+            for trace in traces[:20]:
+                output = trace.get("output")
+                if not output:
+                    scores.append(
+                        {
+                            "trace_id": trace["id"],
+                            "score": None,
+                            "reason": "trace content was not retained",
+                        }
+                    )
+                    continue
+                judge = self.runtime.chat(
+                    evaluator_model,
+                    [
+                        {
+                            "role": "system",
+                            "content": (
+                                "Score the assistant response from 0 to 1 for relevance and "
+                                "correctness. Reply as JSON with numeric score and short reason."
+                            ),
+                        },
+                        {
+                            "role": "user",
+                            "content": json.dumps(
+                                {
+                                    "request": trace.get("input"),
+                                    "response": output,
+                                }
+                            ),
+                        },
+                    ],
+                    options={"max_tokens": 128, "temperature": 0.0, "_tenant_key": self.principal.id},
+                    keep_alive=payload.get("keep_alive", "10m"),
+                )
+                scores.append(parse_judge_score(trace["id"], judge.text))
+            numeric_scores = [
+                float(item["score"]) for item in scores if item.get("score") is not None
+            ]
+            summary["quality"] = {
+                "scored_traces": len(numeric_scores),
+                "mean_score": (
+                    sum(numeric_scores) / len(numeric_scores) if numeric_scores else None
+                ),
+            }
+        evaluation = self.teams.create_evaluation(
+            name=str(payload.get("name") or "Trace evaluation"),
+            trace_ids=tuple(trace["id"] for trace in traces),
+            evaluator=evaluator,
+            summary=summary,
+            scores=scores,
+        )
+        self.send_json({"schema": "machboost.evaluation.v1", "evaluation": evaluation}, status=201)
+
+    def require_scope(self, scope: str) -> bool:
+        if self.teams is None:
             return True
+        if self.principal.permits(scope):
+            return True
+        self.send_error_json(403, f"key lacks {scope} scope", code="scope_denied")
+        return False
+
+    def require_team_admin(self) -> bool:
+        if self.teams is None:
+            self.send_error_json(404, "team mode is not enabled", code="team_mode_disabled")
+            return False
+        return self.require_scope("team:admin")
+
+    def authorize(self) -> bool:
         expected = str(self.server.api_token or "")  # type: ignore[attr-defined]
         supplied = self.headers.get("Authorization", "")
         prefix = "Bearer "
-        valid = supplied.startswith(prefix) and hmac.compare_digest(
-            supplied[len(prefix) :],
-            expected,
-        )
-        if valid:
+        token = supplied[len(prefix) :] if supplied.startswith(prefix) else ""
+        if expected and token and hmac.compare_digest(token, expected):
+            self._principal = TeamPrincipal(
+                id="admin",
+                name="Administrator",
+                scopes=("*",),
+                allowed_models=(),
+                max_concurrent=64,
+                requests_per_minute=10_000,
+                kind="admin",
+            )
+            return True
+        if token and self.teams is not None:
+            principal = self.teams.authenticate(token)
+            if principal is not None:
+                self.teams.touch_key(principal.id)
+                self._principal = principal
+                return True
+        if not supplied and not self.server.require_auth:  # type: ignore[attr-defined]
+            self._principal = TeamPrincipal(
+                id="local",
+                name="Local user",
+                scopes=("*",),
+                allowed_models=(),
+                max_concurrent=64,
+                requests_per_minute=10_000,
+                kind="admin",
+            )
             return True
         self.send_json(
             {"error": "authentication required", "code": "unauthorized"},
@@ -1841,6 +2209,18 @@ def _optional_int(value: Any) -> Optional[int]:
 
 def _optional_float(value: Any) -> Optional[float]:
     return None if value is None else float(value)
+
+
+def _optional_string(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _query_value(query: dict[str, list[str]], key: str) -> Optional[str]:
+    values = query.get(key) or ()
+    return values[0] if values else None
 
 
 def request_affinity_key(
@@ -2074,6 +2454,70 @@ def openai_machboost_result(
     return response
 
 
+def parse_judge_score(trace_id: str, text: str) -> dict[str, Any]:
+    candidate = str(text).strip()
+    if candidate.startswith("```"):
+        candidate = re.sub(r"^```(?:json)?\s*|\s*```$", "", candidate, flags=re.I)
+    try:
+        payload = json.loads(candidate)
+    except json.JSONDecodeError:
+        match = re.search(r"(?i)score\D{0,12}(0(?:\.\d+)?|1(?:\.0+)?)", candidate)
+        if match is None:
+            return {"trace_id": trace_id, "score": None, "reason": candidate[:500]}
+        return {
+            "trace_id": trace_id,
+            "score": min(1.0, max(0.0, float(match.group(1)))),
+            "reason": candidate[:500],
+        }
+    raw_score = payload.get("score") if isinstance(payload, dict) else None
+    try:
+        score = min(1.0, max(0.0, float(raw_score)))
+    except (TypeError, ValueError):
+        score = None
+    return {
+        "trace_id": trace_id,
+        "score": score,
+        "reason": str(payload.get("reason") or "")[:500]
+        if isinstance(payload, dict)
+        else "",
+    }
+
+
+def integration_catalog(host: str) -> dict[str, Any]:
+    endpoint = f"http://{host}" if "://" not in host else host
+    return {
+        "schema": "machboost.integrations.v1",
+        "endpoint": endpoint,
+        "openai_base_url": f"{endpoint}/v1",
+        "ollama_host": endpoint,
+        "clients": [
+            {
+                "id": "openai",
+                "name": "OpenAI SDK and compatible agents",
+                "environment": {
+                    "OPENAI_BASE_URL": f"{endpoint}/v1",
+                    "OPENAI_API_KEY": "YOUR_MACHBOOST_KEY",
+                },
+            },
+            {
+                "id": "ollama",
+                "name": "Ollama-compatible clients",
+                "environment": {
+                    "OLLAMA_HOST": endpoint,
+                    "OLLAMA_API_KEY": "YOUR_MACHBOOST_KEY",
+                },
+            },
+            {
+                "id": "cline-kilo",
+                "name": "Cline and Kilo Code",
+                "base_url": f"{endpoint}/v1",
+                "api_key": "YOUR_MACHBOOST_KEY",
+                "provider": "OpenAI Compatible",
+            },
+        ],
+    }
+
+
 def utc_timestamp() -> str:
     from datetime import datetime, timezone
 
@@ -2091,6 +2535,7 @@ def serve(
     queue_timeout: float = DEFAULT_QUEUE_TIMEOUT,
     api_token: Optional[str] = None,
     require_auth: bool = False,
+    team_store: Optional[TeamStore] = None,
 ) -> None:
     if manager is None:
         manager = RuntimeManager(
@@ -2103,6 +2548,7 @@ def serve(
         manager=manager,
         api_token=api_token,
         require_auth=require_auth,
+        team_store=team_store,
     )
     if ready is not None:
         ready(server)
