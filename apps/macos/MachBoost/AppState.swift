@@ -15,6 +15,11 @@ final class AppState {
     private(set) var loadedModels: [ModelInstance] = []
     private(set) var workspaces: [WorkspaceSummary] = []
     private(set) var metrics: ServerMetrics?
+    private(set) var teamStatus: TeamStatus?
+    private(set) var teamKeys: [TeamKey] = []
+    private(set) var traces: [TraceSummary] = []
+    private(set) var evaluations: [TraceEvaluation] = []
+    private(set) var lastCreatedTeamToken: String?
     private(set) var downloads: [String: PullEvent] = [:]
     private(set) var indexingWorkspaces: Set<String> = []
     private(set) var isRefreshing = false
@@ -77,6 +82,7 @@ final class AppState {
             self.loadedModels = values.1
             self.metrics = values.2
             self.workspaces = values.3
+            await refreshTeam()
             if values.0.allSatisfy({ !$0.cached }) {
                 showOnboarding = true
             }
@@ -96,6 +102,100 @@ final class AppState {
             if daemon.state == .running {
                 presentedError = error.localizedDescription
             }
+        }
+    }
+
+    func refreshTeam() async {
+        guard serverIsRunning else { return }
+        do {
+            async let status = api.teamStatus()
+            async let keys = api.teamKeys()
+            async let traces = api.traces(limit: 100)
+            async let evaluations = api.evaluations(limit: 25)
+            let values = try await (status, keys, traces, evaluations)
+            teamStatus = values.0
+            teamKeys = values.1
+            self.traces = values.2
+            self.evaluations = values.3
+        } catch MachBoostAPIError.server(status: 404, message: _) {
+            teamStatus = nil
+            teamKeys = []
+            traces = []
+            evaluations = []
+        } catch {
+            presentedError = error.localizedDescription
+        }
+    }
+
+    func createTeamKey(
+        name: String,
+        allowedModels: [String],
+        maxConcurrent: Int,
+        requestsPerMinute: Int
+    ) async {
+        do {
+            let created = try await api.createTeamKey(
+                name: name,
+                scopes: [
+                    "inference",
+                    "models:read",
+                    "workspaces:read",
+                    "traces:read",
+                    "evaluations:read",
+                    "evaluations:write",
+                ],
+                allowedModels: allowedModels,
+                maxConcurrent: maxConcurrent,
+                requestsPerMinute: requestsPerMinute
+            )
+            lastCreatedTeamToken = created.token
+            await refreshTeam()
+        } catch {
+            presentedError = error.localizedDescription
+        }
+    }
+
+    func clearCreatedTeamToken() {
+        lastCreatedTeamToken = nil
+    }
+
+    func revokeTeamKey(id: String) async {
+        do {
+            try await api.revokeTeamKey(id: id)
+            await refreshTeam()
+        } catch {
+            presentedError = error.localizedDescription
+        }
+    }
+
+    func updateTeamSettings(
+        traceMode: String,
+        retentionDays: Int?,
+        maxStorageBytes: Int64
+    ) async {
+        do {
+            _ = try await api.updateTeamSettings(
+                traceMode: traceMode,
+                retentionDays: retentionDays,
+                maxStorageBytes: maxStorageBytes
+            )
+            await refreshTeam()
+        } catch {
+            presentedError = error.localizedDescription
+        }
+    }
+
+    func evaluateTraces(ids: [String], model: String?) async {
+        guard !ids.isEmpty else { return }
+        do {
+            _ = try await api.evaluate(
+                traceIDs: ids,
+                name: "Team gateway evaluation",
+                model: model
+            )
+            await refreshTeam()
+        } catch {
+            presentedError = error.localizedDescription
         }
     }
 
