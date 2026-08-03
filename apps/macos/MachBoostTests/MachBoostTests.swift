@@ -244,6 +244,74 @@ final class MachBoostTests: XCTestCase {
         XCTAssertTrue(models.isEmpty)
     }
 
+    func testTeamStatusDecodesPrivacyAndRetentionPolicy() throws {
+        let data = Data(
+            """
+            {
+              "schema":"machboost.team-status.v1",
+              "keys":3,
+              "traces":42,
+              "evaluations":2,
+              "settings":{
+                "trace_mode":"redacted",
+                "retention_days":30,
+                "max_storage_bytes":536870912
+              }
+            }
+            """.utf8
+        )
+
+        let status = try JSONDecoder().decode(TeamStatus.self, from: data)
+
+        XCTAssertEqual(status.keys, 3)
+        XCTAssertEqual(status.settings.traceMode, "redacted")
+        XCTAssertEqual(status.settings.retentionDays, 30)
+        XCTAssertEqual(status.settings.maxStorageBytes, 536_870_912)
+    }
+
+    func testCreateTeamKeySendsLimitsAndReturnsOneTimeToken() async throws {
+        let session = mockSession { request in
+            let data = try XCTUnwrap(request.httpBody)
+            let object = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: data) as? [String: Any]
+            )
+            XCTAssertEqual(object["name"] as? String, "Alice")
+            XCTAssertEqual(object["max_concurrent"] as? Int, 3)
+            XCTAssertEqual(object["requests_per_minute"] as? Int, 120)
+            return self.response(
+                for: request,
+                status: 201,
+                body: """
+                {
+                  "schema":"machboost.team-key.v1",
+                  "token":"mbk_once",
+                  "key":{
+                    "id":"key_1","name":"Alice","kind":"key",
+                    "scopes":["inference"],"allowed_models":["llama3.2:3b"],
+                    "max_concurrent":3,"requests_per_minute":120,
+                    "created_at":"2026-08-03T12:00:00Z"
+                  }
+                }
+                """
+            )
+        }
+        let api = MachBoostAPI(
+            endpoint: URL(string: "http://127.0.0.1:11435")!,
+            session: session
+        )
+
+        let created = try await api.createTeamKey(
+            name: "Alice",
+            scopes: ["inference"],
+            allowedModels: ["llama3.2:3b"],
+            maxConcurrent: 3,
+            requestsPerMinute: 120
+        )
+
+        XCTAssertEqual(created.token, "mbk_once")
+        XCTAssertEqual(created.key.allowedModels, ["llama3.2:3b"])
+    }
+
     func testHealthProbeUsesItsOwnShortTimeout() async throws {
         let session = mockSession { request in
             XCTAssertEqual(request.timeoutInterval, 0.25, accuracy: 0.001)
