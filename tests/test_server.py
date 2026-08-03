@@ -19,6 +19,7 @@ from machboost.server import (
     RuntimeManager,
     parse_keep_alive,
 )
+from machboost.team import TeamStore
 from machboost.workspace import WorkspaceStore
 
 
@@ -1170,6 +1171,133 @@ class HTTPServerTests(unittest.TestCase):
         self.assertEqual(json.loads(body)["unloaded"], 1)
         self.thread.join(timeout=2.0)
         self.assertFalse(self.thread.is_alive())
+
+
+class TeamGatewayHTTPTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.team_store = TeamStore(Path(self.temporary.name) / "team.sqlite3")
+        manager = RuntimeManager(loader=lambda config: FakeAccelerator())
+        self.server = MachBoostHTTPServer(
+            ("127.0.0.1", 0),
+            manager=manager,
+            api_token="admin-secret",
+            require_auth=True,
+            team_store=self.team_store,
+        )
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        host, port = self.server.server_address
+        self.base_url = f"http://{host}:{port}"
+
+    def tearDown(self) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=2.0)
+        self.temporary.cleanup()
+
+    def request(self, path, payload=None, *, token="admin-secret"):
+        data = None if payload is None else json.dumps(payload).encode("utf-8")
+        headers = {"Authorization": f"Bearer {token}"}
+        if data is not None:
+            headers["Content-Type"] = "application/json"
+        request = Request(self.base_url + path, data=data, headers=headers)
+        with urlopen(request, timeout=3.0) as response:
+            return response.status, json.loads(response.read().decode("utf-8"))
+
+    def create_employee_key(self, *, models=("mlx-community/example",)) -> str:
+        _, body = self.request(
+            "/api/team/keys",
+            {
+                "name": "Coding agent",
+                "scopes": [
+                    "inference",
+                    "models:read",
+                    "traces:read",
+                    "evaluations:read",
+                    "evaluations:write",
+                ],
+                "allowed_models": list(models),
+                "max_concurrent": 2,
+                "requests_per_minute": 30,
+            },
+        )
+        return body["token"]
+
+    def test_employee_key_infers_and_creates_private_trace(self) -> None:
+        self.request("/api/team/settings", {"trace_mode": "full"})
+        token = self.create_employee_key()
+
+        status, response = self.request(
+            "/v1/chat/completions",
+            {
+                "model": "mlx-community/example",
+                "messages": [{"role": "user", "content": "hello team"}],
+            },
+            token=token,
+        )
+        _, trace_list = self.request("/api/traces", token=token)
+        trace_id = trace_list["traces"][0]["id"]
+        _, trace_response = self.request(f"/api/traces/{trace_id}", token=token)
+
+        self.assertEqual(status, 200)
+        self.assertEqual(response["choices"][0]["message"]["content"], "hello world")
+        self.assertEqual(trace_response["trace"]["input"][0]["content"], "hello team")
+        self.assertEqual(trace_response["trace"]["output"], "hello world")
+
+    def test_employee_cannot_manage_keys_or_use_disallowed_model(self) -> None:
+        token = self.create_employee_key()
+
+        with self.assertRaises(HTTPError) as admin_error:
+            self.request("/api/team/keys", token=token)
+        with self.assertRaises(HTTPError) as model_error:
+            self.request(
+                "/api/chat",
+                {
+                    "model": "mlx-community/denied",
+                    "messages": [{"role": "user", "content": "hello"}],
+                    "stream": False,
+                },
+                token=token,
+            )
+
+        self.assertEqual(admin_error.exception.code, 403)
+        self.assertEqual(model_error.exception.code, 403)
+
+    def test_deterministic_evaluation_summarizes_selected_traces(self) -> None:
+        token = self.create_employee_key()
+        self.request(
+            "/api/chat",
+            {
+                "model": "mlx-community/example",
+                "messages": [{"role": "user", "content": "evaluate this"}],
+                "stream": False,
+            },
+            token=token,
+        )
+        _, trace_list = self.request("/api/traces", token=token)
+
+        status, body = self.request(
+            "/api/evaluations",
+            {
+                "name": "Agent smoke test",
+                "trace_ids": [trace_list["traces"][0]["id"]],
+            },
+            token=token,
+        )
+
+        self.assertEqual(status, 201)
+        self.assertEqual(body["evaluation"]["summary"]["completion_rate"], 1.0)
+        self.assertEqual(body["evaluation"]["evaluator"], "deterministic")
+
+    def test_integration_catalog_contains_agent_connection_values(self) -> None:
+        token = self.create_employee_key()
+
+        _, body = self.request("/api/integrations", token=token)
+
+        self.assertEqual(body["schema"], "machboost.integrations.v1")
+        self.assertTrue(body["openai_base_url"].endswith("/v1"))
+        self.assertIn("OLLAMA_HOST", body["clients"][1]["environment"])
 
 
 if __name__ == "__main__":
