@@ -34,7 +34,10 @@ public enum LocalNetworkAddress {
                 continue
             }
 
-            let value = String(cString: host)
+            let value = String(
+                decoding: host.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) },
+                as: UTF8.self
+            )
             guard !value.hasPrefix("169.254.") else { continue }
             let name = String(cString: interface.pointee.ifa_name)
             let priority = name == "en0" ? 0 : (name.hasPrefix("en") ? 1 : 2)
