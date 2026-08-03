@@ -21,6 +21,8 @@ a separate MachBoost installation.
 - one resident daemon for several models, bounded queues, optional replicas,
   OpenAI-compatible and Ollama-compatible routes, and live queue, latency,
   throughput, and memory metrics
+- Team and Logs & evals views for scoped employee keys, model allowlists,
+  per-key concurrency/rate limits, trace retention, and local evaluations
 - menu-bar lifecycle, optional launch at login, and Sparkle 2 updates
 - localhost serving by default; authenticated LAN serving is opt-in
 
@@ -118,12 +120,24 @@ LAN traffic is authenticated but not encrypted. Use only a trusted private
 network, or terminate TLS in an authenticated reverse proxy. Never expose the
 plain HTTP listener directly to the public internet.
 
+The bundled daemon always enables Team Mode. Employee tokens are shown once
+and stored only as hashes. Request traces default to metadata-only with bounded
+retention; prompt and response content is saved only after the operator selects
+redacted or full mode. The database stays in MachBoost Application Support.
+
 The app uses these stable discovery and control routes in addition to existing
 MachBoost APIs:
 
 - `GET /api/catalog`
 - `GET /api/metrics`
 - `GET /api/workspaces`
+- `GET /api/team/status`
+- `GET /api/team/keys`, `POST /api/team/keys`
+- `POST /api/team/keys/revoke`
+- `POST /api/team/settings`
+- `GET /api/traces`
+- `GET /api/evaluations`, `POST /api/evaluations`
+- `GET /api/integrations`
 - `POST /api/workspaces`
 - `POST /api/workspaces/index`
 - `POST /api/workspaces/query`
@@ -140,8 +154,8 @@ Build an ad-hoc signed DMG for local packaging and runtime tests without Apple
 credentials:
 
 ```sh
-./scripts/release_macos.sh 0.7.0-local --local
-open dist/macos/MachBoost-0.7.0-local-arm64.dmg
+./scripts/release_macos.sh 0.8.0-local --local
+open dist/macos/MachBoost-0.8.0-local-arm64.dmg
 ```
 
 Local mode builds the locked runtime, archives the arm64 app, embeds and signs
