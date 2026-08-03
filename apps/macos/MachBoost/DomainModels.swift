@@ -27,6 +27,7 @@ typealias GenerationStats = MachBoostDaemonClient.GenerationStats
 typealias PullEvent = MachBoostDaemonClient.PullEvent
 typealias ModelInstance = MachBoostDaemonClient.ModelInstance
 typealias ModelsResponse = MachBoostDaemonClient.ModelsResponse
+typealias ModelLoadResponse = MachBoostDaemonClient.ModelLoadResponse
 typealias ServerMetrics = MachBoostDaemonClient.ServerMetrics
 typealias TeamStatus = MachBoostDaemonClient.TeamStatus
 typealias TeamSettings = MachBoostDaemonClient.TeamSettings
