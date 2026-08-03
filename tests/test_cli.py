@@ -304,6 +304,7 @@ class CLITests(unittest.TestCase):
             queue_timeout=7.5,
             api_token="secret",
             require_auth=True,
+            team_store=None,
         )
         self.assertIn("Serving 3 replica(s)", output.getvalue())
         self.assertIn("Bearer authentication", output.getvalue())
@@ -323,6 +324,42 @@ class CLITests(unittest.TestCase):
         self.assertEqual(code, 2)
         serve_runtime.assert_not_called()
         self.assertIn("MACHBOOST_API_TOKEN", errors.getvalue())
+
+    def test_serve_enables_team_store_and_trace_policy(self):
+        output = io.StringIO()
+        errors = io.StringIO()
+        args = cli.build_parser().parse_args(
+            [
+                "serve",
+                "--team",
+                "--team-db",
+                "/tmp/machboost-team.sqlite3",
+                "--trace-mode",
+                "redacted",
+                "--trace-retention-days",
+                "30",
+                "--trace-max-mb",
+                "512",
+            ]
+        )
+
+        with (
+            patch.object(cli, "TeamStore") as team_store_type,
+            patch.object(cli, "serve_runtime") as serve_runtime,
+        ):
+            code = cli.run_serve(args, output_stream=output, error_stream=errors)
+
+        team_store = team_store_type.return_value
+        self.assertEqual(code, 0)
+        team_store_type.assert_called_once_with(Path("/tmp/machboost-team.sqlite3"))
+        team_store.update_settings.assert_called_once_with(
+            trace_mode="redacted",
+            retention_days=30,
+            max_storage_bytes=512 * 1024 * 1024,
+        )
+        self.assertIs(serve_runtime.call_args.kwargs["team_store"], team_store)
+        self.assertIn("Team gateway enabled", output.getvalue())
+        self.assertEqual(errors.getvalue(), "")
 
     def test_warm_preloads_model_through_resident_client(self):
         output = io.StringIO()
