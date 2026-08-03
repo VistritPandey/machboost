@@ -80,9 +80,13 @@ struct ModelsView: View {
                         loaded: appState.loadedModels.contains {
                             $0.model == model.repository || $0.model == model.name
                         },
+                        loading: appState.loadingModels.contains(model.name),
                         download: appState.downloads[model.name],
                         onDownload: { pendingDownload = model },
                         onCancel: { Task { await appState.cancelPull(model: model.name) } },
+                        onLoad: {
+                            Task { await appState.load(model: model.name) }
+                        },
                         onUnload: {
                             Task { await appState.stop(model: model.name) }
                         }
@@ -146,9 +150,11 @@ struct ModelsView: View {
 private struct ModelRow: View {
     let model: CatalogModel
     let loaded: Bool
+    let loading: Bool
     let download: PullEvent?
     let onDownload: () -> Void
     let onCancel: () -> Void
+    let onLoad: () -> Void
     let onUnload: () -> Void
 
     var body: some View {
@@ -205,7 +211,11 @@ private struct ModelRow: View {
 
             Spacer()
 
-            if download != nil {
+            if loading {
+                ProgressView()
+                    .controlSize(.small)
+                    .accessibilityLabel("Loading \(model.displayName)")
+            } else if download != nil {
                 Button(action: onCancel) {
                     Image(systemName: "xmark")
                 }
@@ -224,6 +234,13 @@ private struct ModelRow: View {
                 .accessibilityLabel("Download \(model.displayName)")
                 .accessibilityIdentifier("download-model-\(model.name)")
                 .help("Download model")
+            } else if model.support == "ready" {
+                Button(action: onLoad) {
+                    Image(systemName: "play.fill")
+                }
+                .accessibilityLabel("Load \(model.displayName)")
+                .accessibilityIdentifier("load-model-\(model.name)")
+                .help("Load and warm model")
             }
         }
         .padding(12)
