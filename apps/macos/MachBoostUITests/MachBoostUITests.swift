@@ -36,12 +36,30 @@ final class MachBoostUITests: XCTestCase {
         let developerTab = app.radioButtons["Developer"]
         XCTAssertTrue(developerTab.waitForExistence(timeout: 3))
         developerTab.click()
-        XCTAssertTrue(app.staticTexts["Endpoint"].exists)
+        XCTAssertTrue(app.staticTexts["Local endpoint"].exists)
+        XCTAssertTrue(app.staticTexts["127.0.0.1 is reachable only from this Mac."].exists)
+        XCTAssertTrue(app.buttons["Enable authenticated LAN access"].exists)
         XCTAssertTrue(app.staticTexts["OpenAI Python"].exists)
         XCTAssertTrue(app.staticTexts["P50 latency"].exists)
         XCTAssertTrue(app.staticTexts["240 ms"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["P95 latency"].exists)
         XCTAssertTrue(app.staticTexts["380 ms"].exists)
+    }
+
+    @MainActor
+    func testServerCanLoadAndWarmAResidentModel() {
+        let app = launchApp()
+        XCTAssertTrue(app.staticTexts["Server"].waitForExistence(timeout: 10))
+        app.staticTexts["Server"].click()
+        let developerTab = app.radioButtons["Developer"]
+        XCTAssertTrue(developerTab.waitForExistence(timeout: 3))
+        developerTab.click()
+
+        let load = app.buttons["load-resident-model"]
+        XCTAssertTrue(load.waitForExistence(timeout: 3))
+        load.click()
+
+        XCTAssertTrue(app.staticTexts["Resident model ready"].waitForExistence(timeout: 3))
     }
 
     @MainActor
