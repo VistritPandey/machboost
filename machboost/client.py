@@ -69,6 +69,90 @@ class MachBoostClient:
     def metrics(self) -> dict[str, Any]:
         return self.get("/api/metrics")
 
+    def team_status(self) -> dict[str, Any]:
+        return self.get("/api/team/status")
+
+    def team_keys(self) -> list[dict[str, Any]]:
+        return list(self.get("/api/team/keys").get("keys") or ())
+
+    def create_team_key(
+        self,
+        name: str,
+        *,
+        scopes: tuple[str, ...] = (
+            "inference",
+            "models:read",
+            "workspaces:read",
+        ),
+        allowed_models: tuple[str, ...] = (),
+        max_concurrent: int = 2,
+        requests_per_minute: int = 60,
+    ) -> dict[str, Any]:
+        return self.post(
+            "/api/team/keys",
+            {
+                "name": name,
+                "scopes": list(scopes),
+                "allowed_models": list(allowed_models),
+                "max_concurrent": int(max_concurrent),
+                "requests_per_minute": int(requests_per_minute),
+            },
+        )
+
+    def revoke_team_key(self, key_id: str) -> bool:
+        try:
+            return bool(
+                self.post("/api/team/keys/revoke", {"key_id": key_id}).get(
+                    "revoked"
+                )
+            )
+        except MachBoostAPIError as exc:
+            if exc.status == 404:
+                return False
+            raise
+
+    def update_team_settings(
+        self,
+        *,
+        trace_mode: str,
+        retention_days: Optional[int],
+        max_storage_bytes: int,
+    ) -> dict[str, Any]:
+        return dict(
+            self.post(
+                "/api/team/settings",
+                {
+                    "trace_mode": trace_mode,
+                    "retention_days": retention_days,
+                    "max_storage_bytes": int(max_storage_bytes),
+                },
+            ).get("settings")
+            or {}
+        )
+
+    def traces(self, *, limit: int = 100) -> list[dict[str, Any]]:
+        return list(self.get(f"/api/traces?limit={int(limit)}").get("traces") or ())
+
+    def evaluations(self, *, limit: int = 50) -> list[dict[str, Any]]:
+        return list(
+            self.get(f"/api/evaluations?limit={int(limit)}").get("evaluations")
+            or ()
+        )
+
+    def evaluate_traces(
+        self,
+        trace_ids: list[str],
+        *,
+        name: str = "Trace evaluation",
+        model: Optional[str] = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"trace_ids": trace_ids, "name": name}
+        if model:
+            payload["model"] = model
+        return dict(
+            self.post("/api/evaluations", payload).get("evaluation") or {}
+        )
+
     def workspaces(self) -> list[dict[str, Any]]:
         return list(self.get("/api/workspaces").get("workspaces") or ())
 
