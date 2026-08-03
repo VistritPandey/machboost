@@ -1,4 +1,48 @@
+import Darwin
 import Foundation
+
+public enum LocalNetworkAddress {
+    public static func preferredIPv4() -> String? {
+        var interfaces: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&interfaces) == 0, let first = interfaces else { return nil }
+        defer { freeifaddrs(first) }
+
+        var candidates: [(priority: Int, address: String)] = []
+        var cursor: UnsafeMutablePointer<ifaddrs>? = first
+        while let interface = cursor {
+            defer { cursor = interface.pointee.ifa_next }
+            guard let address = interface.pointee.ifa_addr else { continue }
+            let flags = Int32(interface.pointee.ifa_flags)
+            guard
+                address.pointee.sa_family == UInt8(AF_INET),
+                flags & IFF_UP != 0,
+                flags & IFF_LOOPBACK == 0
+            else {
+                continue
+            }
+
+            var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            guard getnameinfo(
+                address,
+                socklen_t(address.pointee.sa_len),
+                &host,
+                socklen_t(host.count),
+                nil,
+                0,
+                NI_NUMERICHOST
+            ) == 0 else {
+                continue
+            }
+
+            let value = String(cString: host)
+            guard !value.hasPrefix("169.254.") else { continue }
+            let name = String(cString: interface.pointee.ifa_name)
+            let priority = name == "en0" ? 0 : (name.hasPrefix("en") ? 1 : 2)
+            candidates.append((priority, value))
+        }
+        return candidates.min { $0.priority < $1.priority }?.address
+    }
+}
 
 public struct ServerConfiguration: Codable, Equatable, Sendable {
     public var lanEnabled: Bool
@@ -31,7 +75,8 @@ public struct ServerConfiguration: Codable, Equatable, Sendable {
         guard lanEnabled else { return endpoint }
         var components = URLComponents()
         components.scheme = "http"
-        components.host = ProcessInfo.processInfo.hostName
+        components.host = LocalNetworkAddress.preferredIPv4()
+            ?? ProcessInfo.processInfo.hostName
         components.port = port
         return components.url ?? endpoint
     }
@@ -668,6 +713,22 @@ public struct ModelInstance: Decodable, Identifiable, Sendable {
 
 public struct ModelsResponse: Decodable, Sendable {
     public let models: [ModelInstance]
+}
+
+public struct ModelLoadResponse: Decodable, Sendable {
+    public let status: String
+    public let model: String
+    public let loadDurationSeconds: Double
+    public let warmupDurationSeconds: Double
+    public let warmupPerformed: Bool
+    public let instance: ModelInstance
+
+    enum CodingKeys: String, CodingKey {
+        case status, model, instance
+        case loadDurationSeconds = "load_duration_seconds"
+        case warmupDurationSeconds = "warmup_duration_seconds"
+        case warmupPerformed = "warmup_performed"
+    }
 }
 
 public struct ServerMetrics: Decodable, Sendable {
