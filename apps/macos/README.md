@@ -154,15 +154,16 @@ Build an ad-hoc signed DMG for local packaging and runtime tests without Apple
 credentials:
 
 ```sh
-./scripts/release_macos.sh 0.8.0-local --local
-open dist/macos/MachBoost-0.8.0-local-arm64.dmg
+./scripts/release_macos.sh 0.8.1-local --local
+open dist/macos/MachBoost-0.8.1-local-arm64.dmg
 ```
 
 Local mode builds the locked runtime, archives the arm64 app, embeds and signs
 every native runtime binary, verifies the app and disk image, and writes a
 SHA-256 checksum. It deliberately skips notarization, stapling, and Sparkle
-appcast generation. Gatekeeper will not treat this artifact as a public release;
-use it only for development and clean-machine testing.
+appcast generation. These builds expose **View Latest Release** instead of
+starting Sparkle. Gatekeeper does not recognize them as notarized software, so
+community users must approve the app manually after each downloaded update.
 
 Public DMG releases need Vistrit Pandey's Developer ID, Apple team and
 notarization credentials, and Sparkle EdDSA keys:
