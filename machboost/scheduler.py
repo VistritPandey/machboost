@@ -23,6 +23,12 @@ class ReplicaLease:
     queue_wait_seconds: float
 
 
+@dataclass(frozen=True)
+class _Waiter:
+    ticket: int
+    tenant_key: Optional[str]
+
+
 class ReplicaPool:
     def __init__(
         self,
@@ -45,8 +51,9 @@ class ReplicaPool:
         self._condition = threading.Condition(threading.RLock())
         self._available = set(range(len(self.resources)))
         self._active: set[int] = set()
-        self._waiters: deque[int] = deque()
+        self._waiters: deque[_Waiter] = deque()
         self._next_ticket = 0
+        self._last_tenant: Optional[str] = None
         self._closed = False
         self._accepted = 0
         self._completed = 0
@@ -62,11 +69,13 @@ class ReplicaPool:
         self,
         *,
         affinity_key: Optional[str] = None,
+        tenant_key: Optional[str] = None,
         timeout: Optional[float] = None,
         cancel_event: Optional[threading.Event] = None,
     ) -> Iterator[ReplicaLease]:
         lease = self.acquire(
             affinity_key=affinity_key,
+            tenant_key=tenant_key,
             timeout=timeout,
             cancel_event=cancel_event,
         )
@@ -79,6 +88,7 @@ class ReplicaPool:
         self,
         *,
         affinity_key: Optional[str] = None,
+        tenant_key: Optional[str] = None,
         timeout: Optional[float] = None,
         cancel_event: Optional[threading.Event] = None,
     ) -> ReplicaLease:
@@ -108,7 +118,8 @@ class ReplicaPool:
                     )
                 ticket = self._next_ticket
                 self._next_ticket += 1
-                self._waiters.append(ticket)
+                waiter = _Waiter(ticket=ticket, tenant_key=tenant_key)
+                self._waiters.append(waiter)
                 self._max_queued = max(self._max_queued, len(self._waiters))
 
                 while True:
@@ -125,8 +136,8 @@ class ReplicaPool:
                             "model scheduler is shutting down",
                             reason="scheduler_closed",
                         )
-                    if self._waiters[0] == ticket and self._available:
-                        self._waiters.popleft()
+                    if self._next_waiter_ticket() == ticket and self._available:
+                        self._remove_waiter(ticket)
                         break
                     remaining = None if deadline is None else deadline - self.clock()
                     if remaining is not None and remaining <= 0:
@@ -145,6 +156,7 @@ class ReplicaPool:
             index = self._select_available(preferred)
             self._available.remove(index)
             self._active.add(index)
+            self._last_tenant = tenant_key
             self._accepted += 1
             self._worker_requests[index] += 1
             self._max_active = max(self._max_active, len(self._active))
@@ -205,6 +217,7 @@ class ReplicaPool:
                 "mean_queue_wait_seconds": (
                     self._queue_wait_total / accepted if accepted else 0.0
                 ),
+                "queued_by_tenant": self._queued_by_tenant(),
                 "workers": [
                     {
                         "index": index,
@@ -227,7 +240,24 @@ class ReplicaPool:
         return min(self._available)
 
     def _remove_waiter(self, ticket: int) -> None:
-        try:
-            self._waiters.remove(ticket)
-        except ValueError:
-            pass
+        for waiter in self._waiters:
+            if waiter.ticket == ticket:
+                self._waiters.remove(waiter)
+                return
+
+    def _next_waiter_ticket(self) -> Optional[int]:
+        if not self._waiters:
+            return None
+        if all(waiter.tenant_key is None for waiter in self._waiters):
+            return self._waiters[0].ticket
+        for waiter in self._waiters:
+            if waiter.tenant_key != self._last_tenant:
+                return waiter.ticket
+        return self._waiters[0].ticket
+
+    def _queued_by_tenant(self) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for waiter in self._waiters:
+            tenant = waiter.tenant_key or "anonymous"
+            counts[tenant] = counts.get(tenant, 0) + 1
+        return counts
