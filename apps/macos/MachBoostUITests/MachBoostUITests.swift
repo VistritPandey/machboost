@@ -99,6 +99,20 @@ final class MachBoostUITests: XCTestCase {
     }
 
     @MainActor
+    func testLongMarkdownStreamKeepsItsEndVisible() {
+        let app = launchApp()
+        send("Show a long Markdown response", in: app)
+
+        let endMarker = app.staticTexts["STREAM END MARKER"]
+        XCTAssertTrue(endMarker.waitForExistence(timeout: 8))
+        let visible = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "hittable == true"),
+            object: endMarker
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [visible], timeout: 3), .completed)
+    }
+
+    @MainActor
     func testChatGenerationCanBeStopped() {
         let app = launchApp()
         let composer = app.textFields["Message MachBoost"]
