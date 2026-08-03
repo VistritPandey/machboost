@@ -115,7 +115,7 @@ hdiutil create \
   "$DMG"
 
 hdiutil verify "$DMG"
-shasum -a 256 "$DMG" > "$DMG.sha256"
+(cd "$DIST" && shasum -a 256 "$(basename "$DMG")" > "$(basename "$DMG").sha256")
 if $LOCAL_BUILD; then
   echo "Local DMG ready:"
   echo "  $DMG"
