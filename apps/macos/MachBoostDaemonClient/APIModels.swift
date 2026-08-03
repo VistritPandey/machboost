@@ -37,6 +37,145 @@ public struct ServerConfiguration: Codable, Equatable, Sendable {
     }
 }
 
+public struct TeamSettings: Codable, Equatable, Sendable {
+    public let traceMode: String
+    public let retentionDays: Int?
+    public let maxStorageBytes: Int64
+
+    public init(traceMode: String, retentionDays: Int?, maxStorageBytes: Int64) {
+        self.traceMode = traceMode
+        self.retentionDays = retentionDays
+        self.maxStorageBytes = maxStorageBytes
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case traceMode = "trace_mode"
+        case retentionDays = "retention_days"
+        case maxStorageBytes = "max_storage_bytes"
+    }
+}
+
+public struct TeamStatus: Decodable, Sendable {
+    public let schema: String
+    public let keys: Int
+    public let traces: Int
+    public let evaluations: Int
+    public let settings: TeamSettings
+}
+
+public struct TeamKey: Codable, Identifiable, Hashable, Sendable {
+    public let id: String
+    public let name: String
+    public let kind: String
+    public let scopes: [String]
+    public let allowedModels: [String]
+    public let maxConcurrent: Int
+    public let requestsPerMinute: Int
+    public let enabled: Bool?
+    public let createdAt: String?
+    public let lastUsedAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, kind, scopes, enabled
+        case allowedModels = "allowed_models"
+        case maxConcurrent = "max_concurrent"
+        case requestsPerMinute = "requests_per_minute"
+        case createdAt = "created_at"
+        case lastUsedAt = "last_used_at"
+    }
+}
+
+public struct TeamKeysResponse: Decodable, Sendable {
+    public let schema: String
+    public let keys: [TeamKey]
+}
+
+public struct CreatedTeamKeyResponse: Decodable, Sendable {
+    public let schema: String
+    public let token: String
+    public let key: TeamKey
+}
+
+public struct TracePrincipal: Codable, Hashable, Sendable {
+    public let id: String
+    public let name: String
+}
+
+public struct TraceSummary: Codable, Identifiable, Hashable, Sendable {
+    public let id: String
+    public let requestID: String
+    public let principal: TracePrincipal
+    public let endpoint: String
+    public let model: String
+    public let status: String
+    public let startedAt: String
+    public let durationSeconds: Double
+    public let promptTokens: Int
+    public let completionTokens: Int
+    public let timeToFirstTokenSeconds: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case id, principal, endpoint, model, status
+        case requestID = "request_id"
+        case startedAt = "started_at"
+        case durationSeconds = "duration_seconds"
+        case promptTokens = "prompt_tokens"
+        case completionTokens = "completion_tokens"
+        case timeToFirstTokenSeconds = "time_to_first_token_seconds"
+    }
+}
+
+public struct TracesResponse: Decodable, Sendable {
+    public let schema: String
+    public let traces: [TraceSummary]
+}
+
+public struct EvaluationLatency: Codable, Sendable {
+    public let p50: Double
+    public let p95: Double
+}
+
+public struct EvaluationSummary: Codable, Sendable {
+    public let traceCount: Int
+    public let completionRate: Double
+    public let latencySeconds: EvaluationLatency
+    public let timeToFirstTokenSeconds: EvaluationLatency
+    public let generationTokensPerSecond: Double
+
+    enum CodingKeys: String, CodingKey {
+        case traceCount = "trace_count"
+        case completionRate = "completion_rate"
+        case latencySeconds = "latency_seconds"
+        case timeToFirstTokenSeconds = "time_to_first_token_seconds"
+        case generationTokensPerSecond = "generation_tokens_per_second"
+    }
+}
+
+public struct TraceEvaluation: Codable, Identifiable, Sendable {
+    public let id: String
+    public let name: String
+    public let evaluator: String
+    public let traceIDs: [String]
+    public let summary: EvaluationSummary
+    public let createdAt: String
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, evaluator, summary
+        case traceIDs = "trace_ids"
+        case createdAt = "created_at"
+    }
+}
+
+public struct EvaluationsResponse: Decodable, Sendable {
+    public let schema: String
+    public let evaluations: [TraceEvaluation]
+}
+
+public struct EvaluationResponse: Decodable, Sendable {
+    public let schema: String
+    public let evaluation: TraceEvaluation
+}
+
 public struct CatalogResponse: Decodable, Sendable {
     public let schema: String
     public let models: [CatalogModel]
