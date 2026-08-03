@@ -103,7 +103,9 @@ Release builds bundle pinned arm64 CPython 3.13, MLX, `mlx-lm`, `mlx-vlm`, and
 MachBoost dependencies. They do not depend on Homebrew, system Python, or an
 existing package install. The source is under [apps/macos](apps/macos/); see the
 [native app guide](apps/macos/README.md) for local builds, runtime verification,
-signing, notarization, DMG creation, and Sparkle updates.
+signing, notarization, DMG creation, and update delivery. Signed builds use
+Sparkle; unsigned community builds link to the latest GitHub Release for manual
+installation.
 
 An unsigned Apple Silicon community preview is available from the
 [MachBoost website](https://vistritpandey.github.io/machboost/) and
