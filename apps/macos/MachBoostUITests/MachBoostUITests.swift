@@ -45,6 +45,27 @@ final class MachBoostUITests: XCTestCase {
     }
 
     @MainActor
+    func testTeamGatewayAndTraceControlsOpen() {
+        let app = launchApp()
+        XCTAssertTrue(app.staticTexts["Server"].waitForExistence(timeout: 10))
+        app.staticTexts["Server"].click()
+
+        let teamTab = app.radioButtons["Team"]
+        XCTAssertTrue(teamTab.waitForExistence(timeout: 3))
+        teamTab.click()
+        XCTAssertTrue(app.staticTexts["Create employee key"].exists)
+        XCTAssertTrue(app.textFields["Name"].exists)
+        XCTAssertTrue(app.staticTexts["Coding agent environment"].exists)
+
+        let logsTab = app.radioButtons["Logs & evals"]
+        XCTAssertTrue(logsTab.exists)
+        logsTab.click()
+        XCTAssertTrue(app.staticTexts["Trace policy"].exists)
+        XCTAssertTrue(app.staticTexts["Request traces"].exists)
+        XCTAssertTrue(app.buttons["Save policy"].exists)
+    }
+
+    @MainActor
     func testChatStreamsResponseAndPerformanceStatistics() {
         let app = launchApp()
         let composer = app.textFields["Message MachBoost"]
