@@ -4,6 +4,9 @@ import Foundation
 final class UITestMachBoostAPI: MachBoostAPIProtocol, @unchecked Sendable {
     private let lock = NSLock()
     private var downloadedModels: Set<String> = []
+    private var loadedRepositories: Set<String> = [
+        "mlx-community/Qwen2.5-3B-Instruct-4bit"
+    ]
     private var cancelledRequests: Set<String> = []
     private var chatRequestCount = 0
 
@@ -41,17 +44,7 @@ final class UITestMachBoostAPI: MachBoostAPIProtocol, @unchecked Sendable {
     }
 
     func models() async throws -> [ModelInstance] {
-        [
-            ModelInstance(
-                model: "mlx-community/Qwen2.5-3B-Instruct-4bit",
-                backend: "mlx",
-                idleSeconds: 0.2,
-                keepAliveSeconds: -1,
-                requests: 1,
-                capabilities: ["chat", "completion"],
-                scheduler: .init(replicas: 1, activeRequests: 0, queuedRequests: 0)
-            )
-        ]
+        lock.withLock { loadedRepositories.sorted().map(modelInstance) }
     }
 
     func preflight(model: String) async throws -> ModelPreflightResponse.Preflight {
@@ -67,7 +60,40 @@ final class UITestMachBoostAPI: MachBoostAPIProtocol, @unchecked Sendable {
         )
     }
 
-    func stop(model: String?) async throws {}
+    func load(
+        model: String,
+        keepAlive: String,
+        warmup: Bool
+    ) async throws -> ModelLoadResponse {
+        let repository = lock.withLock {
+            makeCatalog().first {
+                $0.name == model || $0.repository == model
+            }?.repository ?? model
+        }
+        let instance = modelInstance(repository)
+        _ = lock.withLock { loadedRepositories.insert(repository) }
+        return ModelLoadResponse(
+            status: "success",
+            model: model,
+            loadDurationSeconds: 0.42,
+            warmupDurationSeconds: warmup ? 0.08 : 0,
+            warmupPerformed: warmup,
+            instance: instance
+        )
+    }
+
+    func stop(model: String?) async throws {
+        lock.withLock {
+            guard let model else {
+                loadedRepositories.removeAll()
+                return
+            }
+            let repository = makeCatalog().first {
+                $0.name == model || $0.repository == model
+            }?.repository ?? model
+            loadedRepositories.remove(repository)
+        }
+    }
 
     func cancel(requestID: String) async throws -> Bool {
         _ = lock.withLock { cancelledRequests.insert(requestID) }
@@ -192,6 +218,19 @@ final class UITestMachBoostAPI: MachBoostAPIProtocol, @unchecked Sendable {
             minimumMemoryGB: memory,
             support: "ready",
             supportReason: "UI automation fixture"
+        )
+    }
+
+    private func modelInstance(_ repository: String) -> ModelInstance {
+        let isVision = repository.localizedCaseInsensitiveContains("vl")
+        return ModelInstance(
+            model: repository,
+            backend: isVision ? "mlx-vlm" : "mlx",
+            idleSeconds: 0.2,
+            keepAliveSeconds: -1,
+            requests: 1,
+            capabilities: isVision ? ["chat", "vision"] : ["chat", "completion"],
+            scheduler: .init(replicas: 1, activeRequests: 0, queuedRequests: 0)
         )
     }
 
