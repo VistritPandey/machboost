@@ -52,7 +52,11 @@ struct MachBoostApp: App {
         .defaultSize(width: 1_180, height: 780)
         .commands {
             CommandGroup(after: .appInfo) {
-                Button("Check for Updates…") {
+                Button(
+                    updates.supportsAutomaticUpdates
+                        ? "Check for Updates…"
+                        : "View Latest Release"
+                ) {
                     updates.checkForUpdates()
                 }
                 .disabled(!updates.isAvailable)
