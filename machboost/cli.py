@@ -28,6 +28,7 @@ from .server import (
     MAX_REPLICAS,
     serve as serve_runtime,
 )
+from .team import TeamStore
 from .video import TemporalVideoSampler, VideoSelection
 from .vision_auto import VISION_TOKEN_REQUEST_MODES, load_vision_calibration
 
@@ -1139,6 +1140,25 @@ def run_serve(args: argparse.Namespace, *, output_stream=None, error_stream=None
         return 2
     if require_auth:
         print("Bearer authentication is required for API routes.", file=output_stream)
+    team_store = None
+    if args.team:
+        team_path = Path(args.team_db or "~/.machboost/team.sqlite3").expanduser()
+        team_store = TeamStore(team_path)
+        settings: dict[str, object] = {}
+        if args.trace_mode is not None:
+            settings["trace_mode"] = args.trace_mode
+        if args.trace_retention_days is not None:
+            settings["retention_days"] = (
+                None if args.trace_retention_days == 0 else args.trace_retention_days
+            )
+        if args.trace_max_mb is not None:
+            settings["max_storage_bytes"] = args.trace_max_mb * 1024 * 1024
+        if settings:
+            team_store.update_settings(**settings)
+        print(
+            f"Team gateway enabled; policy and traces: {team_path}",
+            file=output_stream,
+        )
     try:
         serve_runtime(
             args.host,
@@ -1148,10 +1168,13 @@ def run_serve(args: argparse.Namespace, *, output_stream=None, error_stream=None
             queue_timeout=args.queue_timeout,
             api_token=api_token,
             require_auth=require_auth,
+            team_store=team_store,
         )
     except KeyboardInterrupt:
         print("\nMachBoost server stopped.", file=error_stream)
     except (OSError, ValueError) as exc:
+        if team_store is not None:
+            team_store.close()
         print(f"machboost serve error: {exc}", file=error_stream)
         return 2
     return 0
@@ -1625,6 +1648,30 @@ def build_parser() -> argparse.ArgumentParser:
         "--require-auth",
         action="store_true",
         help="Require MACHBOOST_API_TOKEN as a bearer token. Enabled automatically for non-loopback hosts.",
+    )
+    serve.add_argument(
+        "--team",
+        action="store_true",
+        help="Enable scoped employee keys, fair admission, traces, and evaluations.",
+    )
+    serve.add_argument(
+        "--team-db",
+        help="Team database path. Defaults to ~/.machboost/team.sqlite3.",
+    )
+    serve.add_argument(
+        "--trace-mode",
+        choices=("off", "metadata", "redacted", "full"),
+        help="Override the persisted team trace privacy mode.",
+    )
+    serve.add_argument(
+        "--trace-retention-days",
+        type=int,
+        help="Retain traces for this many days; zero keeps them until the disk cap.",
+    )
+    serve.add_argument(
+        "--trace-max-mb",
+        type=int,
+        help="Maximum retained trace payload size in MiB.",
     )
 
     pull = subcommands.add_parser("pull", help="Download a Hugging Face or MLX model into the local cache.")
