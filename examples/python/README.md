@@ -83,6 +83,20 @@ python3 examples/python/resident_client_demo.py \
 
 The resident client demo starts the local MachBoost server when needed, loads and compile-warms the selected text model, streams the response, and leaves the model in memory for the five-minute default idle window. Pass one or more `--context PATH` arguments to enable local-context drafting. Use `machboost ps`, `machboost stop MODEL`, and `machboost shutdown` to manage the runtime.
 
+Team gateway administration:
+
+```sh
+export MACHBOOST_API_TOKEN="your-admin-token"
+machboost serve --team --host 0.0.0.0
+python3 examples/python/team_gateway_admin.py
+```
+
+The example creates one scoped employee key, prints its one-time token, lists
+recent traces, and runs a deterministic performance evaluation when traces are
+available. Run it on a private network; MachBoost does not terminate TLS. See
+[the team gateway guide](../../docs/TEAM_GATEWAY.md) for key scopes, retention,
+coding-agent configuration, and local-model judging.
+
 Warm chat latency comparison:
 
 ```sh
