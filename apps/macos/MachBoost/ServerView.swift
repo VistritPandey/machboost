@@ -24,6 +24,9 @@ struct ServerView: View {
     @State private var traceStorageMB = 256
     @State private var selectedTraceIDs: Set<String> = []
     @State private var judgeModel = ""
+    @State private var loadModel = ""
+    @State private var loadKeepAlive = "forever"
+    @State private var compileWarmup = true
 
     var body: some View {
         VStack(spacing: 0) {
@@ -86,9 +89,14 @@ struct ServerView: View {
         .onAppear {
             draftConfiguration = appState.configuration
             syncTeamSettings()
+            selectLoadModelIfNeeded()
         }
+        .onChange(of: loadableModels.map(\.name)) { selectLoadModelIfNeeded() }
         .onChange(of: appState.teamStatus?.settings) {
             syncTeamSettings()
+        }
+        .onChange(of: appState.configuration) {
+            draftConfiguration = appState.configuration
         }
         .task {
             while !Task.isCancelled {
@@ -111,6 +119,7 @@ struct ServerView: View {
     private var overview: some View {
         VStack(alignment: .leading, spacing: 18) {
             metricsGrid
+            modelLoader
 
             HStack {
                 Text("Resident models")
@@ -229,6 +238,14 @@ struct ServerView: View {
             Text("Serving configuration")
                 .font(.headline)
             Toggle("Allow authenticated LAN access", isOn: $draftConfiguration.lanEnabled)
+            Label(
+                draftConfiguration.lanEnabled
+                    ? "Remote clients will use \(draftConfiguration.advertisedEndpoint.absoluteString) with a bearer token."
+                    : "Local only. Other computers cannot reach the loopback endpoint.",
+                systemImage: draftConfiguration.lanEnabled ? "network" : "lock.fill"
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
             Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 10) {
                 GridRow {
                     Text("Port")
@@ -275,9 +292,25 @@ struct ServerView: View {
             metricsGrid
 
             VStack(alignment: .leading, spacing: 8) {
-                Text("Endpoint")
-                    .font(.headline)
+                HStack {
+                    Text(appState.configuration.lanEnabled ? "LAN endpoint" : "Local endpoint")
+                        .font(.headline)
+                    Spacer()
+                    Button(appState.configuration.lanEnabled ? "Disable LAN access" : "Enable authenticated LAN access") {
+                        var configuration = appState.configuration
+                        configuration.lanEnabled.toggle()
+                        Task { await appState.applyConfiguration(configuration) }
+                    }
+                }
                 CopyField(value: appState.configuration.advertisedEndpoint.absoluteString)
+                Label(
+                    appState.configuration.lanEnabled
+                        ? "Other devices on this network can connect at this address with the API token."
+                        : "127.0.0.1 is reachable only from this Mac.",
+                    systemImage: appState.configuration.lanEnabled ? "checkmark.circle.fill" : "info.circle"
+                )
+                .font(.caption)
+                .foregroundStyle(appState.configuration.lanEnabled ? Color.green : Color.secondary)
             }
 
             VStack(alignment: .leading, spacing: 8) {
@@ -321,6 +354,8 @@ struct ServerView: View {
                     }
                 }
             }
+
+            modelLoader
 
             SnippetView(title: "OpenAI Python", code: openAISnippet)
             SnippetView(title: "Ollama-compatible curl", code: ollamaSnippet)
@@ -542,11 +577,95 @@ struct ServerView: View {
     }
 
     private var teamEnvironmentSnippet: String {
-        """
-        export OPENAI_BASE_URL="\(appState.configuration.advertisedEndpoint.absoluteString)/v1"
+        let endpoint = appState.configuration.lanEnabled
+            ? appState.configuration.advertisedEndpoint.absoluteString
+            : "http://YOUR_MACHBOOST_MAC_IP:\(appState.configuration.port)"
+        return """
+        export OPENAI_BASE_URL="\(endpoint)/v1"
         export OPENAI_API_KEY="YOUR_MACHBOOST_KEY"
-        export OLLAMA_HOST="\(appState.configuration.advertisedEndpoint.absoluteString)"
+        export OLLAMA_HOST="\(endpoint)"
         """
+    }
+
+    private var loadableModels: [CatalogModel] {
+        appState.catalog
+            .filter { $0.cached && $0.support == "ready" }
+            .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
+    }
+
+    private var selectedLoadModel: CatalogModel? {
+        loadableModels.first { $0.name == loadModel }
+    }
+
+    private var selectedModelIsLoaded: Bool {
+        guard let selectedLoadModel else { return false }
+        return appState.loadedModels.contains {
+            $0.model == selectedLoadModel.name || $0.model == selectedLoadModel.repository
+        }
+    }
+
+    private var modelLoader: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Load a resident model")
+                .font(.headline)
+            if loadableModels.isEmpty {
+                Label("Download a compatible model before loading it.", systemImage: "arrow.down.circle")
+                    .foregroundStyle(.secondary)
+            } else {
+                HStack(spacing: 12) {
+                    Picker("Model", selection: $loadModel) {
+                        ForEach(loadableModels) { model in
+                            Text(model.displayName).tag(model.name)
+                        }
+                    }
+                    .frame(maxWidth: 340)
+
+                    Picker("Keep loaded", selection: $loadKeepAlive) {
+                        Text("15 minutes").tag("15m")
+                        Text("1 hour").tag("1h")
+                        Text("Forever").tag("forever")
+                    }
+                    .frame(width: 190)
+
+                    Toggle("Compile warm-up", isOn: $compileWarmup)
+                        .toggleStyle(.checkbox)
+
+                    Spacer()
+
+                    Button {
+                        Task {
+                            await appState.load(
+                                model: loadModel,
+                                keepAlive: loadKeepAlive,
+                                warmup: compileWarmup
+                            )
+                        }
+                    } label: {
+                        if appState.loadingModels.contains(loadModel) {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Label(
+                                selectedModelIsLoaded ? "Warm again" : "Load",
+                                systemImage: selectedModelIsLoaded ? "arrow.clockwise" : "play.fill"
+                            )
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .accessibilityIdentifier("load-resident-model")
+                    .disabled(loadModel.isEmpty || appState.loadingModels.contains(loadModel))
+                }
+                Text("Loading keeps the model in unified memory before the first client request. Warm-up compiles its initial generation path.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func selectLoadModelIfNeeded() {
+        if !loadableModels.contains(where: { $0.name == loadModel }) {
+            loadModel = loadableModels.first?.name ?? ""
+        }
     }
 
     private func traceSelection(_ id: String) -> Binding<Bool> {
