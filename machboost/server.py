@@ -501,8 +501,15 @@ class RuntimeManager:
             accelerator = lease.resource
             configure_native_prompt_cache(accelerator, options)
             if entry.config.backend.endswith("-vlm"):
+                runtime_messages = messages
+                if options.get("_tools"):
+                    runtime_messages = inject_tool_instructions(
+                        messages,
+                        options["_tools"],
+                        tool_choice=options.get("_tool_choice"),
+                    )
                 text, stats = accelerator.generate_chat(
-                    messages,
+                    runtime_messages,
                     max_tokens=max_tokens,
                     context=context,
                     on_text=timed_emit if emit is not None or cancel_event is not None else None,
@@ -521,12 +528,16 @@ class RuntimeManager:
             else:
                 if messages_have_images(messages):
                     raise ValueError("image inputs require a vision model and VLM backend")
-                text, stats = accelerator.generate_chat(
-                    messages,
-                    max_tokens=max_tokens,
-                    context=context,
-                    on_text=timed_emit if emit is not None or cancel_event is not None else None,
-                )
+                chat_kwargs: dict[str, Any] = {
+                    "max_tokens": max_tokens,
+                    "context": context,
+                    "on_text": timed_emit
+                    if emit is not None or cancel_event is not None
+                    else None,
+                }
+                if options.get("_tools"):
+                    chat_kwargs["tools"] = options["_tools"]
+                text, stats = accelerator.generate_chat(messages, **chat_kwargs)
             check_cancelled(cancel_event)
             with entry.lock:
                 entry.requests += 1
@@ -1395,6 +1406,9 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
         model = required_string(payload, "model")
         messages = normalize_messages(payload.get("messages") or ())
         options = dict(payload.get("options") or {})
+        if payload.get("tools") and payload.get("tool_choice") != "none":
+            options["_tools"] = normalize_tools(payload["tools"])
+            options["_tool_choice"] = payload.get("tool_choice", "auto")
         options["_tenant_key"] = self.principal.id
         context = payload.get("context")
         workspace = workspace_query_for_request(
@@ -1423,11 +1437,15 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                 ),
                 input_data=messages,
             )
+            content, tool_calls = extract_tool_calls(result.text)
+            message: dict[str, Any] = {"role": "assistant", "content": content}
+            if tool_calls:
+                message["tool_calls"] = ollama_tool_calls(tool_calls)
             body = {
                 "request_id": request_id,
                 "model": model,
                 "created_at": utc_timestamp(),
-                "message": {"role": "assistant", "content": result.text},
+                "message": message,
                 **result.ollama_metrics(),
             }
             if workspace is not None:
@@ -1464,7 +1482,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                     options=options,
                     keep_alive=payload.get("keep_alive"),
                     context=context,
-                    emit=emit,
+                    emit=None if options.get("_tools") else emit,
                     on_admitted=on_admitted,
                     cancel_event=cancel_event,
                 ),
@@ -1491,6 +1509,20 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                 {"request_id": request_id, "error": str(exc), "done": True}
             )
             return
+        content, tool_calls = extract_tool_calls(result.text)
+        if options.get("_tools"):
+            message = {"role": "assistant", "content": content}
+            if tool_calls:
+                message["tool_calls"] = ollama_tool_calls(tool_calls)
+            self.write_json_line(
+                {
+                    "request_id": request_id,
+                    "model": model,
+                    "created_at": utc_timestamp(),
+                    "message": message,
+                    "done": False,
+                }
+            )
         self.write_json_line(
             {
                 "request_id": request_id,
@@ -1654,6 +1686,13 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                 ),
                 input_data=messages,
             )
+            content, tool_calls = extract_tool_calls(result.text)
+            message: dict[str, Any] = {
+                "role": "assistant",
+                "content": content if content else None,
+            }
+            if tool_calls:
+                message["tool_calls"] = tool_calls
             self.send_json(
                 {
                     "id": request_id,
@@ -1661,7 +1700,11 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                     "created": int(time.time()),
                     "model": model,
                     "choices": [
-                        {"index": 0, "message": {"role": "assistant", "content": result.text}, "finish_reason": "stop"}
+                        {
+                            "index": 0,
+                            "message": message,
+                            "finish_reason": "tool_calls" if tool_calls else "stop",
+                        }
                     ],
                     "usage": usage_from_result(result),
                     "machboost": openai_machboost_result(result, workspace=workspace),
@@ -1697,7 +1740,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                     messages,
                     options=options,
                     context=context,
-                    emit=emit,
+                    emit=None if options.get("_tools") else emit,
                     on_admitted=on_admitted,
                     cancel_event=cancel_event,
                 ),
@@ -1729,13 +1772,38 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
             self.wfile.write(b"data: [DONE]\n\n")
             self.wfile.flush()
             return
+        content, tool_calls = extract_tool_calls(result.text)
+        if options.get("_tools"):
+            delta: dict[str, Any] = {}
+            if content:
+                delta["content"] = content
+            if tool_calls:
+                delta["tool_calls"] = tool_calls
+            if delta:
+                self.write_sse(
+                    {
+                        "id": request_id,
+                        "object": "chat.completion.chunk",
+                        "created": int(time.time()),
+                        "model": model,
+                        "choices": [
+                            {"index": 0, "delta": delta, "finish_reason": None}
+                        ],
+                    }
+                )
         self.write_sse(
             {
                 "id": request_id,
                 "object": "chat.completion.chunk",
                 "created": int(time.time()),
                 "model": model,
-                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {},
+                        "finish_reason": "tool_calls" if tool_calls else "stop",
+                    }
+                ],
                 "machboost": openai_machboost_result(result, workspace=workspace),
             }
         )
@@ -2184,11 +2252,16 @@ def normalize_messages(messages: Iterable[dict[str, Any]]) -> list[dict[str, Any
     for message in messages:
         role = str(message.get("role") or "user")
         content = message.get("content")
+        if content is None and message.get("tool_calls"):
+            content = ""
         if not isinstance(content, (str, list)):
             raise ValueError("message content must be text or a multimodal parts list")
         normalized_message: dict[str, Any] = {"role": role, "content": content}
         if "images" in message:
             normalized_message["images"] = normalize_image_list(message.get("images"))
+        for key in ("name", "tool_call_id", "tool_calls"):
+            if key in message:
+                normalized_message[key] = message[key]
         normalized.append(normalized_message)
     return normalized
 
@@ -2429,7 +2502,134 @@ def openai_options(payload: dict[str, Any]) -> dict[str, Any]:
     for key in ("affinity_key", "queue_timeout"):
         if key in payload:
             options[key] = payload[key]
+    if payload.get("tools") and payload.get("tool_choice") != "none":
+        options["_tools"] = normalize_tools(payload["tools"])
+        options["_tool_choice"] = payload.get("tool_choice", "auto")
+        options["_parallel_tool_calls"] = bool(payload.get("parallel_tool_calls", True))
     return options
+
+
+def normalize_tools(tools: Any) -> list[dict[str, Any]]:
+    if not isinstance(tools, list):
+        raise ValueError("tools must be a list")
+    normalized: list[dict[str, Any]] = []
+    for tool in tools:
+        if not isinstance(tool, dict):
+            raise ValueError("each tool must be an object")
+        function = tool.get("function") if tool.get("type") == "function" else tool
+        if not isinstance(function, dict):
+            raise ValueError("tool function must be an object")
+        name = str(function.get("name") or "").strip()
+        if not name:
+            raise ValueError("tool function name is required")
+        parameters = function.get("parameters") or {"type": "object", "properties": {}}
+        if not isinstance(parameters, dict):
+            raise ValueError("tool parameters must be an object")
+        normalized.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "description": str(function.get("description") or ""),
+                    "parameters": parameters,
+                },
+            }
+        )
+    return normalized
+
+
+def inject_tool_instructions(
+    messages: Sequence[dict[str, Any]],
+    tools: Sequence[dict[str, Any]],
+    *,
+    tool_choice: Any = "auto",
+) -> list[dict[str, Any]]:
+    instruction = (
+        "Available tools follow. When a tool is needed, emit one or more "
+        "<tool_call>{\"name\":\"tool_name\",\"arguments\":{...}}</tool_call> "
+        "objects and do not invent tool results.\n"
+        + json.dumps(list(tools), separators=(",", ":"), ensure_ascii=True)
+    )
+    if tool_choice == "required":
+        instruction += "\nYou must call at least one tool."
+    elif isinstance(tool_choice, dict):
+        function = tool_choice.get("function") or {}
+        name = str(function.get("name") or "").strip()
+        if name:
+            instruction += f"\nYou must call the {name} tool."
+    return [{"role": "system", "content": instruction}, *map(dict, messages)]
+
+
+def extract_tool_calls(text: str) -> tuple[str, list[dict[str, Any]]]:
+    raw = str(text or "")
+    matches = re.findall(r"<tool_call>\s*(.*?)\s*</tool_call>", raw, flags=re.S | re.I)
+    if not matches:
+        candidate = raw.strip()
+        if candidate.startswith("```"):
+            candidate = re.sub(r"^```(?:json)?\s*|\s*```$", "", candidate, flags=re.I)
+        try:
+            value = json.loads(candidate)
+        except json.JSONDecodeError:
+            value = None
+        if isinstance(value, dict) and ("name" in value or "function" in value):
+            matches = [candidate]
+        elif isinstance(value, list) and all(
+            isinstance(item, dict) and ("name" in item or "function" in item)
+            for item in value
+        ):
+            matches = [json.dumps(item) for item in value]
+    calls: list[dict[str, Any]] = []
+    for candidate in matches:
+        try:
+            value = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        function = value.get("function") if isinstance(value, dict) else None
+        function = function if isinstance(function, dict) else value
+        if not isinstance(function, dict):
+            continue
+        name = str(function.get("name") or "").strip()
+        if not name:
+            continue
+        arguments = function.get("arguments") or {}
+        if isinstance(arguments, str):
+            argument_text = arguments
+        else:
+            argument_text = json.dumps(arguments, separators=(",", ":"), ensure_ascii=True)
+        calls.append(
+            {
+                "id": str(value.get("id") or f"call_{uuid.uuid4().hex[:24]}"),
+                "type": "function",
+                "function": {"name": name, "arguments": argument_text},
+            }
+        )
+    content = re.sub(r"<tool_call>\s*.*?\s*</tool_call>", "", raw, flags=re.S | re.I).strip()
+    if calls and not matches[0].startswith("<tool_call>") and not re.search(
+        r"<tool_call>", raw, flags=re.I
+    ):
+        content = ""
+    return content, calls
+
+
+def ollama_tool_calls(calls: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    result = []
+    for call in calls:
+        function = dict(call.get("function") or {})
+        arguments = function.get("arguments") or "{}"
+        if isinstance(arguments, str):
+            try:
+                arguments = json.loads(arguments)
+            except json.JSONDecodeError:
+                arguments = {"raw": arguments}
+        result.append(
+            {
+                "function": {
+                    "name": str(function.get("name") or ""),
+                    "arguments": arguments,
+                }
+            }
+        )
+    return result
 
 
 def usage_from_result(result: GenerationResult) -> dict[str, int]:
