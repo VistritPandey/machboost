@@ -468,6 +468,8 @@ export OPENAI_API_KEY="mbk_employee_key"</code></pre>
             <p>
               The app and CLI speak through the same daemon. Point OpenAI-compatible
               clients at MachBoost or call the Ollama-style routes directly.
+              Loopback works only on the host Mac; authenticated LAN mode displays a
+              reachable address and token for teammates on the same private network.
             </p>
           </div>
           <div class="code-samples">
@@ -482,6 +484,7 @@ export OPENAI_API_KEY="mbk_employee_key"</code></pre>
               <pre id="openai-code"><code>from openai import OpenAI
 
 client = OpenAI(
+    # Same Mac. For teammates, use the LAN URL shown in Server > Developer.
     base_url="http://127.0.0.1:11435/v1",
     api_key="machboost"
 )
