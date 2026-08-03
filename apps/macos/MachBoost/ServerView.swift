@@ -5,6 +5,8 @@ struct ServerView: View {
     enum Mode: String, CaseIterable, Identifiable {
         case overview = "Overview"
         case developer = "Developer"
+        case team = "Team"
+        case logs = "Logs & evals"
         var id: Self { self }
     }
 
@@ -12,6 +14,16 @@ struct ServerView: View {
     @State private var mode: Mode = .overview
     @State private var draftConfiguration = ServerConfiguration()
     @State private var revealToken = false
+    @State private var newKeyName = ""
+    @State private var allowedModels = ""
+    @State private var keyConcurrency = 2
+    @State private var keyRateLimit = 60
+    @State private var traceMode = "metadata"
+    @State private var retentionDays = 7
+    @State private var keepTracesForever = false
+    @State private var traceStorageMB = 256
+    @State private var selectedTraceIDs: Set<String> = []
+    @State private var judgeModel = ""
 
     var body: some View {
         VStack(spacing: 0) {
@@ -25,7 +37,7 @@ struct ServerView: View {
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
-                .frame(width: 220)
+                .frame(width: 420)
                 Spacer()
                 statusLabel
                 Button {
@@ -60,6 +72,10 @@ struct ServerView: View {
                         overview
                     case .developer:
                         developer
+                    case .team:
+                        team
+                    case .logs:
+                        logsAndEvaluations
                     }
                 }
                 .padding(20)
@@ -67,7 +83,13 @@ struct ServerView: View {
                 .frame(maxWidth: .infinity)
             }
         }
-        .onAppear { draftConfiguration = appState.configuration }
+        .onAppear {
+            draftConfiguration = appState.configuration
+            syncTeamSettings()
+        }
+        .onChange(of: appState.teamStatus?.settings) {
+            syncTeamSettings()
+        }
         .task {
             while !Task.isCancelled {
                 await appState.refreshMetrics()
@@ -303,6 +325,249 @@ struct ServerView: View {
             SnippetView(title: "OpenAI Python", code: openAISnippet)
             SnippetView(title: "Ollama-compatible curl", code: ollamaSnippet)
         }
+    }
+
+    private var team: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            HStack(spacing: 12) {
+                MetricTile(
+                    title: "Active keys",
+                    value: "\(appState.teamStatus?.keys ?? 0)",
+                    systemImage: "key.fill"
+                )
+                MetricTile(
+                    title: "Saved traces",
+                    value: "\(appState.teamStatus?.traces ?? 0)",
+                    systemImage: "waveform.path.ecg"
+                )
+                MetricTile(
+                    title: "Evaluations",
+                    value: "\(appState.teamStatus?.evaluations ?? 0)",
+                    systemImage: "checkmark.seal.fill"
+                )
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Create employee key")
+                    .font(.headline)
+                TextField("Name", text: $newKeyName)
+                TextField("Allowed models, comma-separated (blank allows all)", text: $allowedModels)
+                HStack(spacing: 18) {
+                    Stepper("Concurrent \(keyConcurrency)", value: $keyConcurrency, in: 1...16)
+                    Stepper("Requests/min \(keyRateLimit)", value: $keyRateLimit, in: 1...600, step: 10)
+                    Spacer()
+                    Button {
+                        Task {
+                            await appState.createTeamKey(
+                                name: newKeyName,
+                                allowedModels: allowedModels
+                                    .split(separator: ",")
+                                    .map { $0.trimmingCharacters(in: .whitespaces) }
+                                    .filter { !$0.isEmpty },
+                                maxConcurrent: keyConcurrency,
+                                requestsPerMinute: keyRateLimit
+                            )
+                            newKeyName = ""
+                        }
+                    } label: {
+                        Label("Create key", systemImage: "key.fill")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(newKeyName.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            }
+
+            if let token = appState.lastCreatedTeamToken {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("New key")
+                            .font(.headline)
+                        Spacer()
+                        Button {
+                            appState.clearCreatedTeamToken()
+                        } label: {
+                            Image(systemName: "xmark")
+                        }
+                        .help("Dismiss key")
+                    }
+                    CopyField(value: token)
+                    Text("Shown once. Store it in the employee's client configuration.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(12)
+                .background(Color.green.opacity(0.1))
+                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Employee access")
+                    .font(.headline)
+                if appState.teamKeys.isEmpty {
+                    ContentUnavailableView("No employee keys", systemImage: "person.badge.key")
+                        .frame(maxWidth: .infinity, minHeight: 120)
+                } else {
+                    ForEach(appState.teamKeys) { key in
+                        HStack(spacing: 12) {
+                            Image(systemName: key.enabled == false ? "key.slash" : "key.fill")
+                                .foregroundStyle(key.enabled == false ? .secondary : Color.green)
+                                .frame(width: 24)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(key.name)
+                                    .font(.body.weight(.medium))
+                                Text("\(key.maxConcurrent) concurrent · \(key.requestsPerMinute)/min · \(key.allowedModels.isEmpty ? "all models" : "\(key.allowedModels.count) models")")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Button(role: .destructive) {
+                                Task { await appState.revokeTeamKey(id: key.id) }
+                            } label: {
+                                Image(systemName: "trash")
+                            }
+                            .help("Revoke key")
+                            .disabled(key.enabled == false)
+                        }
+                        .padding(.vertical, 6)
+                        Divider()
+                    }
+                }
+            }
+
+            SnippetView(title: "Coding agent environment", code: teamEnvironmentSnippet)
+        }
+    }
+
+    private var logsAndEvaluations: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Trace policy")
+                    .font(.headline)
+                Picker("Content", selection: $traceMode) {
+                    Text("Off").tag("off")
+                    Text("Metadata").tag("metadata")
+                    Text("Redacted").tag("redacted")
+                    Text("Full").tag("full")
+                }
+                .pickerStyle(.segmented)
+                Toggle("Keep until storage limit", isOn: $keepTracesForever)
+                HStack(spacing: 18) {
+                    Stepper("Retention \(retentionDays) days", value: $retentionDays, in: 1...365)
+                        .disabled(keepTracesForever)
+                    Stepper("Storage \(traceStorageMB) MB", value: $traceStorageMB, in: 32...4096, step: 32)
+                    Spacer()
+                    Button("Save policy") {
+                        Task {
+                            await appState.updateTeamSettings(
+                                traceMode: traceMode,
+                                retentionDays: keepTracesForever ? nil : retentionDays,
+                                maxStorageBytes: Int64(traceStorageMB) * 1024 * 1024
+                            )
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Text("Request traces")
+                        .font(.headline)
+                    Spacer()
+                    Button {
+                        Task { await appState.refreshTeam() }
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .help("Refresh traces")
+                }
+                if appState.traces.isEmpty {
+                    ContentUnavailableView("No retained traces", systemImage: "waveform.path.ecg")
+                        .frame(maxWidth: .infinity, minHeight: 120)
+                } else {
+                    ForEach(appState.traces.prefix(50)) { trace in
+                        Toggle(isOn: traceSelection(trace.id)) {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(trace.model)
+                                        .font(.body.weight(.medium))
+                                        .lineLimit(1)
+                                    Text("\(trace.principal.name) · \(trace.endpoint) · \(trace.completionTokens) tokens")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Text(formatLatency(trace.durationSeconds))
+                                    .font(.caption.monospacedDigit())
+                                Image(systemName: trace.status == "completed" ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
+                                    .foregroundStyle(trace.status == "completed" ? Color.green : Color.red)
+                            }
+                        }
+                        .toggleStyle(.checkbox)
+                        Divider()
+                    }
+                }
+            }
+
+            HStack {
+                TextField("Optional local judge model", text: $judgeModel)
+                Button("Evaluate selected") {
+                    Task {
+                        await appState.evaluateTraces(
+                            ids: Array(selectedTraceIDs),
+                            model: judgeModel.trimmingCharacters(in: .whitespaces).isEmpty
+                                ? nil
+                                : judgeModel
+                        )
+                        selectedTraceIDs.removeAll()
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(selectedTraceIDs.isEmpty)
+            }
+
+            if let latest = appState.evaluations.first {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Latest evaluation")
+                        .font(.headline)
+                    HStack(spacing: 20) {
+                        LabeledContent("Evaluator", value: latest.evaluator)
+                        LabeledContent("Completion", value: latest.summary.completionRate.formatted(.percent.precision(.fractionLength(0))))
+                        LabeledContent("P50", value: formatLatency(latest.summary.latencySeconds.p50))
+                        LabeledContent("Throughput", value: "\(latest.summary.generationTokensPerSecond.formatted(.number.precision(.fractionLength(1)))) tok/s")
+                    }
+                }
+            }
+        }
+    }
+
+    private var teamEnvironmentSnippet: String {
+        """
+        export OPENAI_BASE_URL="\(appState.configuration.advertisedEndpoint.absoluteString)/v1"
+        export OPENAI_API_KEY="YOUR_MACHBOOST_KEY"
+        export OLLAMA_HOST="\(appState.configuration.advertisedEndpoint.absoluteString)"
+        """
+    }
+
+    private func traceSelection(_ id: String) -> Binding<Bool> {
+        Binding(
+            get: { selectedTraceIDs.contains(id) },
+            set: { selected in
+                if selected {
+                    selectedTraceIDs.insert(id)
+                } else {
+                    selectedTraceIDs.remove(id)
+                }
+            }
+        )
+    }
+
+    private func syncTeamSettings() {
+        guard let settings = appState.teamStatus?.settings else { return }
+        traceMode = settings.traceMode
+        keepTracesForever = settings.retentionDays == nil
+        retentionDays = settings.retentionDays ?? 7
+        traceStorageMB = max(32, Int(settings.maxStorageBytes / 1024 / 1024))
     }
 
     private var openAISnippet: String {
