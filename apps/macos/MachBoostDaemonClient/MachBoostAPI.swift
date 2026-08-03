@@ -25,6 +25,28 @@ public protocol MachBoostAPIProtocol: AnyObject, Sendable {
     func registerWorkspace(path: String, name: String?) async throws -> WorkspaceSummary
     func reindexWorkspace(id: String) async throws -> WorkspaceSummary
     func removeWorkspace(id: String) async throws
+    func teamStatus() async throws -> TeamStatus?
+    func teamKeys() async throws -> [TeamKey]
+    func createTeamKey(
+        name: String,
+        scopes: [String],
+        allowedModels: [String],
+        maxConcurrent: Int,
+        requestsPerMinute: Int
+    ) async throws -> CreatedTeamKeyResponse
+    func revokeTeamKey(id: String) async throws
+    func updateTeamSettings(
+        traceMode: String,
+        retentionDays: Int?,
+        maxStorageBytes: Int64
+    ) async throws -> TeamSettings
+    func traces(limit: Int) async throws -> [TraceSummary]
+    func evaluations(limit: Int) async throws -> [TraceEvaluation]
+    func evaluate(
+        traceIDs: [String],
+        name: String,
+        model: String?
+    ) async throws -> TraceEvaluation
     func preflight(model: String) async throws -> ModelPreflightResponse.Preflight
     func stop(model: String?) async throws
     func cancel(requestID: String) async throws -> Bool
@@ -60,6 +82,41 @@ public extension MachBoostAPIProtocol {
             status: 501,
             message: "This client does not support repository workspaces."
         )
+    }
+
+    func teamStatus() async throws -> TeamStatus? { nil }
+    func teamKeys() async throws -> [TeamKey] { [] }
+    func traces(limit: Int) async throws -> [TraceSummary] { [] }
+    func evaluations(limit: Int) async throws -> [TraceEvaluation] { [] }
+
+    func createTeamKey(
+        name: String,
+        scopes: [String],
+        allowedModels: [String],
+        maxConcurrent: Int,
+        requestsPerMinute: Int
+    ) async throws -> CreatedTeamKeyResponse {
+        throw MachBoostAPIError.server(status: 501, message: "Team mode is unavailable.")
+    }
+
+    func revokeTeamKey(id: String) async throws {
+        throw MachBoostAPIError.server(status: 501, message: "Team mode is unavailable.")
+    }
+
+    func updateTeamSettings(
+        traceMode: String,
+        retentionDays: Int?,
+        maxStorageBytes: Int64
+    ) async throws -> TeamSettings {
+        throw MachBoostAPIError.server(status: 501, message: "Team mode is unavailable.")
+    }
+
+    func evaluate(
+        traceIDs: [String],
+        name: String,
+        model: String?
+    ) async throws -> TraceEvaluation {
+        throw MachBoostAPIError.server(status: 501, message: "Team mode is unavailable.")
     }
 }
 
@@ -149,6 +206,84 @@ public final class MachBoostAPI: MachBoostAPIProtocol, @unchecked Sendable {
         guard response.removed else {
             throw MachBoostAPIError.invalidResponse
         }
+    }
+
+    public func teamStatus() async throws -> TeamStatus? {
+        try await get("/api/team/status")
+    }
+
+    public func teamKeys() async throws -> [TeamKey] {
+        let response: TeamKeysResponse = try await get("/api/team/keys")
+        return response.keys
+    }
+
+    public func createTeamKey(
+        name: String,
+        scopes: [String],
+        allowedModels: [String],
+        maxConcurrent: Int,
+        requestsPerMinute: Int
+    ) async throws -> CreatedTeamKeyResponse {
+        try await post(
+            "/api/team/keys",
+            jsonObject: [
+                "name": name,
+                "scopes": scopes,
+                "allowed_models": allowedModels,
+                "max_concurrent": maxConcurrent,
+                "requests_per_minute": requestsPerMinute,
+            ]
+        )
+    }
+
+    public func revokeTeamKey(id: String) async throws {
+        struct RevokeResponse: Decodable { let revoked: Bool }
+        let response: RevokeResponse = try await post(
+            "/api/team/keys/revoke",
+            jsonObject: ["key_id": id]
+        )
+        guard response.revoked else { throw MachBoostAPIError.invalidResponse }
+    }
+
+    public func updateTeamSettings(
+        traceMode: String,
+        retentionDays: Int?,
+        maxStorageBytes: Int64
+    ) async throws -> TeamSettings {
+        struct SettingsResponse: Decodable { let settings: TeamSettings }
+        let response: SettingsResponse = try await post(
+            "/api/team/settings",
+            jsonObject: [
+                "trace_mode": traceMode,
+                "retention_days": retentionDays.map { $0 as Any } ?? NSNull(),
+                "max_storage_bytes": maxStorageBytes,
+            ]
+        )
+        return response.settings
+    }
+
+    public func traces(limit: Int = 100) async throws -> [TraceSummary] {
+        let response: TracesResponse = try await get("/api/traces?limit=\(limit)")
+        return response.traces
+    }
+
+    public func evaluations(limit: Int = 50) async throws -> [TraceEvaluation] {
+        let response: EvaluationsResponse = try await get("/api/evaluations?limit=\(limit)")
+        return response.evaluations
+    }
+
+    public func evaluate(
+        traceIDs: [String],
+        name: String,
+        model: String? = nil
+    ) async throws -> TraceEvaluation {
+        var payload: [String: Any] = ["trace_ids": traceIDs, "name": name]
+        if let model, !model.isEmpty { payload["model"] = model }
+        let response: EvaluationResponse = try await post(
+            "/api/evaluations",
+            jsonObject: payload
+        )
+        return response.evaluation
     }
 
     public func preflight(model: String) async throws -> ModelPreflightResponse.Preflight {
