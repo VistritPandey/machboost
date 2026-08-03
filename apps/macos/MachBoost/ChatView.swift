@@ -4,6 +4,8 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct ChatView: View {
+    private static let bottomAnchor = "machboost-chat-bottom"
+
     @Environment(AppState.self) private var appState
     @Environment(\.modelContext) private var modelContext
     @Bindable var conversation: Conversation
@@ -193,7 +195,7 @@ struct ChatView: View {
 
         return ScrollViewReader { (proxy: ScrollViewProxy) in
             ScrollView(.vertical, showsIndicators: true) {
-                LazyVStack(alignment: .leading, spacing: 2) {
+                LazyVStack(alignment: .leading, spacing: 0) {
                     if messages.isEmpty {
                         ContentUnavailableView(
                             "Start a conversation",
@@ -214,22 +216,30 @@ struct ChatView: View {
                             .id(message.id)
                         }
                     }
+
+                    Color.clear
+                        .frame(height: 1)
+                        .id(Self.bottomAnchor)
+                        .accessibilityIdentifier("chat-scroll-bottom")
                 }
-                .padding(.vertical, 12)
+                .padding(.vertical, 10)
             }
+            .defaultScrollAnchor(.bottom)
+            .onAppear {
+                proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
+            }
+            .onChange(of: conversation.id, perform: { _ in
+                proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
+            })
             .onChange(of: messages.count, perform: { _ in
-                if let last = messages.last {
-                    withAnimation(.easeOut(duration: 0.18)) {
-                        proxy.scrollTo(last.id, anchor: UnitPoint.bottom)
-                    }
+                withAnimation(.easeOut(duration: 0.18)) {
+                    proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
                 }
             })
             .onChange(
                 of: messages.last?.content,
                 perform: { _ in
-                    if let last = messages.last {
-                        proxy.scrollTo(last.id, anchor: UnitPoint.bottom)
-                    }
+                    proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
                 }
             )
         }
@@ -335,7 +345,10 @@ struct ChatView: View {
             }
             .frame(width: 52, height: 36)
         }
-        .padding(12)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 14)
+        .frame(maxWidth: 980)
+        .frame(maxWidth: .infinity)
     }
 
     private var selectableModels: [CatalogModel] {
@@ -593,9 +606,12 @@ private struct MessageRow: View {
                     stats
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 12)
+        .padding(.horizontal, 22)
+        .padding(.vertical, 16)
+        .frame(maxWidth: 980, alignment: .leading)
+        .frame(maxWidth: .infinity)
         .background(
             message.role == .user
                 ? Color(nsColor: .controlBackgroundColor).opacity(0.55)
