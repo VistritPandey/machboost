@@ -39,9 +39,9 @@ struct ChatView: View {
         .onAppear {
             selectAvailableModelIfNeeded()
         }
-        .onChange(of: selectableModels.map(\.name), perform: { _ in
+        .onChange(of: selectableModels.map(\.name)) {
             selectAvailableModelIfNeeded()
-        })
+        }
         .onDisappear {
             stop()
         }
@@ -228,14 +228,14 @@ struct ChatView: View {
             .onAppear {
                 proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
             }
-            .onChange(of: conversation.id, perform: { _ in
+            .onChange(of: conversation.id) {
                 proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
-            })
-            .onChange(of: messages.count, perform: { _ in
+            }
+            .onChange(of: messages.count) {
                 withAnimation(.easeOut(duration: 0.18)) {
                     proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
                 }
-            })
+            }
             .task(id: messages.last?.content) {
                 try? await Task.sleep(for: .milliseconds(100))
                 guard !Task.isCancelled else { return }
