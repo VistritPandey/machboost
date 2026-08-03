@@ -8,13 +8,37 @@ struct MessageContentView: View {
         VStack(alignment: .leading, spacing: 10) {
             ForEach(Array(markdownBlocks.enumerated()), id: \.offset) { _, block in
                 switch block {
-                case let .prose(text):
+                case let .paragraph(text):
+                    prose(text)
+                case let .heading(level, text):
                     Text(markdown: text)
-                        .font(.body)
+                        .font(headingFont(level))
                         .textSelection(.enabled)
-                        .lineSpacing(4)
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
+                case let .bullet(text):
+                    HStack(alignment: .firstTextBaseline, spacing: 9) {
+                        Image(systemName: "circle.fill")
+                            .font(.system(size: 5))
+                            .frame(width: 10)
+                        prose(text)
+                    }
+                case let .numbered(marker, text):
+                    HStack(alignment: .firstTextBaseline, spacing: 9) {
+                        Text(marker)
+                            .font(.body.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                            .frame(minWidth: 22, alignment: .trailing)
+                        prose(text)
+                    }
+                case let .quote(text):
+                    HStack(alignment: .top, spacing: 10) {
+                        Rectangle()
+                            .fill(Color.teal)
+                            .frame(width: 3)
+                        prose(text)
+                            .foregroundStyle(.secondary)
+                    }
                 case let .code(language, code):
                     CodeBlockView(language: language, code: code)
                 }
@@ -25,6 +49,23 @@ struct MessageContentView: View {
 
     private var markdownBlocks: [MarkdownBlock] {
         MarkdownBlock.parse(content)
+    }
+
+    private func prose(_ text: String) -> some View {
+        Text(markdown: text)
+            .font(.body)
+            .textSelection(.enabled)
+            .lineSpacing(4)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func headingFont(_ level: Int) -> Font {
+        switch level {
+        case 1: .title2.weight(.semibold)
+        case 2: .title3.weight(.semibold)
+        default: .headline
+        }
     }
 }
 
@@ -73,7 +114,11 @@ private struct CodeBlockView: View {
 }
 
 private enum MarkdownBlock {
-    case prose(String)
+    case paragraph(String)
+    case heading(level: Int, text: String)
+    case bullet(String)
+    case numbered(marker: String, text: String)
+    case quote(String)
     case code(language: String, code: String)
 
     static func parse(_ source: String) -> [MarkdownBlock] {
@@ -84,9 +129,7 @@ private enum MarkdownBlock {
         var insideCode = false
 
         func flushProse() {
-            let value = prose.joined(separator: "\n")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            if !value.isEmpty { blocks.append(.prose(value)) }
+            appendProse(prose, to: &blocks)
             prose.removeAll(keepingCapacity: true)
         }
 
@@ -116,7 +159,72 @@ private enum MarkdownBlock {
         } else {
             flushProse()
         }
-        return blocks.isEmpty ? [.prose(source)] : blocks
+        return blocks.isEmpty ? [.paragraph(source)] : blocks
+    }
+
+    private static func appendProse(
+        _ lines: [String],
+        to blocks: inout [MarkdownBlock]
+    ) {
+        var paragraph: [String] = []
+
+        func flushParagraph() {
+            let text = paragraph.joined(separator: " ")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !text.isEmpty { blocks.append(.paragraph(text)) }
+            paragraph.removeAll(keepingCapacity: true)
+        }
+
+        for rawLine in lines {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            if line.isEmpty {
+                flushParagraph()
+                continue
+            }
+
+            let headingMarks = line.prefix { $0 == "#" }.count
+            if (1...6).contains(headingMarks) {
+                let remainder = line.dropFirst(headingMarks)
+                if remainder.first == " " {
+                    flushParagraph()
+                    blocks.append(
+                        .heading(
+                            level: headingMarks,
+                            text: remainder.trimmingCharacters(in: .whitespaces)
+                        )
+                    )
+                    continue
+                }
+            }
+
+            if line.hasPrefix("- ") || line.hasPrefix("* ") || line.hasPrefix("+ ") {
+                flushParagraph()
+                blocks.append(.bullet(String(line.dropFirst(2))))
+                continue
+            }
+
+            let pieces = line.split(separator: " ", maxSplits: 1)
+            if
+                pieces.count == 2,
+                pieces[0].hasSuffix("."),
+                Int(pieces[0].dropLast()) != nil
+            {
+                flushParagraph()
+                blocks.append(
+                    .numbered(marker: String(pieces[0]), text: String(pieces[1]))
+                )
+                continue
+            }
+
+            if line.hasPrefix("> ") {
+                flushParagraph()
+                blocks.append(.quote(String(line.dropFirst(2))))
+                continue
+            }
+
+            paragraph.append(line)
+        }
+        flushParagraph()
     }
 }
 
