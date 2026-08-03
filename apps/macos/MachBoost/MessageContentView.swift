@@ -10,13 +10,17 @@ struct MessageContentView: View {
                 switch block {
                 case let .prose(text):
                     Text(markdown: text)
+                        .font(.body)
                         .textSelection(.enabled)
-                        .lineSpacing(3)
+                        .lineSpacing(4)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 case let .code(language, code):
                     CodeBlockView(language: language, code: code)
                 }
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var markdownBlocks: [MarkdownBlock] {
@@ -55,10 +59,11 @@ private struct CodeBlockView: View {
                     .font(.system(.body, design: .monospaced))
                     .textSelection(.enabled)
                     .padding(12)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
             }
             .background(Color(nsColor: .textBackgroundColor))
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 6, style: .continuous)
