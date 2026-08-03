@@ -54,7 +54,15 @@ class FakeAccelerator:
         self.chat_calls = []
         self.generate_calls = []
 
-    def generate_chat(self, messages, *, max_tokens, context=None, on_text=None):
+    def generate_chat(
+        self,
+        messages,
+        *,
+        max_tokens,
+        context=None,
+        on_text=None,
+        tools=None,
+    ):
         self.chat_calls.append((messages, max_tokens, context))
         if on_text is not None:
             on_text("hello ")
@@ -66,6 +74,24 @@ class FakeAccelerator:
         if on_text is not None:
             on_text("completed")
         return "completed", FakeStats(generated_tokens=1)
+
+
+class ToolCallingAccelerator(FakeAccelerator):
+    def generate_chat(
+        self,
+        messages,
+        *,
+        max_tokens,
+        context=None,
+        on_text=None,
+        tools=None,
+    ):
+        self.chat_calls.append((messages, max_tokens, context, tools))
+        return (
+            '<tool_call>{"name":"read_file","arguments":{"path":"a.py"}}</tool_call>'
+            '<tool_call>{"name":"search_repo","arguments":{"query":"cancel"}}</tool_call>',
+            FakeStats(generated_tokens=20),
+        )
 
 
 class FakeVisionAccelerator:
@@ -504,6 +530,8 @@ class HTTPServerTests(unittest.TestCase):
     def _load(self, config):
         if config.model.endswith("failing"):
             accelerator = FailingAccelerator()
+        elif config.model.endswith("tool-calling"):
+            accelerator = ToolCallingAccelerator()
         else:
             accelerator = FakeVisionAccelerator() if config.backend.endswith("-vlm") else FakeAccelerator()
         self.loaded.append((config, accelerator))
@@ -928,6 +956,64 @@ class HTTPServerTests(unittest.TestCase):
         self.assertEqual(response["object"], "text_completion")
         self.assertEqual(response["choices"][0]["text"], "completed")
         self.assertEqual(self.loaded[0][1].generate_calls[0][1], 16)
+
+    def test_openai_chat_returns_parallel_tool_calls(self):
+        _, _, body = self.request(
+            "/v1/chat/completions",
+            {
+                "model": "mlx-community/tool-calling",
+                "messages": [{"role": "user", "content": "Inspect and search"}],
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "read_file",
+                            "parameters": {"type": "object"},
+                        },
+                    },
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "search_repo",
+                            "parameters": {"type": "object"},
+                        },
+                    },
+                ],
+                "parallel_tool_calls": True,
+            },
+        )
+
+        response = json.loads(body)
+        choice = response["choices"][0]
+        calls = choice["message"]["tool_calls"]
+        self.assertEqual(choice["finish_reason"], "tool_calls")
+        self.assertEqual([call["function"]["name"] for call in calls], ["read_file", "search_repo"])
+        self.assertEqual(json.loads(calls[0]["function"]["arguments"])["path"], "a.py")
+        self.assertEqual(len(self.loaded[0][1].chat_calls[0][3]), 2)
+
+    def test_ollama_chat_returns_compatible_tool_calls(self):
+        _, _, body = self.request(
+            "/api/chat",
+            {
+                "model": "mlx-community/tool-calling",
+                "messages": [{"role": "user", "content": "Inspect and search"}],
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "read_file",
+                            "parameters": {"type": "object"},
+                        },
+                    }
+                ],
+                "stream": False,
+            },
+        )
+
+        response = json.loads(body)
+        calls = response["message"]["tool_calls"]
+        self.assertEqual(calls[0]["function"]["name"], "read_file")
+        self.assertEqual(calls[0]["function"]["arguments"]["path"], "a.py")
 
     def test_stop_endpoint_unloads_resident_model(self):
         self.request(
