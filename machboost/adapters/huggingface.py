@@ -72,6 +72,23 @@ class HuggingFaceCausalLMService:
             raise ValueError("decode requires a tokenizer")
         return self.tokenizer.decode(list(tokens), skip_special_tokens=skip_special_tokens)
 
+    def embed(self, texts: Sequence[str]) -> list[list[float]]:
+        torch = _torch()
+        layer = getattr(self.model, "get_input_embeddings", lambda: None)()
+        if layer is None:
+            raise ValueError("model does not expose an input embedding layer")
+        results: list[list[float]] = []
+        with torch.inference_mode():
+            for text in texts:
+                tokens = self.encode(str(text))
+                if not tokens:
+                    raise ValueError("embedding input cannot be empty")
+                input_ids = torch.tensor([tokens], dtype=torch.long, device=self.device)
+                pooled = layer(input_ids)[0].mean(dim=0)
+                pooled = pooled / pooled.norm(p=2).clamp_min(1e-12)
+                results.append([float(value) for value in pooled.detach().cpu().tolist()])
+        return results
+
     def next_token(self, prefix_tokens: TokenSeq) -> Optional[Token]:
         if len(prefix_tokens) == 0:
             return None
