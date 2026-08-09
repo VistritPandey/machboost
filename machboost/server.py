@@ -2183,12 +2183,10 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                 "model": model,
                 "created_at": utc_timestamp(),
                 "message": message,
-                **result.ollama_metrics(),
+                **ollama_metrics_with_context(
+                    result, workspace=workspace, memory=memory_context
+                ),
             }
-            if workspace is not None:
-                body["machboost"] = {"workspace": workspace_result(workspace)}
-            if memory_context is not None:
-                body.setdefault("machboost", {})["memory"] = memory_context.to_dict()
             self.exact_cache_put(
                 memory_context,
                 model=model,
@@ -2281,16 +2279,8 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                 "model": model,
                 "created_at": utc_timestamp(),
                 "message": {"role": "assistant", "content": ""},
-                **result.ollama_metrics(),
-                **(
-                    {"machboost": {"workspace": workspace_result(workspace)}}
-                    if workspace is not None
-                    else {}
-                ),
-                **(
-                    {"machboost": machboost_context_result(workspace, memory_context)}
-                    if memory_context is not None
-                    else {}
+                **ollama_metrics_with_context(
+                    result, workspace=workspace, memory=memory_context
                 ),
             }
         )
@@ -2432,12 +2422,10 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                 "model": model,
                 "created_at": utc_timestamp(),
                 "response": result.text,
-                **result.ollama_metrics(),
+                **ollama_metrics_with_context(
+                    result, workspace=workspace, memory=memory_context
+                ),
             }
-            if workspace is not None:
-                body["machboost"] = {"workspace": workspace_result(workspace)}
-            if memory_context is not None:
-                body.setdefault("machboost", {})["memory"] = memory_context.to_dict()
             self.exact_cache_put(
                 memory_context,
                 model=model,
@@ -2517,11 +2505,8 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                 "model": model,
                 "created_at": utc_timestamp(),
                 "response": "",
-                **result.ollama_metrics(),
-                **(
-                    {"machboost": machboost_context_result(workspace, memory_context)}
-                    if workspace is not None or memory_context is not None
-                    else {}
+                **ollama_metrics_with_context(
+                    result, workspace=workspace, memory=memory_context
                 ),
             }
         )
@@ -3855,6 +3840,17 @@ def openai_machboost_result(
         response["workspace"] = workspace_result(workspace)
     if memory is not None:
         response["memory"] = memory.to_dict()
+    return response
+
+
+def ollama_metrics_with_context(
+    result: GenerationResult,
+    *,
+    workspace: Optional[WorkspaceQuery] = None,
+    memory: Optional[RequestMemoryContext] = None,
+) -> dict[str, Any]:
+    response = result.ollama_metrics()
+    response["machboost"].update(machboost_context_result(workspace, memory))
     return response
 
 
