@@ -11,6 +11,7 @@ from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
+from machboost.models import resolve_model
 from machboost.scheduler import RequestAdmissionError
 from machboost.providers import ProviderStore
 from machboost.server import (
@@ -1173,7 +1174,7 @@ class HTTPServerTests(unittest.TestCase):
         self.assertEqual(response["model"], "company-coder:latest")
         self.assertEqual(
             self.loaded[0][0].model,
-            "mlx-community/Qwen2.5-3B-Instruct-4bit",
+            resolve_model("qwen2.5:3b").model,
         )
         injected = self.loaded[0][1].chat_calls[0][0][0]["content"]
         self.assertIn("Follow company conventions", injected)
@@ -1209,7 +1210,7 @@ class HTTPServerTests(unittest.TestCase):
         loaded = json.loads(loaded_body)
         self.assertEqual(
             loaded["instance"]["model"],
-            "mlx-community/Qwen2.5-3B-Instruct-4bit",
+            resolve_model("qwen2.5:3b").model,
         )
         self.assertEqual(json.loads(stopped_body)["unloaded"], 1)
         self.assertTrue(json.loads(deleted_body)["removed"])
