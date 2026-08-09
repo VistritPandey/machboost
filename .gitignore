@@ -12,6 +12,7 @@ __pycache__/
 .ruff_cache/
 .coverage
 htmlcov/
+tmp/
 
 # Python packaging/build outputs
 build/
