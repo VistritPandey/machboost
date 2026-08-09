@@ -21,6 +21,7 @@ from urllib.parse import parse_qs, urlparse
 from . import __version__
 from .accelerator import Accelerator, render_chat_prompt
 from .memory import CacheNamespace, MemorySearch, TeamMemoryStore, exchange_memory
+from .model_store import ModelStore, StoredModel, apply_stored_model
 from .models import catalog_rows, model_targets, preflight_model, resolve_model
 from .ollama_compat import (
     apply_generate_template,
@@ -30,7 +31,7 @@ from .ollama_compat import (
     truncate_prompt,
     validate_structured_output,
 )
-from .providers import ProviderResult, ProviderStore, route_with_fallback
+from .providers import ProviderError, ProviderResult, ProviderStore, route_with_fallback
 from .scheduler import ReplicaPool, RequestAdmissionError
 from .team import (
     TeamAccessError,
@@ -764,6 +765,55 @@ class RuntimeManager:
             scheduler=scheduler_result(lease, entry.config.replicas),
         )
 
+    def embed(
+        self,
+        model: str,
+        inputs: Sequence[str],
+        *,
+        options: Optional[dict[str, Any]] = None,
+        keep_alive: Any = None,
+    ) -> dict[str, Any]:
+        options = dict(options or {})
+        entry, load_duration = self.get_or_load(
+            model, options=options, keep_alive=keep_alive
+        )
+        started = self.clock()
+        with entry.scheduler.slot(
+            tenant_key=_optional_string(options.get("_tenant_key")),
+            timeout=_optional_float(options.get("queue_timeout")),
+        ) as lease:
+            accelerator = lease.resource
+            service = getattr(accelerator, "service", None)
+            embed = getattr(service, "embed", None)
+            if not callable(embed):
+                raise ValueError("selected model/backend does not support embeddings")
+            prepared: list[str] = []
+            token_count = 0
+            for value in inputs:
+                text = str(value)
+                if options.get("num_ctx") is not None:
+                    text, _ = truncate_prompt(
+                        service,
+                        text,
+                        num_ctx=int(options["num_ctx"]),
+                        max_tokens=0,
+                        truncate=bool(options.get("truncate", True)),
+                    )
+                token_count += len(service.encode(text))
+                prepared.append(text)
+            embeddings = embed(prepared)
+            with entry.lock:
+                entry.requests += 1
+                entry.last_used_at = self.clock()
+        elapsed = max(0.0, self.clock() - started)
+        return {
+            "embeddings": embeddings,
+            "load_duration": int(load_duration * 1_000_000_000),
+            "total_duration": int((load_duration + elapsed) * 1_000_000_000),
+            "prompt_eval_count": token_count,
+            "scheduler": scheduler_result(lease, entry.config.replicas),
+        }
+
     def pull(
         self,
         model: str,
@@ -1057,6 +1107,80 @@ def process_metrics() -> dict[str, Any]:
     }
 
 
+def ollama_model_rows(
+    catalog: Sequence[dict[str, Any]],
+    aliases: Sequence[StoredModel],
+    loaded: Sequence[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    rows: dict[str, dict[str, Any]] = {}
+    for item in catalog:
+        if not bool(item.get("cached")):
+            continue
+        name = str(item.get("name") or item.get("repository") or "")
+        if not name:
+            continue
+        size_gb = float(item.get("disk_size_gb") or 0.0)
+        rows[name] = {
+            "name": name,
+            "model": name,
+            "modified_at": utc_timestamp(),
+            "size": int(size_gb * 1024**3),
+            "digest": "",
+            "details": {
+                "format": "safetensors",
+                "family": "mlx",
+                "families": ["mlx"],
+                "parameter_size": "",
+                "quantization_level": "4bit" if "4bit" in str(item.get("repository", "")).lower() else "",
+            },
+            "machboost": {
+                "repository": item.get("repository"),
+                "backend": item.get("backend"),
+                "capabilities": item.get("capabilities") or [],
+                "cached": True,
+            },
+        }
+    for alias in aliases:
+        rows[alias.name] = {
+            "name": alias.name,
+            "model": alias.name,
+            "modified_at": utc_timestamp(),
+            "size": 0,
+            "digest": "",
+            "details": {
+                "format": "alias",
+                "family": "machboost",
+                "families": ["machboost"],
+                "parameter_size": "",
+                "quantization_level": "",
+            },
+            "machboost": {"source": alias.source, "alias": alias.to_dict()},
+        }
+    for item in loaded:
+        name = str(item.get("requested_model") or item.get("model") or "")
+        row = rows.setdefault(
+            name,
+            {
+                "name": name,
+                "model": name,
+                "modified_at": utc_timestamp(),
+                "size": 0,
+                "digest": "",
+                "details": {
+                    "format": "safetensors",
+                    "family": "mlx",
+                    "families": ["mlx"],
+                    "parameter_size": "",
+                    "quantization_level": "",
+                },
+                "machboost": {},
+            },
+        )
+        row["machboost"]["loaded"] = True
+        row["machboost"]["runtime"] = item
+    return [rows[name] for name in sorted(rows, key=str.lower)]
+
+
 class MachBoostHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
@@ -1072,6 +1196,7 @@ class MachBoostHTTPServer(ThreadingHTTPServer):
         team_store: Optional[TeamStore] = None,
         memory_store: Optional[TeamMemoryStore] = None,
         provider_store: Optional[ProviderStore] = None,
+        model_store: Optional[ModelStore] = None,
     ) -> None:
         self.manager = manager or RuntimeManager()
         self.workspace_store = workspace_store or WorkspaceStore()
@@ -1085,6 +1210,8 @@ class MachBoostHTTPServer(ThreadingHTTPServer):
         self.provider_store = provider_store or (
             ProviderStore(shared_database) if shared_database is not None else None
         )
+        model_database = shared_database or (self.workspace_store.home.parent / "models.sqlite3")
+        self.model_store = model_store or ModelStore(model_database)
         self.team_admission = TeamAdmissionController()
         if self.require_auth and not self.api_token:
             raise ValueError("secured serving requires MACHBOOST_API_TOKEN")
@@ -1109,6 +1236,7 @@ class MachBoostHTTPServer(ThreadingHTTPServer):
             self.memory_store.close()
         if self.provider_store is not None:
             self.provider_store.close()
+        self.model_store.close()
         if self.team_store is not None:
             self.team_store.close()
         super().server_close()
@@ -1137,6 +1265,10 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
     @property
     def providers(self) -> Optional[ProviderStore]:
         return self.server.provider_store  # type: ignore[attr-defined]
+
+    @property
+    def models(self) -> ModelStore:
+        return self.server.model_store  # type: ignore[attr-defined]
 
     @property
     def principal(self) -> TeamPrincipal:
@@ -1325,6 +1457,16 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
         return (
             str(route.get("mode") or "local_only").strip().lower(),
             str(route.get("provider_id") or "").strip() or None,
+        )
+
+    def resolve_local_model(
+        self, model: str, options: dict[str, Any]
+    ) -> tuple[str, dict[str, Any], Optional[StoredModel]]:
+        source, stored = self.models.resolve(model)
+        return (
+            source,
+            apply_stored_model(stored, options) if stored is not None else options,
+            stored,
         )
 
     def external_chat(
@@ -1541,13 +1683,17 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
         if path in {"/api/tags", "/v1/models"}:
             if not self.require_scope("models:read"):
                 return
-            models = self.runtime.ps()
+            models = ollama_model_rows(
+                catalog_rows(),
+                self.models.list(),
+                self.runtime.ps(),
+            )
             if path == "/v1/models":
                 self.send_json(
                     {
                         "object": "list",
                         "data": [
-                            {"id": item["model"], "object": "model", "owned_by": "machboost"}
+                            {"id": item["name"], "object": "model", "owned_by": "machboost"}
                             for item in models
                         ],
                     }
@@ -1569,10 +1715,57 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
             if path == "/api/generate":
                 self.handle_ollama_generate(payload)
                 return
+            if path in {"/api/embed", "/api/embeddings", "/v1/embeddings"}:
+                self.handle_embeddings(payload, path=path)
+                return
             if path == "/api/pull":
                 if not self.require_scope("models:write"):
                     return
                 self.handle_pull(payload)
+                return
+            if path == "/api/create":
+                if not self.require_scope("models:write"):
+                    return
+                name = required_string(payload, "model", aliases=("name",))
+                source = str(payload.get("from") or payload.get("source") or "").strip()
+                if not source:
+                    raise ValueError("create requires a from/source model")
+                stored = self.models.create(
+                    name,
+                    source,
+                    system=str(payload.get("system") or ""),
+                    template=str(payload.get("template") or ""),
+                    options=dict(payload.get("parameters") or payload.get("options") or {}),
+                )
+                self.send_json({"status": "success", "model": stored.to_dict()})
+                return
+            if path == "/api/copy":
+                if not self.require_scope("models:write"):
+                    return
+                stored = self.models.copy(
+                    required_string(payload, "source"),
+                    required_string(payload, "destination"),
+                )
+                self.send_json({"status": "success", "model": stored.to_dict()})
+                return
+            if path == "/api/delete":
+                if not self.require_scope("models:write"):
+                    return
+                model_name = required_string(payload, "model", aliases=("name",))
+                source, _ = self.models.resolve(model_name)
+                self.runtime.stop(resolve_model(source).model)
+                removed = self.models.delete(model_name)
+                self.send_json(
+                    {"status": "success" if removed else "not_found", "removed": removed},
+                    status=200 if removed else 404,
+                )
+                return
+            if path == "/api/push":
+                self.send_error_json(
+                    501,
+                    "MachBoost aliases reference HF/MLX repositories; pushing weights is not supported",
+                    code="not_supported",
+                )
                 return
             if path == "/api/cancel":
                 request_id = required_string(payload, "request_id")
@@ -1802,9 +1995,12 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                 if not self.require_scope("models:write"):
                     return
                 model = required_string(payload, "model", aliases=("name",))
+                runtime_model, options, _ = self.resolve_local_model(
+                    model, dict(payload.get("options") or {})
+                )
                 entry, load_duration = self.runtime.get_or_load(
-                    model,
-                    options=dict(payload.get("options") or {}),
+                    runtime_model,
+                    options=options,
                     keep_alive=payload.get("keep_alive"),
                 )
                 warmup_duration = 0.0
@@ -1826,7 +2022,11 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                 if not self.require_scope("models:write"):
                     return
                 model = payload.get("model") or payload.get("name")
-                unloaded = self.runtime.stop(str(model)) if model else self.runtime.stop()
+                if model:
+                    source, _ = self.models.resolve(str(model))
+                    unloaded = self.runtime.stop(resolve_model(source).model)
+                else:
+                    unloaded = self.runtime.stop()
                 self.send_json({"status": "success", "unloaded": unloaded})
                 return
             if path == "/api/shutdown":
@@ -1840,7 +2040,8 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                 if not self.require_scope("models:read"):
                     return
                 model = str(payload.get("model") or payload.get("name") or "")
-                resolved_model = resolve_model(model).model
+                source, stored = self.models.resolve(model)
+                resolved_model = resolve_model(source).model
                 matches = [item for item in self.runtime.ps() if item["model"] == resolved_model]
                 body = {
                     "model": model,
@@ -1848,9 +2049,11 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                     "loaded": bool(matches),
                     "instances": matches,
                 }
+                if stored is not None:
+                    body["alias"] = stored.to_dict()
                 if bool(payload.get("preflight", False)):
                     body["preflight"] = preflight_model(
-                        model,
+                        source,
                         str(payload.get("backend") or "auto"),
                         allow_network=bool(payload.get("allow_network", False)),
                     )
@@ -1887,10 +2090,40 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
         messages = normalize_messages(payload.get("messages") or ())
         user_query = latest_user_text(messages)
         options = normalize_ollama_options(payload)
+        runtime_model, options, _ = self.resolve_local_model(model, options)
         if payload.get("tools") and payload.get("tool_choice") != "none":
             options["_tools"] = normalize_tools(payload["tools"])
             options["_tool_choice"] = payload.get("tool_choice", "auto")
         options["_tenant_key"] = self.principal.id
+        if not messages:
+            keep_alive = payload.get("keep_alive")
+            if parse_keep_alive(keep_alive, default=self.runtime.default_keep_alive) == 0:
+                unloaded = self.runtime.stop(runtime_model)
+                self.send_json(
+                    {
+                        "model": model,
+                        "created_at": utc_timestamp(),
+                        "message": {"role": "assistant", "content": ""},
+                        "done": True,
+                        "done_reason": "unload",
+                        "unloaded": unloaded,
+                    }
+                )
+            else:
+                _, load_duration = self.runtime.get_or_load(
+                    runtime_model, options=options, keep_alive=keep_alive
+                )
+                self.send_json(
+                    {
+                        "model": model,
+                        "created_at": utc_timestamp(),
+                        "message": {"role": "assistant", "content": ""},
+                        "done": True,
+                        "done_reason": "load",
+                        "load_duration": int(load_duration * 1_000_000_000),
+                    }
+                )
+            return
         context = payload.get("context")
         workspace = workspace_query_for_request(
             self.workspaces,
@@ -1926,7 +2159,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                 "chat",
                 model,
                 lambda cancel_event: self.runtime.chat(
-                    model,
+                    runtime_model,
                     messages,
                     options=options,
                     keep_alive=payload.get("keep_alive"),
@@ -1990,7 +2223,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                 "chat",
                 model,
                 lambda cancel_event: self.runtime.chat(
-                    model,
+                    runtime_model,
                     messages,
                     options=options,
                     keep_alive=payload.get("keep_alive"),
@@ -2062,12 +2295,87 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
             }
         )
 
+    def handle_embeddings(self, payload: dict[str, Any], *, path: str) -> None:
+        model = required_string(payload, "model")
+        raw_input = payload.get("prompt") if path == "/api/embeddings" else payload.get("input")
+        if isinstance(raw_input, str):
+            inputs = [raw_input]
+        elif isinstance(raw_input, list) and all(isinstance(item, str) for item in raw_input):
+            inputs = list(raw_input)
+        else:
+            raise ValueError("embedding input must be text or a list of text values")
+        if not inputs or any(not value.strip() for value in inputs):
+            raise ValueError("embedding input cannot be empty")
+        options = (
+            normalize_ollama_options(payload)
+            if path.startswith("/api/")
+            else openai_options(payload)
+        )
+        runtime_model, options, _ = self.resolve_local_model(model, options)
+        options["_tenant_key"] = self.principal.id
+        result = self.runtime.embed(
+            runtime_model,
+            inputs,
+            options=options,
+            keep_alive=payload.get("keep_alive"),
+        )
+        if path == "/api/embeddings":
+            self.send_json({"embedding": result["embeddings"][0]})
+            return
+        if path == "/v1/embeddings":
+            self.send_json(
+                {
+                    "object": "list",
+                    "model": model,
+                    "data": [
+                        {"object": "embedding", "index": index, "embedding": embedding}
+                        for index, embedding in enumerate(result["embeddings"])
+                    ],
+                    "usage": {
+                        "prompt_tokens": result["prompt_eval_count"],
+                        "total_tokens": result["prompt_eval_count"],
+                    },
+                }
+            )
+            return
+        self.send_json({"model": model, **result})
+
     def handle_ollama_generate(self, payload: dict[str, Any]) -> None:
         model = required_string(payload, "model")
         prompt = str(payload.get("prompt") or "")
         user_query = prompt
         options = normalize_ollama_options(payload)
+        runtime_model, options, _ = self.resolve_local_model(model, options)
         options["_tenant_key"] = self.principal.id
+        if not prompt and not normalize_image_list(payload.get("images")):
+            keep_alive = payload.get("keep_alive")
+            if parse_keep_alive(keep_alive, default=self.runtime.default_keep_alive) == 0:
+                unloaded = self.runtime.stop(runtime_model)
+                self.send_json(
+                    {
+                        "model": model,
+                        "created_at": utc_timestamp(),
+                        "response": "",
+                        "done": True,
+                        "done_reason": "unload",
+                        "unloaded": unloaded,
+                    }
+                )
+            else:
+                _, load_duration = self.runtime.get_or_load(
+                    runtime_model, options=options, keep_alive=keep_alive
+                )
+                self.send_json(
+                    {
+                        "model": model,
+                        "created_at": utc_timestamp(),
+                        "response": "",
+                        "done": True,
+                        "done_reason": "load",
+                        "load_duration": int(load_duration * 1_000_000_000),
+                    }
+                )
+            return
         context = payload.get("context")
         workspace = workspace_query_for_request(
             self.workspaces,
@@ -2103,7 +2411,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                 "generate",
                 model,
                 lambda cancel_event: self.runtime.generate(
-                    model,
+                    runtime_model,
                     prompt,
                     options=options,
                     keep_alive=payload.get("keep_alive"),
@@ -2164,7 +2472,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                 "generate",
                 model,
                 lambda cancel_event: self.runtime.generate(
-                    model,
+                    runtime_model,
                     prompt,
                     options=options,
                     keep_alive=payload.get("keep_alive"),
@@ -2223,6 +2531,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
         messages = normalize_messages(payload.get("messages") or ())
         user_query = latest_user_text(messages)
         options = openai_options(payload)
+        runtime_model, options, _ = self.resolve_local_model(model, options)
         options["_tenant_key"] = self.principal.id
         workspace = workspace_query_for_request(
             self.workspaces,
@@ -2262,7 +2571,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                     "chat",
                     model,
                     lambda cancel_event: self.runtime.chat(
-                        model,
+                        runtime_model,
                         messages,
                         options=options,
                         context=context,
@@ -2341,6 +2650,64 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
             self.send_json(body)
             return
 
+        route_mode, provider_id = self.route_config(payload)
+        if route_mode in {"external_first", "external_only"}:
+            try:
+                external = self.external_chat(
+                    payload,
+                    messages=messages,
+                    provider_id=provider_id,
+                )
+            except ProviderError as exc:
+                if route_mode == "external_only" or not exc.transient:
+                    raise
+            else:
+                content = openai_response_text(external.response)
+                self.remember_exchange(
+                    memory_context,
+                    workspace,
+                    user_text=user_query,
+                    assistant_text=content,
+                )
+                self.start_stream("text/event-stream")
+                self.write_sse(
+                    {
+                        "id": request_id,
+                        "object": "chat.completion.chunk",
+                        "created": int(time.time()),
+                        "model": model,
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {"role": "assistant", "content": content},
+                                "finish_reason": None,
+                            }
+                        ],
+                    }
+                )
+                self.write_sse(
+                    {
+                        "id": request_id,
+                        "object": "chat.completion.chunk",
+                        "created": int(time.time()),
+                        "model": model,
+                        "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                        "machboost": {
+                            **machboost_context_result(workspace, memory_context),
+                            "route": {
+                                "source": "external",
+                                "provider_id": external.provider_id,
+                                "latency_seconds": external.latency_seconds,
+                                "cost_usd": external.cost_usd,
+                                "buffered_upstream": True,
+                            },
+                        },
+                    }
+                )
+                self.wfile.write(b"data: [DONE]\n\n")
+                self.wfile.flush()
+                return
+
         stream_started = False
 
         def on_admitted() -> None:
@@ -2365,7 +2732,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                 "chat",
                 model,
                 lambda cancel_event: self.runtime.chat(
-                    model,
+                    runtime_model,
                     messages,
                     options=options,
                     context=context,
@@ -2452,6 +2819,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
         prompt = str(payload.get("prompt") or "")
         user_query = prompt
         options = openai_options(payload)
+        runtime_model, options, _ = self.resolve_local_model(model, options)
         options["_tenant_key"] = self.principal.id
         workspace = workspace_query_for_request(
             self.workspaces,
@@ -2488,7 +2856,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                 "generate",
                 model,
                 lambda cancel_event: self.runtime.generate(
-                    model,
+                    runtime_model,
                     prompt,
                     options=options,
                     context=context,
@@ -2548,7 +2916,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                 "generate",
                 model,
                 lambda cancel_event: self.runtime.generate(
-                    model,
+                    runtime_model,
                     prompt,
                     options=options,
                     context=context,
