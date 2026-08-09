@@ -420,6 +420,61 @@ class MLXAdapterTest(unittest.TestCase):
         self.assertEqual(service.native_prompt_cache_bytes, 0)
         self.assertIsNone(service._native_prompt_cache)
 
+    def test_native_prompt_cache_isolated_by_namespace(self):
+        mlx_lm = ModuleType("mlx_lm")
+        models_module = ModuleType("mlx_lm.models")
+        cache_module = ModuleType("mlx_lm.models.cache")
+        observed = []
+
+        class FakeCache:
+            pass
+
+        class FakeLRU:
+            def __init__(self, **_kwargs):
+                self.values = {}
+
+            def fetch_nearest_cache(self, key, prompt):
+                cached = self.values.get(key)
+                if cached:
+                    common = 0
+                    for left, right in zip(cached[0], prompt):
+                        if left != right:
+                            break
+                        common += 1
+                    if common:
+                        return cached[1], list(prompt[common:])
+                return None, list(prompt)
+
+            def insert_cache(self, key, prompt, cache):
+                self.values[key] = (list(prompt), cache)
+
+        def stream_generate(model, tokenizer, prompt, *, max_tokens, prompt_cache):
+            observed.append(list(prompt))
+            yield SimpleNamespace(token=1, text="one")
+
+        mlx_lm.stream_generate = stream_generate
+        cache_module.LRUPromptCache = FakeLRU
+        cache_module.make_prompt_cache = lambda _model: FakeCache()
+        service = MLXCausalLMService(object(), object(), native_prompt_cache_size=8)
+
+        with patch.dict(
+            "sys.modules",
+            {
+                "mlx_lm": mlx_lm,
+                "mlx_lm.models": models_module,
+                "mlx_lm.models.cache": cache_module,
+            },
+        ):
+            service.configure_native_prompt_cache(enabled=True, namespace="alice")
+            service.generate_tokens((10, 11, 12), max_tokens=1)
+            service.configure_native_prompt_cache(enabled=True, namespace="bob")
+            service.generate_tokens((10, 11, 99), max_tokens=1)
+            service.configure_native_prompt_cache(enabled=True, namespace="alice")
+            service.generate_tokens((10, 11, 12, 42), max_tokens=1)
+
+        self.assertEqual(observed, [[10, 11, 12], [10, 11, 99], [42]])
+        self.assertEqual(service.last_native_metrics["prompt_cache_namespace"], "alice")
+
     def test_cached_verify_commits_accepted_candidate(self):
         prompt = (100, 101, 102)
         service = cache_service((1, 2, 3, 4, 5), prompt_len=len(prompt))
