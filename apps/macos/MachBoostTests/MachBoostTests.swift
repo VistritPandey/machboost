@@ -334,6 +334,56 @@ final class MachBoostTests: XCTestCase {
         XCTAssertEqual(status.settings.maxStorageBytes, 536_870_912)
     }
 
+    func testMemoryCacheAndProviderSchemasDecode() throws {
+        let memory = try JSONDecoder().decode(
+            MemoriesResponse.self,
+            from: Data(
+                #"{"schema":"machboost.memories.v1","memories":[{"id":"mem_1","workspace_id":"repo","scope":"team","kind":"fix","title":"Retry checkout","content":"Reuse the key","confidence":0.9,"pinned":false,"stale":false}]}"#.utf8
+            )
+        )
+        let metrics = try JSONDecoder().decode(
+            CacheMetrics.self,
+            from: Data(
+                #"{"schema":"machboost.cache-metrics.v1","totals":{"avoided_prompt_tokens":2400},"namespaces":{"abc":{"exact_cache_hits":1}}}"#.utf8
+            )
+        )
+        let providers = try JSONDecoder().decode(
+            ProvidersResponse.self,
+            from: Data(
+                #"{"schema":"machboost.providers.v1","providers":[{"id":"provider_1","name":"Fallback","base_url":"https://api.example.com","models":["coder"],"enabled":true,"has_secret":true,"monthly_budget_usd":20,"spent_this_month_usd":1.5,"remaining_budget_usd":18.5}]}"#.utf8
+            )
+        )
+
+        XCTAssertEqual(memory.memories.first?.title, "Retry checkout")
+        XCTAssertEqual(metrics.totals["avoided_prompt_tokens"], 2_400)
+        XCTAssertEqual(providers.providers.first?.remainingBudgetUSD, 18.5)
+    }
+
+    func testProviderSecretRestorationDoesNotOverwriteProviderConfiguration() async throws {
+        let session = mockSession { request in
+            XCTAssertEqual(request.url?.path, "/api/providers/secret")
+            let data = try XCTUnwrap(request.httpBody)
+            let object = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: data) as? [String: String]
+            )
+            XCTAssertEqual(object, [
+                "provider_id": "provider_1",
+                "api_key": "local-key",
+            ])
+            return self.response(
+                for: request,
+                status: 200,
+                body: #"{"provider_id":"provider_1","has_secret":true}"#
+            )
+        }
+        let api = MachBoostAPI(
+            endpoint: URL(string: "http://127.0.0.1:11435")!,
+            session: session
+        )
+
+        try await api.setProviderSecret(id: "provider_1", apiKey: "local-key")
+    }
+
     func testCreateTeamKeySendsLimitsAndReturnsOneTimeToken() async throws {
         let session = mockSession { request in
             let data = try XCTUnwrap(request.httpBody)
