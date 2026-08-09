@@ -2651,6 +2651,53 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
             return
 
         route_mode, provider_id = self.route_config(payload)
+
+        def send_external_stream(external: ProviderResult) -> None:
+            content = openai_response_text(external.response)
+            self.remember_exchange(
+                memory_context,
+                workspace,
+                user_text=user_query,
+                assistant_text=content,
+            )
+            self.start_stream("text/event-stream")
+            self.write_sse(
+                {
+                    "id": request_id,
+                    "object": "chat.completion.chunk",
+                    "created": int(time.time()),
+                    "model": model,
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {"role": "assistant", "content": content},
+                            "finish_reason": None,
+                        }
+                    ],
+                }
+            )
+            self.write_sse(
+                {
+                    "id": request_id,
+                    "object": "chat.completion.chunk",
+                    "created": int(time.time()),
+                    "model": model,
+                    "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                    "machboost": {
+                        **machboost_context_result(workspace, memory_context),
+                        "route": {
+                            "source": "external",
+                            "provider_id": external.provider_id,
+                            "latency_seconds": external.latency_seconds,
+                            "cost_usd": external.cost_usd,
+                            "buffered_upstream": True,
+                        },
+                    },
+                }
+            )
+            self.wfile.write(b"data: [DONE]\n\n")
+            self.wfile.flush()
+
         if route_mode in {"external_first", "external_only"}:
             try:
                 external = self.external_chat(
@@ -2662,50 +2709,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                 if route_mode == "external_only" or not exc.transient:
                     raise
             else:
-                content = openai_response_text(external.response)
-                self.remember_exchange(
-                    memory_context,
-                    workspace,
-                    user_text=user_query,
-                    assistant_text=content,
-                )
-                self.start_stream("text/event-stream")
-                self.write_sse(
-                    {
-                        "id": request_id,
-                        "object": "chat.completion.chunk",
-                        "created": int(time.time()),
-                        "model": model,
-                        "choices": [
-                            {
-                                "index": 0,
-                                "delta": {"role": "assistant", "content": content},
-                                "finish_reason": None,
-                            }
-                        ],
-                    }
-                )
-                self.write_sse(
-                    {
-                        "id": request_id,
-                        "object": "chat.completion.chunk",
-                        "created": int(time.time()),
-                        "model": model,
-                        "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
-                        "machboost": {
-                            **machboost_context_result(workspace, memory_context),
-                            "route": {
-                                "source": "external",
-                                "provider_id": external.provider_id,
-                                "latency_seconds": external.latency_seconds,
-                                "cost_usd": external.cost_usd,
-                                "buffered_upstream": True,
-                            },
-                        },
-                    }
-                )
-                self.wfile.write(b"data: [DONE]\n\n")
-                self.wfile.flush()
+                send_external_stream(external)
                 return
 
         stream_started = False
@@ -2742,7 +2746,20 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                 ),
                 input_data=messages,
             )
-        except RequestAdmissionError:
+        except RequestAdmissionError as exc:
+            if (
+                route_mode == "local_first"
+                and not stream_started
+                and exc.reason
+                in {"queue_full", "queue_timeout", "request_timeout", "server_unavailable"}
+            ):
+                external = self.external_chat(
+                    payload,
+                    messages=messages,
+                    provider_id=provider_id,
+                )
+                send_external_stream(external)
+                return
             raise
         except RequestCancelled:
             if not stream_started:
