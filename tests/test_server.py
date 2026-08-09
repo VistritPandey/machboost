@@ -45,6 +45,7 @@ class FakeStats:
 class FakeService:
     def __init__(self) -> None:
         self.reset_calls = 0
+        self.prompt_cache_configs = []
 
     def reset_cache(self) -> None:
         self.reset_calls += 1
@@ -57,6 +58,18 @@ class FakeService:
 
     def embed(self, texts):
         return [[float(len(text.split())), 1.0] for text in texts]
+
+    def configure_native_prompt_cache(
+        self, *, enabled, max_size, max_bytes, namespace
+    ) -> None:
+        self.prompt_cache_configs.append(
+            {
+                "enabled": enabled,
+                "max_size": max_size,
+                "max_bytes": max_bytes,
+                "namespace": namespace,
+            }
+        )
 
 
 class FakeAccelerator:
@@ -713,6 +726,43 @@ class HTTPServerTests(unittest.TestCase):
         self.assertEqual(workspace_result["id"], workspace.id)
         self.assertEqual(workspace_result["retrieved_chunks"], 1)
         self.assertEqual(workspace_result["citations"][0]["path"], "auth.py")
+        self.assertEqual(
+            response["machboost"]["stats"]["accepted_draft_tokens"], 2
+        )
+        self.assertEqual(response["machboost"]["backend"], "mlx")
+        indexed_workspace = self.workspace_store.get(workspace.id)
+        self.assertEqual(
+            accelerator.service.prompt_cache_configs[-1]["namespace"],
+            f"workspace:{workspace.id}:{indexed_workspace.revision}",
+        )
+
+    def test_streaming_workspace_response_retains_runtime_metrics(self):
+        repository = Path(self.temporary.name) / "repository"
+        repository.mkdir()
+        (repository / "stream.py").write_text(
+            "def cancel_stream(request_id):\n"
+            "    return active_requests.cancel(request_id)\n",
+            encoding="utf-8",
+        )
+        workspace = self.workspace_store.register(repository)
+        self.workspace_store.index(workspace.id)
+
+        _, _, body = self.request(
+            "/api/chat",
+            {
+                "model": "mlx-community/example",
+                "workspace_id": workspace.id,
+                "messages": [
+                    {"role": "user", "content": "Where is streaming cancelled?"}
+                ],
+                "stream": True,
+            },
+        )
+
+        final = json.loads(body.splitlines()[-1])
+        self.assertEqual(final["machboost"]["workspace"]["id"], workspace.id)
+        self.assertEqual(final["machboost"]["stats"]["generated_tokens"], 2)
+        self.assertEqual(final["machboost"]["backend"], "mlx")
 
     def test_openai_workspace_extension_is_backward_compatible(self):
         repository = Path(self.temporary.name) / "repository"
@@ -1657,7 +1707,8 @@ class TeamGatewayHTTPTests(unittest.TestCase):
     def test_workspace_memory_and_exact_cache_skip_second_inference(self) -> None:
         repository = Path(self.temporary.name) / "memory-repo"
         repository.mkdir()
-        (repository / "auth.py").write_text(
+        source = repository / "auth.py"
+        source.write_text(
             "def authenticate(token):\n    return token\n", encoding="utf-8"
         )
         workspace = self.workspace_store.register(repository)
@@ -1684,6 +1735,18 @@ class TeamGatewayHTTPTests(unittest.TestCase):
         self.assertEqual(len(memories["memories"]), 1)
         self.assertEqual(metrics["totals"]["exact_cache_hits"], 1)
         self.assertEqual(metrics["totals"]["avoided_prompt_tokens"], 12)
+
+        source.write_text(
+            "def authenticate(token):\n    return validate(token)\n",
+            encoding="utf-8",
+        )
+        self.request(
+            "/api/workspaces/index", {"workspace_id": workspace.id}
+        )
+        _, after_edit = self.request("/v1/chat/completions", payload)
+
+        self.assertEqual(len(entry.accelerator.chat_calls), 2)
+        self.assertNotIn("cache", after_edit["machboost"])
 
     def test_manual_team_memory_is_retrieved_and_can_be_deleted(self) -> None:
         repository = Path(self.temporary.name) / "shared-repo"
@@ -1722,11 +1785,16 @@ class TeamGatewayHTTPTests(unittest.TestCase):
         _, deleted = self.request("/api/memory/delete", {"memory_ids": [memory_id]})
 
         entry = next(iter(self.server.manager._models.values()))
-        injected = "\n".join(
-            str(message.get("content") or "")
-            for message in entry.accelerator.chat_calls[0][0]
-        )
+        messages = entry.accelerator.chat_calls[0][0]
+        injected = "\n".join(str(message.get("content") or "") for message in messages)
         self.assertIn("Run uv lock", injected)
+        system_messages = [
+            str(message.get("content") or "")
+            for message in messages
+            if message.get("role") == "system"
+        ]
+        self.assertIn("repository evidence", system_messages[0])
+        self.assertIn("prior team experience", system_messages[1])
         self.assertEqual(response["machboost"]["memory"]["retrieved"], 1)
         self.assertEqual(deleted["removed"], 1)
 

@@ -424,6 +424,7 @@ class WorkspaceStore:
                     language_for_path(row[0])
                     for row in connection.execute("SELECT path FROM files")
                 )
+                revision = _workspace_revision(root, connection)
 
             updated = Workspace(
                 id=workspace.id,
@@ -432,7 +433,7 @@ class WorkspaceStore:
                 created_at=workspace.created_at,
                 updated_at=_timestamp(),
                 indexed_at=_timestamp(),
-                revision=_git_revision(root),
+                revision=revision,
                 file_count=int(file_count),
                 chunk_count=int(chunk_count),
                 total_bytes=int(total_bytes),
@@ -793,6 +794,24 @@ def _git_revision(root: Path) -> Optional[str]:
     except (FileNotFoundError, subprocess.SubprocessError):
         return None
     return result.stdout.strip() or None
+
+
+def _workspace_revision(root: Path, connection: sqlite3.Connection) -> str:
+    manifest = hashlib.sha256()
+    for path, digest in connection.execute(
+        "SELECT path, digest FROM files ORDER BY path"
+    ):
+        manifest.update(str(path).encode("utf-8"))
+        manifest.update(b"\0")
+        manifest.update(str(digest).encode("ascii"))
+        manifest.update(b"\n")
+    content_revision = manifest.hexdigest()[:12]
+    git_revision = _git_revision(root)
+    return (
+        f"{git_revision}-{content_revision}"
+        if git_revision
+        else content_revision
+    )
 
 
 def _eligible_path(absolute_path: Path, relative_path: str) -> bool:

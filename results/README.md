@@ -14,6 +14,66 @@ The artifacts measure different mechanisms and should not be combined into one h
 
 Results below are single-machine experiments unless stated otherwise. Ratios of medians and medians of paired ratios are different statistics and are labeled separately.
 
+## Cross-Thread Private Repository Audit, August 9 2026
+
+Artifact: `team_repository_reuse_qwen25_7b_20260809.json`
+
+Model: `mlx-community/Qwen2.5-7B-Instruct-4bit`
+
+Hardware: Apple M5 Pro, 48 GB unified memory
+
+The audit indexes a private production monorepo containing 8,754 eligible files
+and 26,123 chunks. Private paths, prompts, outputs, workspace identifiers, and
+revision hashes are not retained in the public artifact. A cold index took
+156.28 seconds. A later incremental scan took 6.75 seconds while checking 9,021
+discovered files.
+
+Each latency scenario uses a standalone target request, one resident model,
+greedy decoding, and alternating baseline/MachBoost order. The baseline keeps
+the same repository retrieval and complete prompt but disables shared MLX
+prefix reuse. Exact-response reuse and semantic memory are disabled in the
+new-question scenarios.
+
+| Scenario | Pairs | Cached prompt | Baseline | MachBoost | Wall | Prefill | Output |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Adjacent coding change | 3 | 3,269 / 4,243 | 7.034s | 5.377s | 1.314x | 3.835x | 3/3 byte-identical |
+| Unrelated repository subsystem | 3 | 3,257 / 4,327 | 5.995s | 4.217s | 1.426x | 3.754x | 3/3 byte-identical |
+| Identical deterministic replay | 3 | full response | 2.474s | 0.091s | 28.557x | n/a | 3/3 byte-identical |
+
+The unrelated control primes a frontend streaming question and then asks about
+a separate scheduler subsystem. The retrieved evidence differs, but the shared
+repository map remains an exact prefix. This is why topical overlap is not
+required after the first workspace request. Decode time remains unchanged;
+the end-to-end ratio is smaller than the prefill ratio for longer answers.
+
+The exact replay rows are a separate contract. They apply only to identical,
+deterministic, non-streaming requests and avoided 8,985 prompt tokens plus 384
+completion tokens across three hits. They are not evidence for unique-question
+acceleration.
+
+A semantic-memory probe retrieved one prior exchange in all three rounds and
+increased a narrow required-concept rubric from 4/8 to 5/8. It also added 414
+logical prompt tokens and raised median wall time from 5.341 to 5.581 seconds.
+The artifact therefore labels memory as a context/quality experiment, not a
+latency or token-saving result. The small rubric does not establish general
+answer correctness.
+
+Reproduce the cross-thread prefix measurement against any registered private
+workspace with:
+
+```sh
+python3 scripts/benchmark_repository_reuse.py \
+  --workspace-id WORKSPACE_ID \
+  --model qwen2.5:7b \
+  --primer "Explain the existing subsystem and cite its implementation." \
+  --target "Design an adjacent change and cite the files to edit." \
+  --rubric-term expected_symbol \
+  --runs 3 \
+  --output results/local/repository-reuse.json
+```
+
+The benchmark omits model text and citations unless explicitly requested.
+
 ## Repository Workspace Prefix Reuse, July 29 2026
 
 Artifacts:

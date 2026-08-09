@@ -26,7 +26,7 @@
 \maketitle
 
 \begin{abstract}
-MachBoost is a local inference package for conditional acceleration. Its text paths either draft candidate tokens from explicit context or reuse model state for an unchanged repository prefix. Visual requests can reuse state derived from unchanged image bytes or, experimentally, shorten a new image's visual sequence after Qwen3-VL completes early cross-modal fusion. A team gateway adds revision-aware private and shared memory, deterministic exact-request reuse, and budgeted external-provider fallback; these are serving features and are evaluated separately from model speed. Repository-prefix experiments on an Apple M5 Pro compare native full prefill with reuse of the longest exact prefix while the question and retrieved code change. Across five different questions, Qwen2.5 3B and 7B reach 2.97$\times$ and 3.23$\times$ median paired speedups; all ten pairs generate identical token sequences. Medians over six rows, including one exact repeat of the priming request, are 3.02$\times$ and 3.28$\times$. This lowers prefill rather than autoregressive decode and does not help the first request. Separate context-drafting experiments on an Apple M1 Max are less consistent: a favorable 3B Qwen code fixture reaches 1.96$\times$, while a broader Llama 3.2 3B audit records a 1.008$\times$ aggregate median and exact token equality in 20 of 21 pairs. Across six Qwen vision models, repeated-image paired medians range from 5.14$\times$ to 17.44$\times$. A ten-image Qwen3-VL 8B TextVQA pilot with all caches disabled reaches a 1.67$\times$ aggregate speedup after retaining a median 35.12\% of visual hidden states. Native and compressed paths each answer eight questions correctly, although normalized outputs agree on seven. The measurements support distinct, workload-dependent contracts rather than universal faster inference.
+MachBoost is a local inference package for conditional acceleration. Its text paths either draft candidate tokens from explicit context or reuse model state for an unchanged repository prefix. Visual requests can reuse state derived from unchanged image bytes or, experimentally, shorten a new image's visual sequence after Qwen3-VL completes early cross-modal fusion. A team gateway adds revision-aware private and shared memory, deterministic exact-request reuse, and budgeted external-provider fallback; these serving features are kept separate in the evaluation. Controlled repository-prefix experiments on an Apple M5 Pro report 2.97$\times$ and 3.23$\times$ median speedups across five changing questions on Qwen2.5 3B and 7B. A later audit uses an 8,754-file private production repository, a 7B model, and independent standalone threads. Reusing 75--77\% of prompt tokens reduces median prefill by 3.75--3.84$\times$ and end-to-end time by 1.31--1.43$\times$ across six paired new-question runs. Decode time is unchanged, and all six pairs are byte-identical under greedy generation. Exact deterministic replay reaches 28.56$\times$ in a separate three-pair test; semantic memory improves one narrow rubric from 4/8 to 5/8 but adds 0.239 seconds. Separate context-drafting experiments on an Apple M1 Max are less consistent: a favorable 3B Qwen code fixture reaches 1.96$\times$, while a broader Llama 3.2 3B audit records a 1.008$\times$ aggregate median and exact token equality in 20 of 21 pairs. Across six Qwen vision models, repeated-image paired medians range from 5.14$\times$ to 17.44$\times$. A ten-image Qwen3-VL 8B TextVQA pilot with all caches disabled reaches a 1.67$\times$ aggregate speedup after retaining a median 35.12\% of visual hidden states. Native and compressed paths each answer eight questions correctly, although normalized outputs agree on seven. The measurements support distinct, workload-dependent contracts rather than universal faster inference.
 \end{abstract}
 
 \section{Introduction}
@@ -149,6 +149,11 @@ line-addressable chunks and stored in SQLite FTS5 with extracted symbol names.
 Reindexing compares file metadata and content digests, then updates only changed
 or deleted entries.
 
+A workspace revision combines the Git commit, when available, with a digest of
+the indexed path-and-content manifest. The content component matters for dirty
+working trees and untracked files: changing indexed source invalidates exact
+responses and prompt-state namespaces even when \texttt{HEAD} has not moved.
+
 The context begins with a deterministic capsule containing repository
 metadata, sorted paths, and extracted symbols. Query terms select FTS rows, but
 MachBoost sends focused windows around matching lines instead of every complete
@@ -163,6 +168,12 @@ to the loaded service and bounded by both count and estimated bytes. Ordinary
 chat leaves this cache disabled; repository requests opt in. Cache types that
 cannot be safely trimmed, including the tested Qwen3.5 hybrid recurrent state,
 fall back to native prefill.
+
+For team requests, prompt-state keys use the organization and content-addressed
+workspace revision rather than a conversation identifier. Independent threads
+therefore share only the stable repository/request prefix. Their messages,
+retrieved evidence, tool inputs, and generated text remain in the changing
+suffix and are evaluated normally.
 
 \subsection{Namespaced Team Memory and Exact Reuse}
 The team gateway does not concatenate employee transcripts into one shared
@@ -325,8 +336,62 @@ machine, packages, and repository revision.
 
 These rows test exact prefill reuse, not answer quality or faster decoding. The
 questions retrieve different evidence but share a long repository map. A first
-workspace request, an unrelated prompt, or a long answer dominated by decode
-does not inherit the reported ratio.
+workspace request, a request outside that workspace, or a long answer dominated
+by decode does not inherit the reported ratio.
+
+\subsection{Private-Repository Cross-Thread Audit}
+To check whether the controlled repository result survives a more realistic
+shape, a second harness indexes an 8,754-file private production monorepo into
+26,123 chunks (87.1 MB of indexed text). Cold indexing takes 156.28 seconds; a
+later incremental pass scans 9,021 candidates and updates one changed file in
+6.75 seconds. Paths, prompts, retrieved code, and generated answers are omitted
+from the public artifact.
+
+The model is Qwen2.5 7B Instruct 4-bit on the same 48 GB M5 Pro. Each target is
+a new standalone thread. Exact-response reuse and semantic memory are disabled.
+Within a pair, native and MachBoost paths use the same resident model, retrieved
+evidence, complete prompt, output limit, and greedy decoding; only shared native
+prompt-state reuse differs. Order alternates over three measured pairs per
+scenario.
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{lrrrrrr}
+\toprule
+Scenario & Prompt & Reused & Prefill & Wall & Exact & Rubric \\
+\midrule
+Adjacent code & 4,243 & 3,269 (77.1\%) & 3.835$\times$ & 1.314$\times$ & 3/3 & 4/8--4/8 \\
+Other subsystem & 4,327 & 3,257 (75.3\%) & 3.754$\times$ & 1.426$\times$ & 3/3 & 2/7--2/7 \\
+\bottomrule
+\end{tabular}
+\caption{Independent-thread private-repository results. ``Exact'' is byte
+equality between paired greedy outputs. Rubric columns show baseline and
+MachBoost hits on a small implementation-concept checklist, not a general code
+quality score.}
+\label{tab:privaterepo}
+\end{table}
+
+For the adjacent-code question, median prefill falls from 2.306 to 0.605
+seconds, time to first token from 2.430 to 0.726 seconds, and wall time from
+7.034 to 5.377 seconds. Median decode is 4.472 seconds natively and 4.469
+seconds with reuse. The other-subsystem question cuts prefill from 2.435 to
+0.648 seconds and wall time from 5.995 to 4.217 seconds; decode remains about
+3.33 seconds. This control is useful because the two threads concern different
+parts of the repository. Topic overlap between employee chats is not required;
+the reused object is the deterministic workspace prefix. A first request for a
+new revision still pays full prefill.
+
+The same run separates two easy-to-confuse features. Three exact deterministic
+replays take a median 2.474 seconds when generated and 0.091 seconds on a cache
+hit, a 28.56$\times$ ratio that avoids 8,985 prompt and 384 completion tokens in
+total. It applies only to identical eligible requests. In a three-run semantic
+memory probe, one shared record is retrieved every time and the narrow rubric
+moves from 4/8 to 5/8. The extra record grows the prompt from 4,243 to 4,657
+tokens and adds 0.239 seconds to median wall time. Memory is thus evidence for
+optional cross-thread context here, not for lower latency or token use. The
+sanitized rows are in
+\path{results/team_repository_reuse_qwen25_7b_20260809.json}.
 
 \subsection{Five-Developer Memory Systems Check}
 A deterministic harness creates five employee namespaces over two workspaces.
@@ -544,23 +609,25 @@ The failures share a simple accounting problem. A draft only helps when the time
 \section{Limitations}
 The text-drafting evidence begins with 30 controlled Qwen rows and adds a 21-pair Llama 3.2 audit on the same machine. The favorable Qwen code fixture substantially contains the desired continuation; it demonstrates the mechanism but does not estimate real-world eligibility. In the broader Llama suite, most fixtures accept no tokens, the aggregate median is 1.008$\times$, and one cache-enabled JSON pair is not token-identical. The strict verifier restores equality in its smaller control but is about 4.8$\times$ slower than native generation.
 
-The repository-prefix evidence covers one repository snapshot, six short
-questions, two Qwen2.5 models, greedy generation, and one M5 Pro. Token equality
-shows that cache reuse did not change these continuations; it does not measure
-whether retrieval found all required code or whether the answers were correct.
-The first row is an exact prompt repeat and is reported separately. The five
-different questions still share a deterministic repository map and request
-wrapper, so the result does not apply to an unrelated first prompt. The
-8,000-character evidence cap may omit relevant code in a broad or cross-cutting
-question. Longer sessions, repository revisions, multiple concurrent replicas,
-additional 3B--32B architectures, energy, and peak cache memory remain
-untested. A Qwen3.5 9B probe could not safely trim its hybrid recurrent cache
-and produced no valid speedup.
+The repository-prefix evidence now covers one 183-file controlled snapshot and
+one 8,754-file private production snapshot, six new-question pairs in the
+private audit, two Qwen2.5 model sizes overall, greedy generation, and one M5
+Pro. Byte equality shows that cache reuse did not change these continuations;
+it does not prove that retrieval found all required code or that an answer would
+produce a correct patch. The private audit's small rubrics are especially weak:
+both paths score equally, but only four of eight and two of seven concepts are
+present. A request outside the workspace and the first request for a content
+revision receive no shared-prefix benefit. The 8,000-character evidence cap may
+omit relevant code in a broad or cross-cutting question. Longer sessions,
+multiple concurrent replicas, additional 3B--32B architectures, energy, and
+peak cache memory remain untested. A Qwen3.5 9B probe could not safely trim its
+hybrid recurrent cache and produced no valid speedup.
 
 The five-developer memory check uses synthetic records and deterministic
-accounting. It does not estimate retrieval precision, cross-developer usefulness,
-cache hit rate, or token savings on real work. Automated summaries are redacted
-and bounded but are not a data-loss-prevention system. Shared-memory publication
+accounting. The private-repository probe adds three model-backed retrievals, but
+one narrow rubric improvement is not an estimate of general usefulness. In that
+probe memory increases tokens and latency. Automated summaries are redacted and
+bounded but are not a data-loss-prevention system. Shared-memory publication
 requires administrator action; the present evaluation does not study malicious
 content, poisoned memories, or conflicting decisions across branches.
 
@@ -579,21 +646,23 @@ Finally, this work introduces neither prompt lookup, prompt caching, nor visual-
 \section{Next Experiments}
 There are two plausible tracks. The first keeps models unchanged. Before expanding re-entry, it should identify and eliminate the cache-trajectory mismatch seen in the Llama audit, then test an online eligibility predictor and native verifier hooks for llama.cpp/Ollama. The resident server makes this testable under long sessions; evaluation should report request coverage, cold and warm time to first token, decode throughput, peak memory, concurrency, energy, and exact outputs against each backend's own optimized generator.
 
-Repository workspaces need a retrieval-quality evaluation independent of the
-latency harness. A next run should use issue-resolution and repository
-question-answering datasets, compare full-context, conventional RAG, and
-prefix-oriented prompt layouts, and score citation recall and answer
-correctness. It should sweep map size, evidence cap, chunk focusing, context
-length, answer length, repository revision, model size, and concurrent clients.
-Block-level KV reuse or continuous batching could extend the gain beyond a
-single exact prefix, but neither is implemented here.
+Repository workspaces need a larger retrieval-quality evaluation independent of
+the latency harness. The private audit establishes realistic indexing and six
+new-question pairs, but the next run should use public issue-resolution and
+repository question-answering datasets so prompts, retrieved evidence, patches,
+and grader outputs can be inspected. It should compare full-context,
+conventional RAG, and prefix-oriented layouts; score citation recall, tests, and
+answer correctness; and sweep map size, evidence cap, answer length, repository
+revision, model size, and concurrent clients. Block-level KV reuse or continuous
+batching could extend the gain beyond a single exact prefix, but neither is
+implemented here.
 
 The second track accepts model-specific preparation. A multi-token drafter distilled from the target could run on the Apple Neural Engine while target verification runs on the GPU, following the heterogeneous lesson of Mirror-SD. Quantized draft weights and KV state could reduce memory traffic in long contexts. Both ideas exceed the scope of a wrapper and should be treated as separate research prototypes with quality and compatibility tests.
 
 The immediate visual work is external validity. After resolving or isolating the observed native high-resolution MLX failure, the checkpointed harness should run ChartQA, DocVQA, MMMU, TextVQA, spatial reasoning, and hallucination-sensitive datasets independently. It should add non-Qwen VLMs, sweep layer, retention ratio, image size, and answer length, and report confidence intervals, memory, energy, and task metrics. The implemented random control is the first comparison; attention ranking, AdaptInfer, and ZOO-Prune remain necessary to determine whether query-weighted merging contributes beyond token count alone. Automatic policies should remain disabled unless a model/task calibration set clears both latency and quality gates. Video evaluation should compare uniform sampling, RGB change selection, query-aware selection, PruneVid, and EchoPrune on temporal question-answering benchmarks.
 
 \section{Conclusion}
-MachBoost now has four measured conditional paths, one unvalidated temporal adapter, and a namespaced team-memory serving path. Repository workspaces are the strongest exact text result: five different questions over one stable codebase reach 2.97$\times$ and 3.23$\times$ median paired speedups on Qwen2.5 3B and 7B, with exact generated tokens in all ten pairs. The gain comes from reusing 7,901 of 10,405 median prompt tokens; it lowers later-request prefill, not first-request cost or decode time. Token drafting remains less settled. A favorable Qwen code fixture reaches 1.96$\times$, while a broader Llama 3.2 3B suite is exact in 20 of 21 pairs and has a 1.008$\times$ aggregate median. Across six visual models, short repeated questions over one unchanged image produce model-level paired medians from 5.14$\times$ to 17.44$\times$. For a new image, post-fusion Qwen3-VL compression reaches 1.67$\times$ aggregate speedup on a ten-row TextVQA pilot while both modes score 8/10; this path is approximate and normalized outputs agree on 70\%. The team-memory harness verifies five isolation, invalidation, retrieval, and exact-reuse scenarios but does not measure a model. The evidence supports a local serving layer that selects among narrow mechanisms. It does not support a universal faster-inference claim.
+MachBoost now has four measured conditional paths, one unvalidated temporal adapter, and a namespaced team-memory serving path. In the private-repository audit, six independent-thread new-question pairs reuse 75--77\% of prompt tokens. Prefill is 3.75--3.84$\times$ faster, while unchanged decode limits end-to-end speedup to 1.31--1.43$\times$. All paired outputs are byte-identical under greedy generation, but small rubric scores show that equality is not the same as answer quality. Exact replay reaches 28.56$\times$ only for identical deterministic requests. Semantic memory retrieves prior team context but costs 414 extra prompt tokens and 0.239 seconds in its three-run probe. Token drafting remains less settled: a favorable Qwen code fixture reaches 1.96$\times$, while a broader Llama 3.2 3B suite is exact in 20 of 21 pairs and has a 1.008$\times$ aggregate median. Across six visual models, short repeated questions over one unchanged image produce model-level paired medians from 5.14$\times$ to 17.44$\times$. For a new image, post-fusion Qwen3-VL compression reaches 1.67$\times$ aggregate speedup on a ten-row TextVQA pilot while both modes score 8/10; this path is approximate and normalized outputs agree on 70\%. The evidence supports a local serving layer that selects among narrow mechanisms. It does not support a universal faster-inference claim.
 
 \bibliographystyle{plain}
 \small

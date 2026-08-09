@@ -91,11 +91,14 @@ class WorkspaceStoreTests(unittest.TestCase):
         )
         removed.unlink()
         second = self.store.index(workspace.id)
+        stable = self.store.index(workspace.id)
 
         self.assertEqual(first.indexed_files, 2)
         self.assertEqual(second.indexed_files, 1)
         self.assertEqual(second.removed_files, 1)
         self.assertEqual(second.workspace.file_count, 1)
+        self.assertNotEqual(first.workspace.revision, second.workspace.revision)
+        self.assertEqual(second.workspace.revision, stable.workspace.revision)
         self.assertEqual(
             self.store.query(workspace.id, "replacement_handler").hits[0].path,
             "service.py",

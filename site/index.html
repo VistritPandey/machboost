@@ -106,20 +106,20 @@
       <section class="signal-band" aria-label="MachBoost benchmark highlights">
         <div class="shell signal-grid">
           <div>
-            <strong>3.23×</strong>
-            <span>7B repository questions</span>
+            <strong>1.43×</strong>
+            <span>new 7B repo question</span>
           </div>
           <div>
-            <strong>3.02×</strong>
-            <span>3B repository workload</span>
+            <strong>3.84×</strong>
+            <span>7B repository prefill</span>
           </div>
           <div>
             <strong>13.51×</strong>
             <span>repeated-image median</span>
           </div>
           <div>
-            <strong>Exact</strong>
-            <span>tokens in repository runs</span>
+            <strong>28.6×</strong>
+            <span>exact deterministic replay</span>
           </div>
         </div>
       </section>
@@ -153,7 +153,7 @@
               <h3>Repository intelligence</h3>
               <p>
                 Index tracked source once, retrieve focused evidence per question, and
-                keep the reusable repository prefix stable.
+                share the reusable repository prefix across independent team threads.
               </p>
             </li>
             <li>
@@ -195,7 +195,9 @@
               resident while MachBoost enforces model access, concurrency, request
               rates, and fair queueing between employees. Revision-aware memory can
               reuse validated repository knowledge without exposing private work,
-              while budgeted external providers remain an explicit fallback.
+              while a shared workspace prefix avoids repeating the same repository
+              prefill in every employee thread. Budgeted external providers remain an
+              explicit fallback.
             </p>
             <a
               class="text-link"
@@ -265,27 +267,36 @@ export OPENAI_API_KEY="mbk_employee_key"</code></pre>
               </thead>
               <tbody>
                 <tr>
-                  <td>Repository context</td>
-                  <td>Qwen2.5 3B 4-bit</td>
-                  <td>3.144s</td>
-                  <td>1.024s</td>
-                  <td class="speedup">3.02×</td>
-                  <td>6/6 exact tokens</td>
+                  <td>New adjacent code question</td>
+                  <td>Qwen2.5 7B 4-bit</td>
+                  <td>7.034s</td>
+                  <td>5.377s</td>
+                  <td class="speedup">1.31×</td>
+                  <td>3/3 byte-identical</td>
                 </tr>
                 <tr>
-                  <td>Repository context</td>
+                  <td>New unrelated repo question</td>
                   <td>Qwen2.5 7B 4-bit</td>
-                  <td>6.587s</td>
-                  <td>1.998s</td>
-                  <td class="speedup">3.28×</td>
-                  <td>6/6 exact tokens</td>
+                  <td>5.995s</td>
+                  <td>4.217s</td>
+                  <td class="speedup">1.43×</td>
+                  <td>3/3 byte-identical</td>
                 </tr>
                 <tr>
-                  <td>Different repo questions</td>
+                  <td>Repository prefill only</td>
                   <td>Qwen2.5 7B 4-bit</td>
-                  <td colspan="2">Five distinct questions</td>
-                  <td class="speedup">3.23×</td>
-                  <td>Exact tokens</td>
+                  <td>2.306s</td>
+                  <td>0.605s</td>
+                  <td class="speedup">3.84×</td>
+                  <td>3,269 / 4,243 tokens reused</td>
+                </tr>
+                <tr>
+                  <td>Exact deterministic replay</td>
+                  <td>Qwen2.5 7B 4-bit</td>
+                  <td>2.474s</td>
+                  <td>0.091s</td>
+                  <td class="speedup">28.6×</td>
+                  <td>Identical requests only</td>
                 </tr>
                 <tr>
                   <td>Repeated-image matrix</td>
@@ -295,11 +306,12 @@ export OPENAI_API_KEY="mbk_employee_key"</code></pre>
                   <td>100% expected answers</td>
                 </tr>
                 <tr class="control-row">
-                  <td>Five-developer memory check</td>
-                  <td>No model executed</td>
-                  <td colspan="2">12,000 fixture prompt tokens avoided</td>
-                  <td>Not a speed claim</td>
-                  <td>5/5 isolation and reuse checks</td>
+                  <td>Semantic team memory</td>
+                  <td>Qwen2.5 7B 4-bit</td>
+                  <td>4/8 rubric</td>
+                  <td>5/8 rubric</td>
+                  <td>+0.239s</td>
+                  <td>Context result, not speed</td>
                 </tr>
                 <tr class="control-row">
                   <td>First-view control</td>
@@ -314,17 +326,19 @@ export OPENAI_API_KEY="mbk_employee_key"</code></pre>
 
           <div class="benchmark-notes">
             <p>
-              Repository results use the same loaded MLX model, weights, prompts, and
-              tokenization. Median prompt length was 10,405 tokens; 7,901 tokens were
-              reused. The visual figure is the median of six model-level paired medians.
-              Team-memory token savings are deterministic accounting inputs that test
-              namespace isolation and invalidation; they do not measure model throughput.
+              The production-shaped repository audit used an 8,754-file private
+              monorepo, independent standalone threads, alternating order, and the same
+              loaded MLX model, weights, prompts, and tokenization within each pair.
+              Private paths, prompts, and outputs are not published. Decode time did not
+              improve. Exact replay and semantic memory are separate contracts, not
+              new-question speed claims. The visual figure is the median of six
+              model-level paired medians.
             </p>
             <div class="artifact-links">
               <a
-                href="https://github.com/VistritPandey/machboost/blob/main/results/workspace_prefix_qwen25_7b_20260729.json"
+                href="https://github.com/VistritPandey/machboost/blob/main/results/team_repository_reuse_qwen25_7b_20260809.json"
               >
-                7B artifact <i data-lucide="arrow-up-right" aria-hidden="true"></i>
+                Team repository audit <i data-lucide="arrow-up-right" aria-hidden="true"></i>
               </a>
               <a
                 href="https://github.com/VistritPandey/machboost/blob/main/results/vision_cache_qwen_matrix_20260714.json"
@@ -334,8 +348,8 @@ export OPENAI_API_KEY="mbk_employee_key"</code></pre>
               <a href="https://github.com/VistritPandey/machboost/tree/main/paper">
                 Research paper <i data-lucide="arrow-up-right" aria-hidden="true"></i>
               </a>
-              <a href="https://github.com/VistritPandey/machboost/blob/main/scripts/benchmark_team_memory.py">
-                Team-memory check <i data-lucide="arrow-up-right" aria-hidden="true"></i>
+              <a href="https://github.com/VistritPandey/machboost/blob/main/scripts/benchmark_repository_reuse.py">
+                Reuse benchmark <i data-lucide="arrow-up-right" aria-hidden="true"></i>
               </a>
             </div>
           </div>

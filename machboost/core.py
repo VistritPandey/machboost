@@ -32,6 +32,9 @@ class RunStats:
     accepted_draft_spans: int
     rejected_candidates: int
     prompt_tokens: int = 0
+    prompt_eval_tokens: int = 0
+    cached_prompt_tokens: int = 0
+    prompt_cache_namespace: Optional[str] = None
     prompt_eval_seconds: float = 0.0
     generation_seconds: float = 0.0
     time_to_first_token_seconds: Optional[float] = None
