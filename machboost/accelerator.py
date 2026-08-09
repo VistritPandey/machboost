@@ -198,8 +198,14 @@ class Accelerator:
         context: Optional[Union[Iterable[str], str]] = None,
         on_text: Optional[Callable[[str], None]] = None,
         tools: Optional[Sequence[dict[str, Any]]] = None,
+        enable_thinking: bool | str = False,
     ):
-        prompt = render_chat_prompt(self.service, messages, tools=tools)
+        prompt = render_chat_prompt(
+            self.service,
+            messages,
+            tools=tools,
+            enable_thinking=enable_thinking,
+        )
         stop_tokens = service_stop_token_ids(self.service)
         streamer = ChatTextStreamer(on_text, CHAT_STOP_STRINGS) if on_text is not None else None
         result = self.generate_result(
@@ -494,6 +500,7 @@ def render_chat_prompt(
     messages: Sequence[dict[str, Any]],
     *,
     tools: Optional[Sequence[dict[str, Any]]] = None,
+    enable_thinking: bool | str = False,
 ) -> str:
     tokenizer = getattr(service, "tokenizer", None)
     apply_chat_template = getattr(tokenizer, "apply_chat_template", None)
@@ -501,7 +508,7 @@ def render_chat_prompt(
         kwargs: dict[str, Any] = {
             "tokenize": False,
             "add_generation_prompt": True,
-            "enable_thinking": False,
+            "enable_thinking": enable_thinking,
         }
         if tools:
             kwargs["tools"] = list(tools)
