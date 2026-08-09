@@ -219,6 +219,34 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(response["instance"]["keep_alive_seconds"], 7200.0)
         self.assertEqual(response["instance"]["requests"], 0)
 
+    def test_client_exposes_model_lifecycle_and_embedding_helpers(self):
+        with patch.object(
+            self.client,
+            "post",
+            side_effect=[
+                {"status": "success", "model": {"name": "coder"}},
+                {"status": "success", "model": {"name": "coder-copy"}},
+                {"embeddings": [[0.5, 0.25]]},
+                {"removed": True},
+            ],
+        ) as post:
+            created = self.client.create_model(
+                "coder",
+                "qwen2.5-coder:3b",
+                system="Use tests.",
+                options={"num_ctx": 8192},
+            )
+            copied = self.client.copy_model("coder", "coder-copy")
+            embeddings = self.client.embed("coder", "hello", keep_alive="10m")
+            removed = self.client.delete_model("coder-copy")
+
+        self.assertEqual(created["model"]["name"], "coder")
+        self.assertEqual(copied["model"]["name"], "coder-copy")
+        self.assertEqual(embeddings, [[0.5, 0.25]])
+        self.assertTrue(removed)
+        self.assertEqual(post.call_args_list[0].args[0], "/api/create")
+        self.assertEqual(post.call_args_list[2].args[1]["keep_alive"], "10m")
+
     def test_http_errors_become_api_errors(self):
         with self.assertRaisesRegex(MachBoostAPIError, "missing required field"):
             self.client.post("/api/chat", {"messages": []})
