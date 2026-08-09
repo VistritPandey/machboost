@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, Optional, Sequence, Tuple
+from typing import Any, Iterable, Optional, Sequence, Tuple
 
 from machboost.core import Token, TokenSeq
 
@@ -85,6 +85,7 @@ class HuggingFaceCausalLMService:
         max_tokens: int,
         stop_tokens: Optional[Iterable[Token]] = None,
         on_tokens=None,
+        generation_options: Optional[dict[str, Any]] = None,
     ) -> Tuple[Token, ...]:
         if len(prompt_tokens) == 0 or max_tokens <= 0:
             return ()
@@ -92,6 +93,9 @@ class HuggingFaceCausalLMService:
         torch = _torch()
         stop_set = {int(token) for token in stop_tokens or ()}
         generated: list[Token] = []
+        generation_options = dict(generation_options or {})
+        if generation_options.get("seed") is not None:
+            torch.manual_seed(int(generation_options["seed"]))
         input_ids = torch.tensor([list(prompt_tokens)], dtype=torch.long, device=self.device)
         past_key_values = None
 
@@ -103,7 +107,11 @@ class HuggingFaceCausalLMService:
                     out = self.model(input_ids=input_ids, past_key_values=past_key_values, use_cache=True)
                 self.forward_calls += 1
                 past_key_values = getattr(out, "past_key_values", None)
-                token = int(out.logits[:, -1, :].argmax(dim=-1).item())
+                token = _sample_token(
+                    out.logits[:, -1, :],
+                    history=tuple(prompt_tokens) + tuple(generated),
+                    options=generation_options,
+                )
                 if token in stop_set:
                     break
                 generated.append(token)
@@ -165,6 +173,52 @@ def _torch():
     except ImportError as exc:
         raise ImportError("Install Hugging Face support with `pip install machboost[hf]`.") from exc
     return torch
+
+
+def _sample_token(logits, *, history: Sequence[Token], options: dict[str, Any]) -> Token:
+    torch = _torch()
+    scores = logits[0].clone()
+    repeat_last_n = int(options.get("repeat_last_n", 64))
+    recent = tuple(history if repeat_last_n < 0 else history[-repeat_last_n:])
+    counts: dict[int, int] = {}
+    for token in recent:
+        counts[int(token)] = counts.get(int(token), 0) + 1
+    repeat_penalty = float(options.get("repeat_penalty", 1.0))
+    presence_penalty = float(options.get("presence_penalty", 0.0))
+    frequency_penalty = float(options.get("frequency_penalty", 0.0))
+    for token, count in counts.items():
+        if repeat_penalty not in {0.0, 1.0}:
+            scores[token] = (
+                scores[token] * repeat_penalty
+                if scores[token] < 0
+                else scores[token] / repeat_penalty
+            )
+        scores[token] -= presence_penalty + frequency_penalty * count
+    temperature = float(options.get("temperature", 0.0))
+    if temperature <= 0:
+        return int(scores.argmax().item())
+    scores = scores / temperature
+    top_k = int(options.get("top_k", 0))
+    if top_k > 0 and top_k < scores.shape[-1]:
+        threshold = torch.topk(scores, top_k).values[-1]
+        scores[scores < threshold] = -float("inf")
+    probabilities = torch.softmax(scores, dim=-1)
+    top_p = float(options.get("top_p", 0.0))
+    if 0.0 < top_p < 1.0:
+        sorted_probabilities, sorted_indices = torch.sort(probabilities, descending=True)
+        cumulative = torch.cumsum(sorted_probabilities, dim=-1)
+        remove = cumulative - sorted_probabilities > top_p
+        sorted_probabilities[remove] = 0
+        probabilities = torch.zeros_like(probabilities).scatter(
+            0, sorted_indices, sorted_probabilities
+        )
+    min_p = float(options.get("min_p", 0.0))
+    if min_p > 0:
+        probabilities[probabilities < probabilities.max() * min_p] = 0
+    total = probabilities.sum()
+    if not bool(torch.isfinite(total)) or float(total.item()) <= 0:
+        return int(scores.argmax().item())
+    return int(torch.multinomial(probabilities / total, 1).item())
 
 
 def _resolve_device(device: Optional[str]) -> Optional[str]:
