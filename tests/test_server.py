@@ -1706,7 +1706,8 @@ class TeamGatewayHTTPTests(unittest.TestCase):
     def test_workspace_memory_and_exact_cache_skip_second_inference(self) -> None:
         repository = Path(self.temporary.name) / "memory-repo"
         repository.mkdir()
-        (repository / "auth.py").write_text(
+        source = repository / "auth.py"
+        source.write_text(
             "def authenticate(token):\n    return token\n", encoding="utf-8"
         )
         workspace = self.workspace_store.register(repository)
@@ -1733,6 +1734,18 @@ class TeamGatewayHTTPTests(unittest.TestCase):
         self.assertEqual(len(memories["memories"]), 1)
         self.assertEqual(metrics["totals"]["exact_cache_hits"], 1)
         self.assertEqual(metrics["totals"]["avoided_prompt_tokens"], 12)
+
+        source.write_text(
+            "def authenticate(token):\n    return validate(token)\n",
+            encoding="utf-8",
+        )
+        self.request(
+            "/api/workspaces/index", {"workspace_id": workspace.id}
+        )
+        _, after_edit = self.request("/v1/chat/completions", payload)
+
+        self.assertEqual(len(entry.accelerator.chat_calls), 2)
+        self.assertNotIn("cache", after_edit["machboost"])
 
     def test_manual_team_memory_is_retrieved_and_can_be_deleted(self) -> None:
         repository = Path(self.temporary.name) / "shared-repo"
