@@ -422,6 +422,17 @@ class Accelerator:
             accepted_draft_spans=0,
             rejected_candidates=0,
             prompt_tokens=int(native_metrics.get("prompt_tokens") or len(prompt_tokens)),
+            prompt_eval_tokens=int(
+                native_metrics.get("prompt_eval_tokens") or len(prompt_tokens)
+            ),
+            cached_prompt_tokens=int(
+                native_metrics.get("cached_prompt_tokens") or 0
+            ),
+            prompt_cache_namespace=(
+                str(native_metrics["prompt_cache_namespace"])
+                if native_metrics.get("prompt_cache_namespace") is not None
+                else None
+            ),
             prompt_eval_seconds=float(
                 native_metrics.get("prompt_eval_seconds") or 0.0
             ),
