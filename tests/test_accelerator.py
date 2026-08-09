@@ -268,6 +268,22 @@ class AcceleratorTests(unittest.TestCase):
         self.assertEqual(text, "hello there")
         self.assertEqual("".join(chunks), "hello there")
         self.assertGreater(stats.accepted_draft_tokens, 0)
+        self.assertFalse(service.tokenizer.last_kwargs["enable_thinking"])
+
+    def test_generate_chat_forwards_thinking_mode_to_template(self):
+        completion = "analysis complete"
+        rendered_prompt = "<user>solve</user><assistant>"
+        service = ScriptedService(rendered_prompt, completion)
+        service.tokenizer = FakeChatTokenizer()
+        accelerator = Accelerator(service, context_texts=[rendered_prompt + completion])
+
+        accelerator.generate_chat(
+            [{"role": "user", "content": "solve"}],
+            max_tokens=len(completion),
+            enable_thinking="high",
+        )
+
+        self.assertEqual(service.tokenizer.last_kwargs["enable_thinking"], "high")
 
     def test_generate_chat_passes_tool_definitions_to_native_template(self):
         completion = '<tool_call>{"name":"read_file","arguments":{"path":"a.py"}}</tool_call>'
