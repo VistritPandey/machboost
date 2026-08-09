@@ -83,6 +83,7 @@ targets:
       base:
         GENERATE_INFOPLIST_FILE: YES
         PRODUCT_BUNDLE_IDENTIFIER: com.vistritpandey.MachBoostUITests
+        ENABLE_HARDENED_RUNTIME: NO
 schemes:
   MachBoost:
     build:
