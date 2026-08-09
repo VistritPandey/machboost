@@ -533,7 +533,12 @@ final class MachBoostTests: XCTestCase {
 
     @MainActor
     func testDaemonStartsAndShutsDownFromSourceRuntime() async throws {
-        let manager = DaemonManager()
+        let sourceRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let manager = DaemonManager(sourceRootOverride: sourceRoot)
         var configuration = ServerConfiguration()
         configuration.port = 19_435
         do {
