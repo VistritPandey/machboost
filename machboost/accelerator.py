@@ -179,6 +179,7 @@ class Accelerator:
         stop_tokens: Optional[Iterable[Token]] = None,
         stop_strings: Optional[Iterable[str]] = None,
         on_text: Optional[Callable[[str], None]] = None,
+        generation_options: Optional[dict[str, Any]] = None,
     ):
         result = self.generate_result(
             prompt,
@@ -187,6 +188,7 @@ class Accelerator:
             stop_tokens=stop_tokens,
             stop_strings=stop_strings,
             on_text=on_text,
+            generation_options=generation_options,
         )
         return result.text, result.stats
 
@@ -199,6 +201,8 @@ class Accelerator:
         on_text: Optional[Callable[[str], None]] = None,
         tools: Optional[Sequence[dict[str, Any]]] = None,
         enable_thinking: bool | str = False,
+        stop_strings: Optional[Iterable[str]] = None,
+        generation_options: Optional[dict[str, Any]] = None,
     ):
         prompt = render_chat_prompt(
             self.service,
@@ -207,14 +211,18 @@ class Accelerator:
             enable_thinking=enable_thinking,
         )
         stop_tokens = service_stop_token_ids(self.service)
-        streamer = ChatTextStreamer(on_text, CHAT_STOP_STRINGS) if on_text is not None else None
+        chat_stop_strings = tuple(
+            dict.fromkeys((*CHAT_STOP_STRINGS, *(stop_strings or ())))
+        )
+        streamer = ChatTextStreamer(on_text, chat_stop_strings) if on_text is not None else None
         result = self.generate_result(
             prompt,
             max_tokens=max_tokens,
             context=context,
             stop_tokens=stop_tokens,
-            stop_strings=CHAT_STOP_STRINGS,
+            stop_strings=chat_stop_strings,
             on_text=streamer.push if streamer is not None else None,
+            generation_options=generation_options,
         )
         if streamer is not None:
             streamer.finish()
@@ -229,17 +237,19 @@ class Accelerator:
         stop_tokens: Optional[Iterable[Token]] = None,
         stop_strings: Optional[Iterable[str]] = None,
         on_text: Optional[Callable[[str], None]] = None,
+        generation_options: Optional[dict[str, Any]] = None,
     ) -> AcceleratorResult:
         prompt_tokens = self.service.encode(prompt)
         token_streamer = self._on_tokens(on_text)
         run_context_tokens = self.context_tokens + self._encode_many(resolve_context(context))
-        if not self.boost_enabled or (not run_context_tokens and callable(getattr(self.service, "generate_tokens", None))):
+        if generation_options or not self.boost_enabled or (not run_context_tokens and callable(getattr(self.service, "generate_tokens", None))):
             return self._generate_serial_result(
                 prompt_tokens,
                 max_tokens=max_tokens,
                 stop_tokens=stop_tokens,
                 stop_strings=stop_strings,
                 on_tokens=token_streamer,
+                generation_options=generation_options,
             )
 
         corpus_tokens = run_context_tokens
@@ -266,6 +276,7 @@ class Accelerator:
                 stop_tokens=stop_tokens,
                 stop_strings=stop_strings,
                 on_tokens=token_streamer,
+                generation_options=generation_options,
             )
 
         reset_cache = getattr(self.service, "reset_cache", None)
@@ -345,6 +356,7 @@ class Accelerator:
         stop_tokens: Optional[Iterable[Token]],
         stop_strings: Optional[Iterable[str]],
         on_tokens,
+        generation_options: Optional[dict[str, Any]] = None,
     ) -> AcceleratorResult:
         reset_cache = getattr(self.service, "reset_cache", None)
         if callable(reset_cache):
@@ -366,6 +378,8 @@ class Accelerator:
             }
             if native_text_streaming:
                 generate_kwargs["on_text"] = on_tokens.emit
+            if generation_options:
+                generate_kwargs["generation_options"] = generation_options
             tokens = tuple(
                 generate_tokens(
                     prompt_tokens,
