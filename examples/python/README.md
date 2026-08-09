@@ -97,6 +97,22 @@ available. Run it on a private network; MachBoost does not terminate TLS. See
 [the team gateway guide](../../docs/TEAM_GATEWAY.md) for key scopes, retention,
 coding-agent configuration, and local-model judging.
 
+Team memory and optional provider fallback:
+
+```sh
+export MACHBOOST_API_TOKEN="your-admin-token"
+python3 examples/python/team_memory_fallback.py /absolute/path/to/repository \
+  --model qwen2.5-coder:7b
+```
+
+To add a budgeted external provider, also set `EXTERNAL_BASE_URL` and
+`EXTERNAL_API_KEY`. The provider must accept the same public model alias passed
+with `--model`; MachBoost does not silently rewrite model names. The example
+publishes one reviewed team procedure, sends a workspace request with private
+memory and deterministic exact reuse, and prints local cache metrics. It never
+prints the provider key. Exact-reuse counters represent avoided model work only
+for eligible repeated requests; they are not a decode-throughput speedup.
+
 Warm chat latency comparison:
 
 ```sh
