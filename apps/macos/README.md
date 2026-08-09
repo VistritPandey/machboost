@@ -23,6 +23,9 @@ a separate MachBoost installation.
   throughput, and memory metrics
 - Team and Logs & evals views for scoped employee keys, model allowlists,
   per-key concurrency/rate limits, trace retention, and local evaluations
+- Memory & fallback view for private/shared workspace memory, exact-reuse
+  savings, external OpenAI-compatible providers, monthly budgets, and Keychain
+  secrets
 - menu-bar lifecycle, optional launch at login, and Sparkle 2 updates
 - localhost serving by default; authenticated LAN serving is opt-in
 
@@ -56,6 +59,10 @@ xcodebuild test \
 
 The checked-in Xcode project is generated from `project.yml`. Update the YAML
 first and regenerate the project whenever target or package settings change.
+The macOS UI-test runner has hardened runtime disabled so Xcode can inject its
+ad-hoc XCTest bundle on unsigned local and CI builds. The application target and
+release archives retain hardened runtime; this test-only setting is required to
+avoid a mismatched-Team-ID library-validation failure before XCTest starts.
 
 The desktop code is split into explicit targets:
 
@@ -94,6 +101,27 @@ output-token decoding. Plain chat does not opt into this cache.
 
 Workspace metadata and indexes stay in MachBoost Application Support. Source
 files remain in their original location and no repository content is uploaded.
+
+## Team Memory And Provider Fallback
+
+Open **Server → Memory & fallback** to inspect visible memory entries, exact
+reuse counters, avoided-token accounting, and configured external providers.
+Workspace chats write private bounded summaries by default. Shared entries are
+administrator-controlled, and repository revisions plus dependency digests
+invalidate stale records before retrieval. Exact-response reuse remains opt-in
+and is restricted to deterministic non-streaming requests without tools or
+images.
+
+External providers must expose an OpenAI-compatible HTTPS endpoint. Provider
+metadata, budgets, and usage counters live in the local team database. API keys
+are stored in macOS Keychain and restored to daemon process memory through a
+secret-only API after launch; restoring a key does not rewrite model lists,
+pricing, timeouts, or budget configuration.
+
+The app does not silently redirect ordinary chat to a paid provider. Routing is
+selected per API request with `machboost.route`; the default is `local_only`.
+The provider UI is an administrator configuration surface, while route choice
+and workload policy remain in the calling application.
 
 ## Embedded Runtime
 
@@ -148,6 +176,10 @@ MachBoost APIs:
 - `GET /api/workspaces`
 - `GET /api/team/status`
 - `GET /api/team/keys`, `POST /api/team/keys`
+- `GET /api/memory`, `POST /api/memory/delete`
+- `GET /api/cache/metrics`
+- `GET`, `POST /api/providers`
+- `POST /api/providers/secret`, `POST /api/providers/delete`
 - `POST /api/team/keys/revoke`
 - `POST /api/team/settings`
 - `GET /api/traces`
@@ -169,8 +201,8 @@ Build an ad-hoc signed DMG for local packaging and runtime tests without Apple
 credentials:
 
 ```sh
-./scripts/release_macos.sh 0.8.2-local --local
-open dist/macos/MachBoost-0.8.2-local-arm64.dmg
+./scripts/release_macos.sh 0.9.0-local --local
+open dist/macos/MachBoost-0.9.0-local-arm64.dmg
 ```
 
 Local mode builds the locked runtime, archives the arm64 app, embeds and signs
