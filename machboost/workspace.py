@@ -309,6 +309,35 @@ class WorkspaceStore:
             raise WorkspaceError(f"Unknown workspace: {workspace_id}")
         return workspace
 
+    def file_digests(
+        self,
+        workspace_id: str,
+        paths: Optional[Sequence[str]] = None,
+    ) -> dict[str, str]:
+        """Return content digests from the latest completed workspace index."""
+        self.get(workspace_id)
+        database_path = self._database_path(workspace_id)
+        if not database_path.exists():
+            return {}
+        normalized = tuple(
+            dict.fromkeys(str(path).strip() for path in (paths or ()) if str(path).strip())
+        )
+        try:
+            with closing(sqlite3.connect(database_path)) as connection:
+                if not normalized:
+                    rows = connection.execute(
+                        "SELECT path, digest FROM files ORDER BY path"
+                    ).fetchall()
+                else:
+                    placeholders = ",".join("?" for _ in normalized)
+                    rows = connection.execute(
+                        f"SELECT path, digest FROM files WHERE path IN ({placeholders})",
+                        normalized,
+                    ).fetchall()
+        except sqlite3.OperationalError as exc:
+            raise WorkspaceError(f"Workspace digest lookup failed: {exc}") from exc
+        return {str(path): str(digest) for path, digest in rows}
+
     def remove(self, workspace_id: str) -> bool:
         with self._lock:
             target = self._workspace_dir(workspace_id)
