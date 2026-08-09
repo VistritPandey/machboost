@@ -2,9 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import time
-from typing import Callable, Iterable, Optional, Sequence, Tuple
+from typing import Any, Callable, Iterable, Optional, Sequence, Tuple
 
 from machboost.core import Token, TokenSeq
+
+
+def _optional_float(value):
+    return None if value is None else float(value)
 
 
 @dataclass(frozen=True)
@@ -119,6 +123,7 @@ class MLXCausalLMService:
         stop_tokens: Optional[Iterable[Token]] = None,
         on_tokens=None,
         on_text=None,
+        generation_options: Optional[dict[str, Any]] = None,
     ) -> Tuple[Token, ...]:
         if len(prompt_tokens) == 0 or max_tokens <= 0:
             return ()
@@ -129,6 +134,7 @@ class MLXCausalLMService:
                 stop_tokens=stop_tokens,
                 on_tokens=on_tokens,
                 on_text=on_text,
+                generation_options=generation_options,
             )
 
         self.reset_cache()
@@ -199,6 +205,7 @@ class MLXCausalLMService:
         stop_tokens: Optional[Iterable[Token]],
         on_tokens,
         on_text,
+        generation_options: Optional[dict[str, Any]],
     ) -> Tuple[Token, ...]:
         try:
             from mlx_lm import stream_generate
@@ -235,6 +242,49 @@ class MLXCausalLMService:
                     cached_prompt_tokens = 0
         cache_key = list(full_prompt)
         stream_kwargs = {"max_tokens": max_tokens}
+        generation_options = dict(generation_options or {})
+        if generation_options:
+            try:
+                from mlx_lm.sample_utils import make_logits_processors, make_sampler
+            except ImportError as exc:
+                raise ImportError(
+                    "Installed mlx-lm does not expose sampling utilities; upgrade mlx-lm."
+                ) from exc
+            stream_kwargs["sampler"] = make_sampler(
+                temp=float(generation_options.get("temperature", 0.0)),
+                top_p=float(generation_options.get("top_p", 0.0)),
+                min_p=float(generation_options.get("min_p", 0.0)),
+                top_k=int(generation_options.get("top_k", 0)),
+            )
+            processors = make_logits_processors(
+                repetition_penalty=_optional_float(
+                    generation_options.get("repeat_penalty")
+                ),
+                repetition_context_size=int(
+                    generation_options.get("repeat_last_n", 64)
+                ),
+                presence_penalty=_optional_float(
+                    generation_options.get("presence_penalty")
+                ),
+                presence_context_size=int(
+                    generation_options.get("repeat_last_n", 64)
+                ),
+                frequency_penalty=_optional_float(
+                    generation_options.get("frequency_penalty")
+                ),
+                frequency_context_size=int(
+                    generation_options.get("repeat_last_n", 64)
+                ),
+            )
+            if processors:
+                stream_kwargs["logits_processors"] = processors
+            if generation_options.get("seed") is not None:
+                try:
+                    import mlx.core as mx
+
+                    mx.random.seed(int(generation_options["seed"]))
+                except (ImportError, AttributeError, TypeError, ValueError):
+                    pass
         if prompt_cache_store is not None and prompt_cache is not None:
             stream_kwargs["prompt_cache"] = prompt_cache
         try:
