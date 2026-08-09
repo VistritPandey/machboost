@@ -11,6 +11,21 @@ def _optional_float(value):
     return None if value is None else float(value)
 
 
+def _embedding_layer(model):
+    candidates = (
+        getattr(model, "model", None),
+        model,
+    )
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        for name in ("embed_tokens", "wte", "tok_embeddings"):
+            layer = getattr(candidate, name, None)
+            if callable(layer):
+                return layer
+    return None
+
+
 @dataclass(frozen=True)
 class Verification:
     accepted: int
@@ -105,6 +120,27 @@ class MLXCausalLMService:
             return self.tokenizer.decode(list(tokens), skip_special_tokens=skip_special_tokens)
         except TypeError:
             return self.tokenizer.decode(list(tokens))
+
+    def embed(self, texts: Sequence[str]) -> list[list[float]]:
+        try:
+            import mlx.core as mx
+        except ImportError as exc:
+            raise ImportError("Install MLX support with `pip install machboost[mlx]`.") from exc
+        embedding_layer = _embedding_layer(self.model)
+        if embedding_layer is None:
+            raise ValueError("model does not expose an input embedding layer")
+        results: list[list[float]] = []
+        for text in texts:
+            tokens = self.encode(str(text))
+            if not tokens:
+                raise ValueError("embedding input cannot be empty")
+            values = embedding_layer(mx.array([list(tokens)]))
+            pooled = mx.mean(values[0], axis=0)
+            norm = mx.sqrt(mx.sum(pooled * pooled))
+            pooled = pooled / mx.maximum(norm, mx.array(1e-12))
+            mx.eval(pooled)
+            results.append([float(value) for value in pooled.tolist()])
+        return results
 
     def next_token(self, prefix_tokens: TokenSeq) -> Optional[Token]:
         if len(prefix_tokens) == 0:
@@ -256,25 +292,22 @@ class MLXCausalLMService:
                 min_p=float(generation_options.get("min_p", 0.0)),
                 top_k=int(generation_options.get("top_k", 0)),
             )
+            repetition_context_size = int(generation_options.get("repeat_last_n", 64))
+            if repetition_context_size < 0:
+                repetition_context_size = len(full_prompt) + max_tokens
             processors = make_logits_processors(
                 repetition_penalty=_optional_float(
                     generation_options.get("repeat_penalty")
                 ),
-                repetition_context_size=int(
-                    generation_options.get("repeat_last_n", 64)
-                ),
+                repetition_context_size=repetition_context_size,
                 presence_penalty=_optional_float(
                     generation_options.get("presence_penalty")
                 ),
-                presence_context_size=int(
-                    generation_options.get("repeat_last_n", 64)
-                ),
+                presence_context_size=repetition_context_size,
                 frequency_penalty=_optional_float(
                     generation_options.get("frequency_penalty")
                 ),
-                frequency_context_size=int(
-                    generation_options.get("repeat_last_n", 64)
-                ),
+                frequency_context_size=repetition_context_size,
             )
             if processors:
                 stream_kwargs["logits_processors"] = processors
