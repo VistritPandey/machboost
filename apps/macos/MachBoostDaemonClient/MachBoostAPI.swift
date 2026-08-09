@@ -42,6 +42,20 @@ public protocol MachBoostAPIProtocol: AnyObject, Sendable {
     ) async throws -> TeamSettings
     func traces(limit: Int) async throws -> [TraceSummary]
     func evaluations(limit: Int) async throws -> [TraceEvaluation]
+    func memories(workspaceID: String?) async throws -> [MemorySummary]
+    func cacheMetrics() async throws -> CacheMetrics
+    func deleteMemory(id: String) async throws
+    func providers() async throws -> [ProviderSummary]
+    func configureProvider(
+        id: String?,
+        name: String,
+        baseURL: String,
+        models: [String],
+        apiKey: String?,
+        monthlyBudgetUSD: Double?
+    ) async throws -> ProviderSummary
+    func setProviderSecret(id: String, apiKey: String) async throws
+    func deleteProvider(id: String) async throws
     func evaluate(
         traceIDs: [String],
         name: String,
@@ -93,6 +107,24 @@ public extension MachBoostAPIProtocol {
     func teamKeys() async throws -> [TeamKey] { [] }
     func traces(limit: Int) async throws -> [TraceSummary] { [] }
     func evaluations(limit: Int) async throws -> [TraceEvaluation] { [] }
+    func memories(workspaceID: String?) async throws -> [MemorySummary] { [] }
+    func cacheMetrics() async throws -> CacheMetrics {
+        CacheMetrics(schema: "machboost.cache-metrics.v1", totals: [:], namespaces: [:])
+    }
+    func deleteMemory(id: String) async throws {}
+    func providers() async throws -> [ProviderSummary] { [] }
+    func configureProvider(
+        id: String?,
+        name: String,
+        baseURL: String,
+        models: [String],
+        apiKey: String?,
+        monthlyBudgetUSD: Double?
+    ) async throws -> ProviderSummary {
+        throw MachBoostAPIError.server(status: 501, message: "Provider routing is unavailable.")
+    }
+    func setProviderSecret(id: String, apiKey: String) async throws {}
+    func deleteProvider(id: String) async throws {}
 
     func createTeamKey(
         name: String,
@@ -275,6 +307,84 @@ public final class MachBoostAPI: MachBoostAPIProtocol, @unchecked Sendable {
     public func evaluations(limit: Int = 50) async throws -> [TraceEvaluation] {
         let response: EvaluationsResponse = try await get("/api/evaluations?limit=\(limit)")
         return response.evaluations
+    }
+
+    public func memories(workspaceID: String? = nil) async throws -> [MemorySummary] {
+        let suffix = workspaceID.map {
+            "?workspace_id=" + $0.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)!
+        } ?? ""
+        let response: MemoriesResponse = try await get("/api/memory\(suffix)")
+        return response.memories
+    }
+
+    public func cacheMetrics() async throws -> CacheMetrics {
+        try await get("/api/cache/metrics")
+    }
+
+    public func deleteMemory(id: String) async throws {
+        struct DeleteResponse: Decodable { let removed: Int }
+        let response: DeleteResponse = try await post(
+            "/api/memory/delete",
+            jsonObject: ["memory_ids": [id]]
+        )
+        guard response.removed == 1 else { throw MachBoostAPIError.invalidResponse }
+    }
+
+    public func providers() async throws -> [ProviderSummary] {
+        let response: ProvidersResponse = try await get("/api/providers")
+        return response.providers
+    }
+
+    public func configureProvider(
+        id: String? = nil,
+        name: String,
+        baseURL: String,
+        models: [String],
+        apiKey: String?,
+        monthlyBudgetUSD: Double?
+    ) async throws -> ProviderSummary {
+        var payload: [String: Any] = [
+            "name": name,
+            "base_url": baseURL,
+            "models": models,
+            "enabled": true,
+        ]
+        if let id, !id.isEmpty { payload["id"] = id }
+        if let apiKey, !apiKey.isEmpty { payload["api_key"] = apiKey }
+        if let monthlyBudgetUSD { payload["monthly_budget_usd"] = monthlyBudgetUSD }
+        let response: ProviderResponse = try await post(
+            "/api/providers",
+            jsonObject: payload
+        )
+        return response.provider
+    }
+
+    public func deleteProvider(id: String) async throws {
+        struct DeleteResponse: Decodable { let removed: Bool }
+        let response: DeleteResponse = try await post(
+            "/api/providers/delete",
+            jsonObject: ["provider_id": id]
+        )
+        guard response.removed else { throw MachBoostAPIError.invalidResponse }
+    }
+
+    public func setProviderSecret(id: String, apiKey: String) async throws {
+        struct SecretResponse: Decodable {
+            let providerID: String
+            let hasSecret: Bool
+
+            enum CodingKeys: String, CodingKey {
+                case providerID = "provider_id"
+                case hasSecret = "has_secret"
+            }
+        }
+        let response: SecretResponse = try await post(
+            "/api/providers/secret",
+            jsonObject: ["provider_id": id, "api_key": apiKey]
+        )
+        guard response.providerID == id, response.hasSecret else {
+            throw MachBoostAPIError.invalidResponse
+        }
     }
 
     public func evaluate(
