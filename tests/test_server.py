@@ -1813,6 +1813,45 @@ class TeamGatewayHTTPTests(unittest.TestCase):
         self.assertTrue(events[-1]["machboost"]["route"]["buffered_upstream"])
         self.assertEqual(len(self.server.manager._models), 0)
 
+    def test_streaming_local_first_falls_back_before_headers_on_queue_overload(self) -> None:
+        self.request(
+            "/api/providers",
+            {
+                "id": "fallback",
+                "name": "Fallback API",
+                "base_url": "https://inference.example.com",
+                "models": ["mlx-community/example"],
+                "api_key": "provider-secret",
+            },
+        )
+
+        with patch.object(
+            self.server.manager,
+            "chat",
+            side_effect=RequestAdmissionError("queue is full", reason="queue_full"),
+        ):
+            _, headers, body = self.request(
+                "/v1/chat/completions",
+                {
+                    "model": "mlx-community/example",
+                    "messages": [{"role": "user", "content": "hello"}],
+                    "stream": True,
+                    "machboost": {
+                        "route": {
+                            "mode": "local_first",
+                            "provider_id": "fallback",
+                        }
+                    },
+                },
+                raw=True,
+            )
+
+        self.assertEqual(headers.get_content_type(), "text/event-stream")
+        self.assertIn(b"external answer", body)
+        self.assertTrue(body.rstrip().endswith(b"data: [DONE]"))
+        self.assertEqual(len(self.provider_calls), 1)
+        self.assertEqual(len(self.server.manager._models), 0)
+
 
 if __name__ == "__main__":
     unittest.main()
