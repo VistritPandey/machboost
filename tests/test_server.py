@@ -730,9 +730,10 @@ class HTTPServerTests(unittest.TestCase):
             response["machboost"]["stats"]["accepted_draft_tokens"], 2
         )
         self.assertEqual(response["machboost"]["backend"], "mlx")
+        indexed_workspace = self.workspace_store.get(workspace.id)
         self.assertEqual(
             accelerator.service.prompt_cache_configs[-1]["namespace"],
-            f"workspace:{workspace.id}:unversioned",
+            f"workspace:{workspace.id}:{indexed_workspace.revision}",
         )
 
     def test_streaming_workspace_response_retains_runtime_metrics(self):
