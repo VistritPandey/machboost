@@ -117,6 +117,44 @@ GPU-throughput increase. MLX-VLM remains one replica per model because its
 mutable visual state is not replica-safe. MachBoost v0.9.0 does not implement
 continuous batching.
 
+## What Repository Sharing Actually Reuses
+
+Registering a repository and retrieving relevant files is not, by itself, a
+MachBoost-specific advantage. Coding agents already inspect repositories. The
+server-side advantage is that independent employee threads using the same
+workspace content revision can reuse the resident MLX state for the exact
+system and repository-map prefix. Query-specific evidence and the new question
+are still evaluated normally. Private memories and exact responses remain in
+their own access namespaces.
+
+In a three-pair Qwen2.5 7B audit over a private 8,754-file monorepo, an adjacent
+coding request reused 3,269 of 4,243 prompt tokens. Median prefill fell from
+2.306 to 0.605 seconds, while total time fell from 7.034 to 5.377 seconds
+(1.314x). An unrelated-subsystem control reused 3,257 of 4,327 prompt tokens
+and improved total time from 5.995 to 4.217 seconds (1.426x). All six paired
+outputs were byte-identical under greedy decoding. Decode time did not improve.
+
+This path works across chat threads and employee keys because the cache
+namespace follows the workspace content revision. The revision combines Git
+HEAD, when available, with the indexed path/digest manifest, so uncommitted and
+untracked eligible source changes also invalidate reuse boundaries. It does not
+cross workspace revisions, model instances, incompatible cache architectures,
+or daemon restarts.
+
+Run the same privacy-preserving benchmark against a registered workspace:
+
+```sh
+python3 scripts/benchmark_repository_reuse.py \
+  --workspace-id WORKSPACE_ID \
+  --model qwen2.5:7b \
+  --primer "Explain the existing subsystem and cite its implementation." \
+  --target "Design an adjacent change and cite the files to edit." \
+  --runs 3
+```
+
+The script omits source paths, prompts, citations, and model text from its JSON
+unless the caller explicitly requests citations.
+
 ## Team Memory And Exact Reuse
 
 Team memory is available only on workspace-backed requests. It is deliberately
@@ -158,7 +196,7 @@ fixes, procedures, decisions, and summaries through `POST /api/memory`.
 
 Exact-response reuse is off by default. It applies only to deterministic,
 non-streaming requests with temperature zero and no tools or images. Cache keys
-include the model, request, workspace, scope, principal, and revision. A hit
+include the model, request, workspace, scope, principal, and content revision. A hit
 returns the previously recorded response without model execution and increments
 avoided-token and avoided-cost counters. Sampling, visual inputs, tool calls,
 streaming, repository changes, or a different employee namespace bypass it.
@@ -176,6 +214,13 @@ python3 scripts/benchmark_team_memory.py
 The benchmark's prompt/completion savings are deterministic fixture accounting,
 not a model-throughput measurement. It also verifies private isolation,
 workspace isolation, shared retrieval, and revision invalidation.
+
+The model-backed private-repository probe provides a separate memory result.
+One prior exchange was retrieved in all three independent-thread rounds and a
+narrow required-concept rubric increased from 4/8 to 5/8. The additional memory
+raised the prompt from 4,243 to 4,657 tokens and median wall time from 5.341 to
+5.581 seconds. Memory is therefore presented as optional historical context,
+not as automatic token savings or faster inference.
 
 ## External Provider Fallback
 
