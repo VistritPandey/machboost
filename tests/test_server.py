@@ -713,6 +713,38 @@ class HTTPServerTests(unittest.TestCase):
         self.assertEqual(workspace_result["id"], workspace.id)
         self.assertEqual(workspace_result["retrieved_chunks"], 1)
         self.assertEqual(workspace_result["citations"][0]["path"], "auth.py")
+        self.assertEqual(
+            response["machboost"]["stats"]["accepted_draft_tokens"], 2
+        )
+        self.assertEqual(response["machboost"]["backend"], "mlx")
+
+    def test_streaming_workspace_response_retains_runtime_metrics(self):
+        repository = Path(self.temporary.name) / "repository"
+        repository.mkdir()
+        (repository / "stream.py").write_text(
+            "def cancel_stream(request_id):\n"
+            "    return active_requests.cancel(request_id)\n",
+            encoding="utf-8",
+        )
+        workspace = self.workspace_store.register(repository)
+        self.workspace_store.index(workspace.id)
+
+        _, _, body = self.request(
+            "/api/chat",
+            {
+                "model": "mlx-community/example",
+                "workspace_id": workspace.id,
+                "messages": [
+                    {"role": "user", "content": "Where is streaming cancelled?"}
+                ],
+                "stream": True,
+            },
+        )
+
+        final = json.loads(body.splitlines()[-1])
+        self.assertEqual(final["machboost"]["workspace"]["id"], workspace.id)
+        self.assertEqual(final["machboost"]["stats"]["generated_tokens"], 2)
+        self.assertEqual(final["machboost"]["backend"], "mlx")
 
     def test_openai_workspace_extension_is_backward_compatible(self):
         repository = Path(self.temporary.name) / "repository"
