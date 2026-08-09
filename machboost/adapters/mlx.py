@@ -28,6 +28,7 @@ class MLXCausalLMService:
         cache_can_trim: Optional[Callable[[object], bool]] = None,
         native_prompt_cache_size: int = 0,
         native_prompt_cache_bytes: int = 2 * 1024 * 1024 * 1024,
+        native_prompt_cache_namespace: str = "default",
     ) -> None:
         self.model = model
         self.tokenizer = tokenizer
@@ -39,13 +40,14 @@ class MLXCausalLMService:
         self.cache_can_trim = cache_can_trim
         self.native_prompt_cache_size = max(0, int(native_prompt_cache_size))
         self.native_prompt_cache_bytes = max(0, int(native_prompt_cache_bytes))
+        self.native_prompt_cache_namespace = str(native_prompt_cache_namespace or "default")
         self.forward_calls = 0
         self._cache = None
         self._cache_prefix: Tuple[Token, ...] = ()
         self._cache_logits = None
         self._cache_supported: Optional[bool] = None
         self._native_prompt_cache = None
-        self._native_prompt_cache_key = (
+        self._native_prompt_cache_model_key = (
             type(model).__module__,
             type(model).__qualname__,
             id(model),
@@ -304,6 +306,7 @@ class MLXCausalLMService:
                 "time_to_first_token_seconds": ttft,
                 "prompt_tokens_per_second": prompt_tps,
                 "generation_tokens_per_second": generation_tps,
+                "prompt_cache_namespace": self.native_prompt_cache_namespace,
             }
         return tuple(generated)
 
@@ -316,6 +319,7 @@ class MLXCausalLMService:
         enabled: bool,
         max_size: int = 8,
         max_bytes: int = 2 * 1024 * 1024 * 1024,
+        namespace: str = "default",
     ) -> None:
         next_size = max(0, int(max_size)) if enabled else 0
         next_bytes = max(0, int(max_bytes)) if enabled else 0
@@ -326,6 +330,11 @@ class MLXCausalLMService:
             self.clear_prompt_cache()
         self.native_prompt_cache_size = next_size
         self.native_prompt_cache_bytes = next_bytes
+        self.native_prompt_cache_namespace = str(namespace or "default")
+
+    @property
+    def _native_prompt_cache_key(self):
+        return (*self._native_prompt_cache_model_key, self.native_prompt_cache_namespace)
 
     def _native_prompt_cache_store(self):
         if self.native_prompt_cache_size <= 0 or self.native_prompt_cache_bytes <= 0:
