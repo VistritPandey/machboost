@@ -19,6 +19,9 @@ final class AppState {
     private(set) var teamKeys: [TeamKey] = []
     private(set) var traces: [TraceSummary] = []
     private(set) var evaluations: [TraceEvaluation] = []
+    private(set) var memories: [MemorySummary] = []
+    private(set) var cacheMetrics: CacheMetrics?
+    private(set) var providers: [ProviderSummary] = []
     private(set) var lastCreatedTeamToken: String?
     private(set) var downloads: [String: PullEvent] = [:]
     private(set) var loadingModels: Set<String> = []
@@ -85,6 +88,7 @@ final class AppState {
             self.metrics = values.2
             self.workspaces = values.3
             await refreshTeam()
+            await refreshMemoryAndProviders()
             if values.0.allSatisfy({ !$0.cached }) {
                 showOnboarding = true
             }
@@ -124,6 +128,74 @@ final class AppState {
             teamKeys = []
             traces = []
             evaluations = []
+        } catch {
+            presentedError = error.localizedDescription
+        }
+    }
+
+    func refreshMemoryAndProviders() async {
+        guard serverIsRunning else { return }
+        do {
+            async let memories = api.memories(workspaceID: nil)
+            async let metrics = api.cacheMetrics()
+            async let providers = api.providers()
+            let values = try await (memories, metrics, providers)
+            self.memories = values.0
+            cacheMetrics = values.1
+            self.providers = values.2
+            for provider in values.2 where !provider.hasSecret {
+                guard let secret = KeychainStore.providerSecret(id: provider.id) else { continue }
+                try await api.setProviderSecret(id: provider.id, apiKey: secret)
+            }
+        } catch MachBoostAPIError.server(status: 404, message: _) {
+            memories = []
+            cacheMetrics = nil
+            providers = []
+        } catch {
+            presentedError = error.localizedDescription
+        }
+    }
+
+    func deleteMemory(id: String) async {
+        do {
+            try await api.deleteMemory(id: id)
+            await refreshMemoryAndProviders()
+        } catch {
+            presentedError = error.localizedDescription
+        }
+    }
+
+    func configureProvider(
+        id: String?,
+        name: String,
+        baseURL: String,
+        models: [String],
+        apiKey: String,
+        monthlyBudgetUSD: Double?
+    ) async {
+        do {
+            let provider = try await api.configureProvider(
+                id: id,
+                name: name,
+                baseURL: baseURL,
+                models: models,
+                apiKey: apiKey,
+                monthlyBudgetUSD: monthlyBudgetUSD
+            )
+            if !apiKey.isEmpty {
+                try KeychainStore.saveProviderSecret(apiKey, id: provider.id)
+            }
+            await refreshMemoryAndProviders()
+        } catch {
+            presentedError = error.localizedDescription
+        }
+    }
+
+    func deleteProvider(id: String) async {
+        do {
+            try await api.deleteProvider(id: id)
+            try KeychainStore.deleteProviderSecret(id: id)
+            await refreshMemoryAndProviders()
         } catch {
             presentedError = error.localizedDescription
         }

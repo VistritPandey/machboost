@@ -20,13 +20,13 @@
 
 \title{MachBoost: Conditional Acceleration for On-Device Text and Visual Models}
 \author{Vistrit Pandey\\\texttt{vistrit@blinkfire.com}}
-\date{July 2026}
+\date{August 2026}
 
 \begin{document}
 \maketitle
 
 \begin{abstract}
-MachBoost is a local inference package for conditional acceleration. Its text paths either draft candidate tokens from explicit context or reuse model state for an unchanged repository prefix. Visual requests can reuse state derived from unchanged image bytes or, experimentally, shorten a new image's visual sequence after Qwen3-VL completes early cross-modal fusion. Repository-prefix experiments on an Apple M5 Pro compare native full prefill with reuse of the longest exact prefix while the question and retrieved code change. Across five different questions, Qwen2.5 3B and 7B reach 2.97$\times$ and 3.23$\times$ median paired speedups; all ten pairs generate identical token sequences. Medians over six rows, including one exact repeat of the priming request, are 3.02$\times$ and 3.28$\times$. This lowers prefill rather than autoregressive decode and does not help the first request. Separate context-drafting experiments on an Apple M1 Max are less consistent: a favorable 3B Qwen code fixture reaches 1.96$\times$, while a broader Llama 3.2 3B audit records a 1.008$\times$ aggregate median and exact token equality in 20 of 21 pairs. Across six Qwen vision models, repeated-image paired medians range from 5.14$\times$ to 17.44$\times$. A ten-image Qwen3-VL 8B TextVQA pilot with all caches disabled reaches a 1.67$\times$ aggregate speedup after retaining a median 35.12\% of visual hidden states. Native and compressed paths each answer eight questions correctly, although normalized outputs agree on seven. The measurements support distinct, workload-dependent contracts rather than universal faster inference.
+MachBoost is a local inference package for conditional acceleration. Its text paths either draft candidate tokens from explicit context or reuse model state for an unchanged repository prefix. Visual requests can reuse state derived from unchanged image bytes or, experimentally, shorten a new image's visual sequence after Qwen3-VL completes early cross-modal fusion. A team gateway adds revision-aware private and shared memory, deterministic exact-request reuse, and budgeted external-provider fallback; these are serving features and are evaluated separately from model speed. Repository-prefix experiments on an Apple M5 Pro compare native full prefill with reuse of the longest exact prefix while the question and retrieved code change. Across five different questions, Qwen2.5 3B and 7B reach 2.97$\times$ and 3.23$\times$ median paired speedups; all ten pairs generate identical token sequences. Medians over six rows, including one exact repeat of the priming request, are 3.02$\times$ and 3.28$\times$. This lowers prefill rather than autoregressive decode and does not help the first request. Separate context-drafting experiments on an Apple M1 Max are less consistent: a favorable 3B Qwen code fixture reaches 1.96$\times$, while a broader Llama 3.2 3B audit records a 1.008$\times$ aggregate median and exact token equality in 20 of 21 pairs. Across six Qwen vision models, repeated-image paired medians range from 5.14$\times$ to 17.44$\times$. A ten-image Qwen3-VL 8B TextVQA pilot with all caches disabled reaches a 1.67$\times$ aggregate speedup after retaining a median 35.12\% of visual hidden states. Native and compressed paths each answer eight questions correctly, although normalized outputs agree on seven. The measurements support distinct, workload-dependent contracts rather than universal faster inference.
 \end{abstract}
 
 \section{Introduction}
@@ -57,6 +57,9 @@ This paper contributes the following:
   \item a repository-prefix path that restores native MLX prompt state only for
   an exact token prefix, plus paired 3B and 7B artifacts over different
   questions;
+  \item a revision- and dependency-aware team memory ledger with private and
+  administrator-published scopes, deterministic exact-request reuse, and
+  machine-readable avoided-work counters;
   \item an architecture-aware MLX-VLM adapter with content-addressed image identity, projected-feature reuse where the model interface preserves all required tensors, and image-scoped prompt state;
   \item a whole-prefix checkpoint path for Qwen3.5's mixed recurrent/attention cache, plus a conservative prompt-state-only path for Qwen3-VL's deep-stack visual features;
   \item paired repeated-image artifacts for six Qwen models that record cache hits, matched prefix length, first-token latency, raw outputs, and expected-answer checks;
@@ -161,6 +164,24 @@ chat leaves this cache disabled; repository requests opt in. Cache types that
 cannot be safely trimmed, including the tested Qwen3.5 hybrid recurrent state,
 fall back to native prefill.
 
+\subsection{Namespaced Team Memory and Exact Reuse}
+The team gateway does not concatenate employee transcripts into one shared
+context. A memory namespace includes organization, workspace, scope, repository
+revision, and, for private records, principal identity. Completed workspace
+requests can write a bounded redacted summary with citations and dependency
+digests. Retrieval searches private and shared namespaces independently under a
+fixed character budget, then rejects records whose revision or dependency
+digests no longer match the current index. Only an administrator may publish a
+shared record.
+
+Exact-response reuse is a separate opt-in path. Its key includes namespace,
+workspace revision, model, and normalized request. It is restricted to
+non-streaming, temperature-zero requests without tools or images. A hit returns
+the recorded response without model execution and accounts for avoided prompt
+tokens, completion tokens, and configured cost. This is semantic reuse only in
+the literal repeated-request case; related questions use retrieved memory but
+still invoke the model.
+
 \subsection{Architecture-Aware Reuse for an Unchanged Image}
 The visual adapter computes a SHA-256 identity from the image contents. Local file metadata memoizes hashing but does not define identity; base64 payloads, data URLs, and in-memory images are hashed directly. The first bounded LRU maps this identity to the projected output of the vision tower,
 \[
@@ -238,6 +259,16 @@ replica for later workspace requests. The SwiftUI macOS client persists a
 workspace identifier per conversation and provides repository selection,
 refresh, and removal controls.
 
+The same local SQLite database stores team-key hashes, memory metadata, exact
+responses, provider configuration, and usage counters. Plaintext employee keys
+are returned once, while external-provider keys remain in process memory or the
+macOS Keychain. Provider routing supports local-only, local-first,
+external-first, and external-only policies. Fallback is permitted only for
+transient overload, timeout, connection, or selected upstream errors; budget,
+authentication, and request-validation errors fail closed. The native app
+exposes memory metrics and provider administration without persisting secrets in
+the database.
+
 The 0.3 series adds vision-model aliases, image arguments in the CLI and Python client, Ollama-style image payloads, and OpenAI-style image content parts. The current alias set includes Qwen2.5-VL 3B, Qwen3-VL 2B/4B/8B, and Qwen3.5 0.8B/4B/9B. MLX objects are created and used on one dedicated worker thread because MLX arrays and streams are thread-affine. The worker owns model load, image preparation, cache lookup, generation, and cache release. Version 0.4 adds the opt-in \texttt{vision\_tokens} mode and retention telemetry. Version 0.5 adds automatic and calibrated policies, random and shape/depth ablations, and temporal video-frame inputs. Post-fusion compression remains restricted to Qwen3-VL because the wrapper depends on that family's layer and deep-stack interfaces.
 
 The Ollama HTTP adapter remains a wrapper: Ollama's public generation API does not expose the target token IDs, logits, mutable KV cache, and block-verification hook this implementation needs. Native integration would require a runner-level change rather than an HTTP option.
@@ -296,6 +327,22 @@ These rows test exact prefill reuse, not answer quality or faster decoding. The
 questions retrieve different evidence but share a long repository map. A first
 workspace request, an unrelated prompt, or a long answer dominated by decode
 does not inherit the reported ratio.
+
+\subsection{Five-Developer Memory Systems Check}
+A deterministic harness creates five employee namespaces over two workspaces.
+It writes one reviewed shared checkout procedure, one private unfinished
+experiment, and one unrelated billing procedure. The five scenarios test shared
+retrieval for an adjacent issue, private isolation, workspace isolation,
+revision/dependency invalidation, and exact-request reuse for all five
+employees. All five checks pass. The exact-reuse fixture records five hits,
+12,000 avoided prompt tokens, 600 avoided completion tokens, and USD 0.06 of
+avoided cost from supplied accounting values.
+
+This harness executes no language model. Its token and cost totals verify key
+partitioning and metrics accumulation, not latency, throughput, answer quality,
+or likely production hit rate. The reproducible implementation is
+\path{scripts/benchmark_team_memory.py}; its assertions run in the package test
+suite.
 
 \subsection{Native-Baseline Results}
 \begin{table}[H]
@@ -510,6 +557,13 @@ additional 3B--32B architectures, energy, and peak cache memory remain
 untested. A Qwen3.5 9B probe could not safely trim its hybrid recurrent cache
 and produced no valid speedup.
 
+The five-developer memory check uses synthetic records and deterministic
+accounting. It does not estimate retrieval precision, cross-developer usefulness,
+cache hit rate, or token savings on real work. Automated summaries are redacted
+and bounded but are not a data-loss-prevention system. Shared-memory publication
+requires administrator action; the present evaluation does not study malicious
+content, poisoned memories, or conflicting decisions across branches.
+
 The latest resident comparison alternates seven measured Llama requests between MachBoost and Ollama, but the stacks use different model files and templates. It measures serving suitability rather than an algorithmic speedup or quality comparison. The earlier Qwen resident artifact adds ten requests but does not broaden hardware coverage.
 
 The repeated-image evidence spans six model sizes but remains one synthetic image, four extraction questions, three repeats, short answers, two closely related Qwen families, and one Apple Silicon machine. It excludes model load and starts after an explicit prime. The result says nothing about changed images, long-form visual reasoning, memory pressure under many cached images, or concurrent sessions. Qwen3-VL's no-prefix cache controls show no gain from cache machinery alone. Since decode work is unchanged, the ratio should shrink as answer length grows.
@@ -539,7 +593,7 @@ The second track accepts model-specific preparation. A multi-token drafter disti
 The immediate visual work is external validity. After resolving or isolating the observed native high-resolution MLX failure, the checkpointed harness should run ChartQA, DocVQA, MMMU, TextVQA, spatial reasoning, and hallucination-sensitive datasets independently. It should add non-Qwen VLMs, sweep layer, retention ratio, image size, and answer length, and report confidence intervals, memory, energy, and task metrics. The implemented random control is the first comparison; attention ranking, AdaptInfer, and ZOO-Prune remain necessary to determine whether query-weighted merging contributes beyond token count alone. Automatic policies should remain disabled unless a model/task calibration set clears both latency and quality gates. Video evaluation should compare uniform sampling, RGB change selection, query-aware selection, PruneVid, and EchoPrune on temporal question-answering benchmarks.
 
 \section{Conclusion}
-MachBoost now has four measured conditional paths and one unvalidated temporal adapter. Repository workspaces are the strongest exact text result: five different questions over one stable codebase reach 2.97$\times$ and 3.23$\times$ median paired speedups on Qwen2.5 3B and 7B, with exact generated tokens in all ten pairs. The gain comes from reusing 7,901 of 10,405 median prompt tokens; it lowers later-request prefill, not first-request cost or decode time. Token drafting remains less settled. A favorable Qwen code fixture reaches 1.96$\times$, while a broader Llama 3.2 3B suite is exact in 20 of 21 pairs and has a 1.008$\times$ aggregate median. Across six visual models, short repeated questions over one unchanged image produce model-level paired medians from 5.14$\times$ to 17.44$\times$. For a new image, post-fusion Qwen3-VL compression reaches 1.67$\times$ aggregate speedup on a ten-row TextVQA pilot while both modes score 8/10; this path is approximate and normalized outputs agree on 70\%. The evidence supports a local serving layer that selects among narrow mechanisms. It does not support a universal faster-inference claim.
+MachBoost now has four measured conditional paths, one unvalidated temporal adapter, and a namespaced team-memory serving path. Repository workspaces are the strongest exact text result: five different questions over one stable codebase reach 2.97$\times$ and 3.23$\times$ median paired speedups on Qwen2.5 3B and 7B, with exact generated tokens in all ten pairs. The gain comes from reusing 7,901 of 10,405 median prompt tokens; it lowers later-request prefill, not first-request cost or decode time. Token drafting remains less settled. A favorable Qwen code fixture reaches 1.96$\times$, while a broader Llama 3.2 3B suite is exact in 20 of 21 pairs and has a 1.008$\times$ aggregate median. Across six visual models, short repeated questions over one unchanged image produce model-level paired medians from 5.14$\times$ to 17.44$\times$. For a new image, post-fusion Qwen3-VL compression reaches 1.67$\times$ aggregate speedup on a ten-row TextVQA pilot while both modes score 8/10; this path is approximate and normalized outputs agree on 70\%. The team-memory harness verifies five isolation, invalidation, retrieval, and exact-reuse scenarios but does not measure a model. The evidence supports a local serving layer that selects among narrow mechanisms. It does not support a universal faster-inference claim.
 
 \bibliographystyle{plain}
 \small

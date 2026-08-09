@@ -6,6 +6,7 @@ struct ServerView: View {
         case overview = "Overview"
         case developer = "Developer"
         case team = "Team"
+        case memory = "Memory & fallback"
         case logs = "Logs & evals"
         var id: Self { self }
     }
@@ -27,6 +28,12 @@ struct ServerView: View {
     @State private var loadModel = ""
     @State private var loadKeepAlive = "forever"
     @State private var compileWarmup = true
+    @State private var memorySearch = ""
+    @State private var providerName = ""
+    @State private var providerURL = "https://"
+    @State private var providerModels = ""
+    @State private var providerAPIKey = ""
+    @State private var providerBudget = ""
 
     var body: some View {
         VStack(spacing: 0) {
@@ -40,7 +47,7 @@ struct ServerView: View {
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
-                .frame(width: 420)
+                .frame(width: 560)
                 Spacer()
                 statusLabel
                 Button {
@@ -77,6 +84,8 @@ struct ServerView: View {
                         developer
                     case .team:
                         team
+                    case .memory:
+                        memoryAndFallback
                     case .logs:
                         logsAndEvaluations
                     }
@@ -90,6 +99,7 @@ struct ServerView: View {
             draftConfiguration = appState.configuration
             syncTeamSettings()
             selectLoadModelIfNeeded()
+            Task { await appState.refreshMemoryAndProviders() }
         }
         .onChange(of: loadableModels.map(\.name)) { selectLoadModelIfNeeded() }
         .onChange(of: appState.teamStatus?.settings) {
@@ -473,6 +483,187 @@ struct ServerView: View {
         }
     }
 
+    private var memoryAndFallback: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            HStack {
+                Text("Reuse & savings")
+                    .font(.headline)
+                Spacer()
+                Button {
+                    Task { await appState.refreshMemoryAndProviders() }
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .help("Refresh memory and providers")
+            }
+
+            Grid(horizontalSpacing: 12, verticalSpacing: 12) {
+                GridRow {
+                    MetricTile(
+                        title: "Memories",
+                        value: "\(appState.memories.count)",
+                        systemImage: "brain.head.profile"
+                    )
+                    MetricTile(
+                        title: "Exact hits",
+                        value: metricValue("exact_cache_hits"),
+                        systemImage: "bolt.fill"
+                    )
+                    MetricTile(
+                        title: "Prompt tokens avoided",
+                        value: metricValue("avoided_prompt_tokens"),
+                        systemImage: "text.badge.checkmark"
+                    )
+                    MetricTile(
+                        title: "Estimated cost avoided",
+                        value: avoidedCost,
+                        systemImage: "dollarsign.circle"
+                    )
+                }
+            }
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Text("Team memory ledger")
+                        .font(.headline)
+                    Spacer()
+                    TextField("Search memories", text: $memorySearch)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 280)
+                }
+                if filteredMemories.isEmpty {
+                    ContentUnavailableView(
+                        "No matching memory",
+                        systemImage: "tray",
+                        description: Text("Workspace chats create private memories; administrators can publish validated team entries through the API.")
+                    )
+                    .frame(maxWidth: .infinity, minHeight: 150)
+                } else {
+                    ForEach(filteredMemories.prefix(100)) { memory in
+                        HStack(alignment: .top, spacing: 12) {
+                            Image(systemName: memory.scope == "team" ? "person.3.fill" : "lock.fill")
+                                .foregroundStyle(memory.scope == "team" ? Color.green : .secondary)
+                                .frame(width: 24)
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack {
+                                    Text(memory.title)
+                                        .font(.body.weight(.medium))
+                                    Text(memory.kind.uppercased())
+                                        .font(.caption2.weight(.semibold))
+                                        .foregroundStyle(.secondary)
+                                }
+                                Text(memory.content)
+                                    .font(.callout)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(3)
+                                Text("\(memory.scope) · confidence \(memory.confidence.formatted(.number.precision(.fractionLength(2))))")
+                                    .font(.caption)
+                                    .foregroundStyle(.tertiary)
+                            }
+                            Spacer()
+                            Button(role: .destructive) {
+                                Task { await appState.deleteMemory(id: memory.id) }
+                            } label: {
+                                Image(systemName: "trash")
+                            }
+                            .help("Delete memory")
+                        }
+                        Divider()
+                    }
+                }
+            }
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 12) {
+                Text("External fallback")
+                    .font(.headline)
+                Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 10) {
+                    GridRow {
+                        Text("Name")
+                        TextField("Production inference", text: $providerName)
+                    }
+                    GridRow {
+                        Text("Base URL")
+                        TextField("https://api.example.com", text: $providerURL)
+                    }
+                    GridRow {
+                        Text("Models")
+                        TextField("model-a, model-b or *", text: $providerModels)
+                    }
+                    GridRow {
+                        Text("API key")
+                        SecureField("Stored in Keychain", text: $providerAPIKey)
+                    }
+                    GridRow {
+                        Text("Monthly budget")
+                        TextField("Optional USD", text: $providerBudget)
+                    }
+                }
+                HStack {
+                    Text("Remote endpoints must use HTTPS. Keys are stored in macOS Keychain and are not written to the team database or logs.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button {
+                        let models = providerModels
+                            .split(separator: ",")
+                            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                            .filter { !$0.isEmpty }
+                        Task {
+                            await appState.configureProvider(
+                                id: nil,
+                                name: providerName,
+                                baseURL: providerURL,
+                                models: models,
+                                apiKey: providerAPIKey,
+                                monthlyBudgetUSD: Double(providerBudget)
+                            )
+                            providerAPIKey = ""
+                        }
+                    } label: {
+                        Label("Add provider", systemImage: "plus")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(
+                        providerName.trimmingCharacters(in: .whitespaces).isEmpty
+                            || providerURL.trimmingCharacters(in: .whitespaces).isEmpty
+                            || providerModels.trimmingCharacters(in: .whitespaces).isEmpty
+                    )
+                }
+
+                ForEach(appState.providers) { provider in
+                    HStack(spacing: 12) {
+                        Image(systemName: provider.hasSecret ? "checkmark.shield.fill" : "exclamationmark.triangle.fill")
+                            .foregroundStyle(provider.hasSecret ? Color.green : Color.orange)
+                            .frame(width: 24)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(provider.name)
+                                .font(.body.weight(.medium))
+                            Text("\(provider.baseURL) · \(provider.models.joined(separator: ", "))")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                            Text("Spent $\(provider.spentThisMonthUSD.formatted(.number.precision(.fractionLength(4)))) this month")
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                        }
+                        Spacer()
+                        Button(role: .destructive) {
+                            Task { await appState.deleteProvider(id: provider.id) }
+                        } label: {
+                            Image(systemName: "trash")
+                        }
+                        .help("Delete provider")
+                    }
+                    Divider()
+                }
+            }
+        }
+    }
+
     private var logsAndEvaluations: some View {
         VStack(alignment: .leading, spacing: 20) {
             VStack(alignment: .leading, spacing: 12) {
@@ -585,6 +776,25 @@ struct ServerView: View {
         export OPENAI_API_KEY="YOUR_MACHBOOST_KEY"
         export OLLAMA_HOST="\(endpoint)"
         """
+    }
+
+    private var filteredMemories: [MemorySummary] {
+        let query = memorySearch.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return appState.memories }
+        return appState.memories.filter {
+            $0.title.localizedCaseInsensitiveContains(query)
+                || $0.content.localizedCaseInsensitiveContains(query)
+                || $0.kind.localizedCaseInsensitiveContains(query)
+        }
+    }
+
+    private func metricValue(_ key: String) -> String {
+        (appState.cacheMetrics?.totals[key] ?? 0).formatted()
+    }
+
+    private var avoidedCost: String {
+        let microdollars = appState.cacheMetrics?.totals["avoided_cost_microusd"] ?? 0
+        return "$\((Double(microdollars) / 1_000_000).formatted(.number.precision(.fractionLength(2))))"
     }
 
     private var loadableModels: [CatalogModel] {

@@ -178,6 +178,65 @@ public struct TracesResponse: Decodable, Sendable {
     public let traces: [TraceSummary]
 }
 
+public struct MemorySummary: Codable, Identifiable, Hashable, Sendable {
+    public let id: String
+    public let workspaceID: String
+    public let scope: String
+    public let kind: String
+    public let title: String
+    public let content: String
+    public let confidence: Double
+    public let pinned: Bool
+    public let stale: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case id, scope, kind, title, content, confidence, pinned, stale
+        case workspaceID = "workspace_id"
+    }
+}
+
+public struct MemoriesResponse: Decodable, Sendable {
+    public let schema: String
+    public let memories: [MemorySummary]
+}
+
+public struct CacheMetrics: Decodable, Sendable {
+    public let schema: String
+    public let totals: [String: Int64]
+    public let namespaces: [String: [String: Int64]]
+}
+
+public struct ProviderSummary: Codable, Identifiable, Hashable, Sendable {
+    public let id: String
+    public let name: String
+    public let baseURL: String
+    public let models: [String]
+    public let enabled: Bool
+    public let hasSecret: Bool
+    public let monthlyBudgetUSD: Double?
+    public let spentThisMonthUSD: Double
+    public let remainingBudgetUSD: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, models, enabled
+        case baseURL = "base_url"
+        case hasSecret = "has_secret"
+        case monthlyBudgetUSD = "monthly_budget_usd"
+        case spentThisMonthUSD = "spent_this_month_usd"
+        case remainingBudgetUSD = "remaining_budget_usd"
+    }
+}
+
+public struct ProvidersResponse: Decodable, Sendable {
+    public let schema: String
+    public let providers: [ProviderSummary]
+}
+
+public struct ProviderResponse: Decodable, Sendable {
+    public let schema: String
+    public let provider: ProviderSummary
+}
+
 public struct EvaluationLatency: Codable, Sendable {
     public let p50: Double
     public let p95: Double

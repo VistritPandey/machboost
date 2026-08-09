@@ -50,6 +50,34 @@ class CLITests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(output.getvalue().strip(), __version__)
 
+    def test_model_alias_cli_parses_options_and_calls_resident_client(self):
+        client = SimpleNamespace(
+            create_model=lambda name, source, **kwargs: {
+                "model": {"name": name, "source": source, **kwargs}
+            }
+        )
+        args = cli.build_parser().parse_args(
+            [
+                "create",
+                "company-coder:latest",
+                "--from",
+                "qwen2.5-coder:3b",
+                "--system",
+                "Use tests.",
+                "--option",
+                "num_ctx=8192",
+                "--option",
+                "temperature=0.2",
+            ]
+        )
+        output = io.StringIO()
+
+        with patch("machboost.cli.connect_resident", return_value=client):
+            code = cli.run_model_alias_action(args, output_stream=output)
+
+        self.assertEqual(code, 0)
+        self.assertIn("created company-coder:latest", output.getvalue())
+
     def test_main_self_test_json(self):
         output = io.StringIO()
 

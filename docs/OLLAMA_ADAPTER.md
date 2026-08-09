@@ -2,7 +2,9 @@
 
 ## Summary
 
-MachBoost 0.5.2 has its own resident Hugging Face/MLX runtime and exposes an Ollama-compatible HTTP surface. That compatibility lets existing clients use a MachBoost-owned decode path; it does not make an external Ollama process faster.
+MachBoost has its own resident Hugging Face/MLX runtime and exposes an
+Ollama-compatible HTTP surface. That compatibility lets existing clients use a
+MachBoost-owned decode path; it does not make an external Ollama process faster.
 
 An installed Ollama runtime could become a native MachBoost target, but not through Ollama's public HTTP API alone. The required integration point is inside the model runner, where tokenization, logits, sampling state, KV cache state, accepted-prefix commits, and rollback are available.
 
@@ -10,9 +12,12 @@ The product-facing commands are native:
 
 ```sh
 machboost pull qwen2.5:3b
+machboost create company-coder:latest --from qwen2.5-coder:7b --option num_ctx=8192
+machboost cp company-coder:latest company-coder:staging
 machboost warm qwen2.5:3b
 machboost run qwen2.5:3b
 machboost complete qwen2.5-coder:3b "def fibonacci(n):"
+machboost rm company-coder:staging
 ```
 
 They auto-start the MachBoost server on `127.0.0.1:11435`, resolve short aliases to MLX on Apple Silicon when possible, and keep loaded models resident until their keep-alive expires or the user stops them.
@@ -61,13 +66,47 @@ Paths below are from the Ollama repository root and were rechecked against offic
 
 ### MachBoost Ollama-Compatible Server
 
-MachBoost owns the model and decode loop in this mode. Supported endpoints include:
+MachBoost owns the model and decode loop in this mode. The tested surface is:
 
-- `/api/version`, `/api/tags`, `/api/ps`, and `/api/show`
-- `/api/pull`, `/api/load`, `/api/stop`, and `/api/shutdown`
-- streaming and non-streaming `/api/chat` and `/api/generate`
+| Area | Routes and behavior |
+|---|---|
+| Discovery | `GET /api/version`, `/api/tags`, `/api/ps`; `POST /api/show` |
+| Lifecycle | `/api/pull`, `/api/load`, `/api/stop`, `/api/shutdown` plus empty chat/generate load and `keep_alive: 0` unload |
+| Local aliases | `/api/create`, `/api/copy`, `/api/delete`; aliases persist system text, template, and generation defaults while referencing HF/MLX weights |
+| Inference | streaming and non-streaming `/api/chat` and `/api/generate`, request IDs, cancellation, images on compatible MLX-VLMs, tool-call output, and thinking mode |
+| Embeddings | `/api/embed` for one or many strings and legacy `/api/embeddings` |
+| Context | tokenizer-enforced `num_ctx`, `num_keep`, oldest-turn truncation, or explicit overflow failure |
+| Sampling | seed, temperature, top-k, top-p, min-p, repetition, presence, frequency, stop strings, JSON and JSON-schema format validation |
 
-The same process also exposes OpenAI-compatible `/v1/models`, `/v1/chat/completions`, and `/v1/completions` endpoints. This is protocol compatibility, not complete Ollama feature parity. MachBoost 0.5.2 supports image content on chat/generate requests when the selected backend is MLX-VLM, but it does not implement Ollama model creation, copy, deletion, embeddings, tool calling, or thinking-field semantics.
+The same process exposes OpenAI-compatible `/v1/models`,
+`/v1/chat/completions`, `/v1/completions`, and `/v1/embeddings`. OpenAI chat
+supports function tools and parallel tool-call payloads; MachBoost returns calls
+but does not execute them.
+
+This is broad protocol compatibility, not complete Ollama feature parity.
+MachBoost aliases reference existing HF/MLX repositories; it does not parse or
+build arbitrary GGUF Modelfiles. `/api/push` returns `501`, because MachBoost
+does not publish weights to Ollama's registry. It also does not promise Ollama's
+internal model format, undocumented behavior, or byte-identical outputs across
+different templates and quantized conversions.
+
+### Alias Example
+
+```sh
+machboost create company-coder:latest \
+  --from qwen2.5-coder:7b \
+  --system "Follow the repository conventions and run tests." \
+  --option num_ctx=8192 \
+  --option temperature=0
+
+machboost run company-coder:latest
+machboost show company-coder:latest
+```
+
+Deleting an alias removes only MachBoost metadata. Cached Hugging Face/MLX
+weights are not deleted. Loading, stopping, showing, and deleting an alias all
+resolve the same source model, so lifecycle commands do not leave an orphaned
+resident instance.
 
 ### External Ollama HTTP Wrapper
 

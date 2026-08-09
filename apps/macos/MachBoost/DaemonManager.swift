@@ -18,6 +18,11 @@ final class DaemonManager {
 
     private var process: Process?
     private var outputPipe: Pipe?
+    private let sourceRootOverride: URL?
+
+    init(sourceRootOverride: URL? = nil) {
+        self.sourceRootOverride = sourceRootOverride
+    }
 
     func start(
         configuration: ServerConfiguration,
@@ -184,6 +189,16 @@ final class DaemonManager {
     }
 
     private func runtimeLaunch() throws -> RuntimeLaunch {
+        #if DEBUG
+        if let sourceRootOverride {
+            return RuntimeLaunch(
+                executable: URL(fileURLWithPath: "/usr/bin/env"),
+                prefixArguments: ["python3"],
+                workingDirectory: sourceRootOverride
+            )
+        }
+        #endif
+
         if let resources = Bundle.main.resourceURL {
             let embedded = resources
                 .appendingPathComponent("runtime", isDirectory: true)

@@ -2,9 +2,28 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import time
-from typing import Callable, Iterable, Optional, Sequence, Tuple
+from typing import Any, Callable, Iterable, Optional, Sequence, Tuple
 
 from machboost.core import Token, TokenSeq
+
+
+def _optional_float(value):
+    return None if value is None else float(value)
+
+
+def _embedding_layer(model):
+    candidates = (
+        getattr(model, "model", None),
+        model,
+    )
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        for name in ("embed_tokens", "wte", "tok_embeddings"):
+            layer = getattr(candidate, name, None)
+            if callable(layer):
+                return layer
+    return None
 
 
 @dataclass(frozen=True)
@@ -28,6 +47,7 @@ class MLXCausalLMService:
         cache_can_trim: Optional[Callable[[object], bool]] = None,
         native_prompt_cache_size: int = 0,
         native_prompt_cache_bytes: int = 2 * 1024 * 1024 * 1024,
+        native_prompt_cache_namespace: str = "default",
     ) -> None:
         self.model = model
         self.tokenizer = tokenizer
@@ -39,13 +59,14 @@ class MLXCausalLMService:
         self.cache_can_trim = cache_can_trim
         self.native_prompt_cache_size = max(0, int(native_prompt_cache_size))
         self.native_prompt_cache_bytes = max(0, int(native_prompt_cache_bytes))
+        self.native_prompt_cache_namespace = str(native_prompt_cache_namespace or "default")
         self.forward_calls = 0
         self._cache = None
         self._cache_prefix: Tuple[Token, ...] = ()
         self._cache_logits = None
         self._cache_supported: Optional[bool] = None
         self._native_prompt_cache = None
-        self._native_prompt_cache_key = (
+        self._native_prompt_cache_model_key = (
             type(model).__module__,
             type(model).__qualname__,
             id(model),
@@ -100,6 +121,27 @@ class MLXCausalLMService:
         except TypeError:
             return self.tokenizer.decode(list(tokens))
 
+    def embed(self, texts: Sequence[str]) -> list[list[float]]:
+        try:
+            import mlx.core as mx
+        except ImportError as exc:
+            raise ImportError("Install MLX support with `pip install machboost[mlx]`.") from exc
+        embedding_layer = _embedding_layer(self.model)
+        if embedding_layer is None:
+            raise ValueError("model does not expose an input embedding layer")
+        results: list[list[float]] = []
+        for text in texts:
+            tokens = self.encode(str(text))
+            if not tokens:
+                raise ValueError("embedding input cannot be empty")
+            values = embedding_layer(mx.array([list(tokens)]))
+            pooled = mx.mean(values[0], axis=0)
+            norm = mx.sqrt(mx.sum(pooled * pooled))
+            pooled = pooled / mx.maximum(norm, mx.array(1e-12))
+            mx.eval(pooled)
+            results.append([float(value) for value in pooled.tolist()])
+        return results
+
     def next_token(self, prefix_tokens: TokenSeq) -> Optional[Token]:
         if len(prefix_tokens) == 0:
             return None
@@ -117,6 +159,7 @@ class MLXCausalLMService:
         stop_tokens: Optional[Iterable[Token]] = None,
         on_tokens=None,
         on_text=None,
+        generation_options: Optional[dict[str, Any]] = None,
     ) -> Tuple[Token, ...]:
         if len(prompt_tokens) == 0 or max_tokens <= 0:
             return ()
@@ -127,6 +170,7 @@ class MLXCausalLMService:
                 stop_tokens=stop_tokens,
                 on_tokens=on_tokens,
                 on_text=on_text,
+                generation_options=generation_options,
             )
 
         self.reset_cache()
@@ -197,6 +241,7 @@ class MLXCausalLMService:
         stop_tokens: Optional[Iterable[Token]],
         on_tokens,
         on_text,
+        generation_options: Optional[dict[str, Any]],
     ) -> Tuple[Token, ...]:
         try:
             from mlx_lm import stream_generate
@@ -233,6 +278,46 @@ class MLXCausalLMService:
                     cached_prompt_tokens = 0
         cache_key = list(full_prompt)
         stream_kwargs = {"max_tokens": max_tokens}
+        generation_options = dict(generation_options or {})
+        if generation_options:
+            try:
+                from mlx_lm.sample_utils import make_logits_processors, make_sampler
+            except ImportError as exc:
+                raise ImportError(
+                    "Installed mlx-lm does not expose sampling utilities; upgrade mlx-lm."
+                ) from exc
+            stream_kwargs["sampler"] = make_sampler(
+                temp=float(generation_options.get("temperature", 0.0)),
+                top_p=float(generation_options.get("top_p", 0.0)),
+                min_p=float(generation_options.get("min_p", 0.0)),
+                top_k=int(generation_options.get("top_k", 0)),
+            )
+            repetition_context_size = int(generation_options.get("repeat_last_n", 64))
+            if repetition_context_size < 0:
+                repetition_context_size = len(full_prompt) + max_tokens
+            processors = make_logits_processors(
+                repetition_penalty=_optional_float(
+                    generation_options.get("repeat_penalty")
+                ),
+                repetition_context_size=repetition_context_size,
+                presence_penalty=_optional_float(
+                    generation_options.get("presence_penalty")
+                ),
+                presence_context_size=repetition_context_size,
+                frequency_penalty=_optional_float(
+                    generation_options.get("frequency_penalty")
+                ),
+                frequency_context_size=repetition_context_size,
+            )
+            if processors:
+                stream_kwargs["logits_processors"] = processors
+            if generation_options.get("seed") is not None:
+                try:
+                    import mlx.core as mx
+
+                    mx.random.seed(int(generation_options["seed"]))
+                except (ImportError, AttributeError, TypeError, ValueError):
+                    pass
         if prompt_cache_store is not None and prompt_cache is not None:
             stream_kwargs["prompt_cache"] = prompt_cache
         try:
@@ -304,6 +389,7 @@ class MLXCausalLMService:
                 "time_to_first_token_seconds": ttft,
                 "prompt_tokens_per_second": prompt_tps,
                 "generation_tokens_per_second": generation_tps,
+                "prompt_cache_namespace": self.native_prompt_cache_namespace,
             }
         return tuple(generated)
 
@@ -316,6 +402,7 @@ class MLXCausalLMService:
         enabled: bool,
         max_size: int = 8,
         max_bytes: int = 2 * 1024 * 1024 * 1024,
+        namespace: str = "default",
     ) -> None:
         next_size = max(0, int(max_size)) if enabled else 0
         next_bytes = max(0, int(max_bytes)) if enabled else 0
@@ -326,6 +413,11 @@ class MLXCausalLMService:
             self.clear_prompt_cache()
         self.native_prompt_cache_size = next_size
         self.native_prompt_cache_bytes = next_bytes
+        self.native_prompt_cache_namespace = str(namespace or "default")
+
+    @property
+    def _native_prompt_cache_key(self):
+        return (*self._native_prompt_cache_model_key, self.native_prompt_cache_namespace)
 
     def _native_prompt_cache_store(self):
         if self.native_prompt_cache_size <= 0 or self.native_prompt_cache_bytes <= 0:

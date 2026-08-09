@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 from typing import Any, Iterator, Optional
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
 
 from .server import DEFAULT_HOST, DEFAULT_PORT
@@ -153,6 +153,133 @@ class MachBoostClient:
             self.post("/api/evaluations", payload).get("evaluation") or {}
         )
 
+    def memories(
+        self,
+        *,
+        workspace_id: Optional[str] = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        query = urlencode(
+            {
+                key: value
+                for key, value in {
+                    "workspace_id": workspace_id,
+                    "limit": int(limit),
+                }.items()
+                if value is not None
+            }
+        )
+        return list(self.get(f"/api/memory?{query}").get("memories") or ())
+
+    def create_memory(
+        self,
+        workspace_id: str,
+        title: str,
+        content: str,
+        *,
+        scope: str = "private",
+        kind: str = "fact",
+        query_text: str = "",
+        revision: Optional[str] = None,
+        dependencies: Optional[dict[str, str]] = None,
+        evidence: tuple[str, ...] = (),
+        confidence: float = 0.5,
+        validated_by: tuple[str, ...] = (),
+        pinned: bool = False,
+        ttl_seconds: Optional[float] = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "workspace_id": workspace_id,
+            "scope": scope,
+            "kind": kind,
+            "title": title,
+            "content": content,
+            "query_text": query_text,
+            "dependencies": dict(dependencies or {}),
+            "evidence": list(evidence),
+            "confidence": float(confidence),
+            "validated_by": list(validated_by),
+            "pinned": bool(pinned),
+        }
+        if revision is not None:
+            payload["revision"] = revision
+        if ttl_seconds is not None:
+            payload["ttl_seconds"] = float(ttl_seconds)
+        return dict(self.post("/api/memory", payload).get("memory") or {})
+
+    def delete_memories(self, memory_ids: list[str]) -> int:
+        return int(
+            self.post("/api/memory/delete", {"memory_ids": memory_ids}).get(
+                "removed"
+            )
+            or 0
+        )
+
+    def cache_metrics(self) -> dict[str, Any]:
+        return self.get("/api/cache/metrics")
+
+    def providers(self) -> list[dict[str, Any]]:
+        return list(self.get("/api/providers").get("providers") or ())
+
+    def configure_provider(
+        self,
+        name: str,
+        base_url: str,
+        models: tuple[str, ...],
+        *,
+        provider_id: Optional[str] = None,
+        enabled: bool = True,
+        api_key: Optional[str] = None,
+        api_key_env: Optional[str] = None,
+        monthly_budget_usd: Optional[float] = None,
+        input_cost_per_million: float = 0.0,
+        output_cost_per_million: float = 0.0,
+        timeout_seconds: float = 120.0,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "name": name,
+            "base_url": base_url,
+            "models": list(models),
+            "enabled": bool(enabled),
+            "input_cost_per_million": float(input_cost_per_million),
+            "output_cost_per_million": float(output_cost_per_million),
+            "timeout_seconds": float(timeout_seconds),
+        }
+        optional = {
+            "id": provider_id,
+            "api_key": api_key,
+            "api_key_env": api_key_env,
+            "monthly_budget_usd": monthly_budget_usd,
+        }
+        payload.update(
+            {key: value for key, value in optional.items() if value is not None}
+        )
+        return dict(self.post("/api/providers", payload).get("provider") or {})
+
+    def set_provider_secret(self, provider_id: str, api_key: str) -> bool:
+        return bool(
+            self.post(
+                "/api/providers/secret",
+                {"provider_id": provider_id, "api_key": api_key},
+            ).get("has_secret")
+        )
+
+    def provider_usage(self, provider_id: Optional[str] = None) -> dict[str, Any]:
+        suffix = "?" + urlencode({"provider_id": provider_id}) if provider_id else ""
+        return self.get("/api/providers/usage" + suffix)
+
+    def delete_provider(self, provider_id: str) -> bool:
+        try:
+            return bool(
+                self.post(
+                    "/api/providers/delete", {"provider_id": provider_id}
+                ).get("removed")
+            )
+        except MachBoostAPIError as exc:
+            if exc.status == 404:
+                return False
+            raise
+
     def workspaces(self) -> list[dict[str, Any]]:
         return list(self.get("/api/workspaces").get("workspaces") or ())
 
@@ -237,6 +364,56 @@ class MachBoostClient:
             return self.stream("/api/pull", payload)
         return self.post("/api/pull", payload)
 
+    def create_model(
+        self,
+        name: str,
+        source: str,
+        *,
+        system: str = "",
+        template: str = "",
+        options: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
+        return self.post(
+            "/api/create",
+            {
+                "model": name,
+                "from": source,
+                "system": system,
+                "template": template,
+                "parameters": dict(options or {}),
+            },
+        )
+
+    def copy_model(self, source: str, destination: str) -> dict[str, Any]:
+        return self.post(
+            "/api/copy", {"source": source, "destination": destination}
+        )
+
+    def delete_model(self, model: str) -> bool:
+        try:
+            return bool(self.post("/api/delete", {"model": model}).get("removed"))
+        except MachBoostAPIError as exc:
+            if exc.status == 404:
+                return False
+            raise
+
+    def embed(
+        self,
+        model: str,
+        inputs: str | list[str],
+        *,
+        options: Optional[dict[str, Any]] = None,
+        keep_alive: Any = None,
+    ) -> list[list[float]]:
+        payload: dict[str, Any] = {
+            "model": model,
+            "input": inputs,
+            "options": dict(options or {}),
+        }
+        if keep_alive is not None:
+            payload["keep_alive"] = keep_alive
+        return list(self.post("/api/embed", payload).get("embeddings") or ())
+
     def load(
         self,
         model: str,
@@ -308,6 +485,7 @@ class MachBoostClient:
         workspace_query: Optional[str] = None,
         workspace_top_k: Optional[int] = None,
         workspace_max_chars: Optional[int] = None,
+        machboost: Optional[dict[str, Any]] = None,
     ) -> Iterator[dict[str, Any]] | dict[str, Any]:
         chat_messages = [dict(message) for message in messages]
         if images is not None:
@@ -343,6 +521,8 @@ class MachBoostClient:
             payload["workspace_top_k"] = int(workspace_top_k)
         if workspace_max_chars is not None:
             payload["workspace_max_chars"] = int(workspace_max_chars)
+        if machboost is not None:
+            payload["machboost"] = dict(machboost)
         if stream:
             return self.stream("/api/chat", payload)
         return self.post("/api/chat", payload)
@@ -364,6 +544,7 @@ class MachBoostClient:
         workspace_query: Optional[str] = None,
         workspace_top_k: Optional[int] = None,
         workspace_max_chars: Optional[int] = None,
+        machboost: Optional[dict[str, Any]] = None,
     ) -> Iterator[dict[str, Any]] | dict[str, Any]:
         request_options = dict(options or {})
         if affinity_key is not None:
@@ -392,6 +573,8 @@ class MachBoostClient:
             payload["workspace_top_k"] = int(workspace_top_k)
         if workspace_max_chars is not None:
             payload["workspace_max_chars"] = int(workspace_max_chars)
+        if machboost is not None:
+            payload["machboost"] = dict(machboost)
         if stream:
             return self.stream("/api/generate", payload)
         return self.post("/api/generate", payload)

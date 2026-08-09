@@ -1194,6 +1194,48 @@ def run_pull(args: argparse.Namespace, *, output_stream=None, error_stream=None)
         return 2
 
 
+def run_model_alias_action(
+    args: argparse.Namespace,
+    *,
+    output_stream=None,
+    error_stream=None,
+) -> int:
+    output_stream = output_stream or sys.stdout
+    error_stream = error_stream or sys.stderr
+    try:
+        client = connect_resident(args, error_stream=error_stream)
+        if args.command == "create":
+            options = {}
+            for value in args.option:
+                key, separator, raw = value.partition("=")
+                if not separator or not key.strip():
+                    raise ValueError("--option must use key=value")
+                try:
+                    options[key.strip()] = json.loads(raw)
+                except json.JSONDecodeError:
+                    options[key.strip()] = raw
+            result = client.create_model(
+                args.model,
+                args.source,
+                system=args.system,
+                template=args.template,
+                options=options,
+            )
+            print(f"created {result['model']['name']} from {result['model']['source']}", file=output_stream)
+        elif args.command == "cp":
+            result = client.copy_model(args.source, args.destination)
+            print(f"copied {args.source} to {result['model']['name']}", file=output_stream)
+        else:
+            if not client.delete_model(args.model):
+                print(f"model alias not found: {args.model}", file=error_stream)
+                return 2
+            print(f"removed {args.model}", file=output_stream)
+        return 0
+    except (MachBoostAPIError, ValueError) as exc:
+        print(f"machboost {args.command} error: {exc}", file=error_stream)
+        return 2
+
+
 def run_warm(args: argparse.Namespace, *, output_stream=None, error_stream=None) -> int:
     output_stream = output_stream or sys.stdout
     error_stream = error_stream or sys.stderr
@@ -1679,6 +1721,28 @@ def build_parser() -> argparse.ArgumentParser:
     pull.add_argument("--revision", default=None)
     add_server_connection_arguments(pull, include_autostart=True)
 
+    create = subcommands.add_parser("create", help="Create or update a local model alias.")
+    create.add_argument("model", help="Alias name, for example company-coder:latest.")
+    create.add_argument("--from", dest="source", required=True, help="Source model alias or HF/MLX repository.")
+    create.add_argument("--system", default="", help="Default system instruction.")
+    create.add_argument("--template", default="", help="Optional Ollama-style prompt template.")
+    create.add_argument(
+        "--option",
+        action="append",
+        default=[],
+        help="Default generation option as key=value; repeat as needed.",
+    )
+    add_server_connection_arguments(create, include_autostart=True)
+
+    copy_model = subcommands.add_parser("cp", help="Copy a local model alias.")
+    copy_model.add_argument("source")
+    copy_model.add_argument("destination")
+    add_server_connection_arguments(copy_model, include_autostart=True)
+
+    remove_model = subcommands.add_parser("rm", help="Remove a local model alias without deleting weights.")
+    remove_model.add_argument("model")
+    add_server_connection_arguments(remove_model, include_autostart=True)
+
     ps = subcommands.add_parser("ps", help="List models currently loaded in MachBoost memory.")
     ps.add_argument("--json", action="store_true")
     add_server_connection_arguments(ps)
@@ -1889,6 +1953,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return run_warm(args)
     if args.command == "pull":
         return run_pull(args)
+    if args.command in {"create", "cp", "rm"}:
+        return run_model_alias_action(args)
     if args.command == "ps":
         return run_ps(args)
     if args.command == "show":

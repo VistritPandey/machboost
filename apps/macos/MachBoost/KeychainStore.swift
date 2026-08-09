@@ -6,6 +6,14 @@ enum KeychainStore {
     private static let account = "lan-api-token"
 
     static func token() -> String? {
+        value(account: account)
+    }
+
+    static func providerSecret(id: String) -> String? {
+        value(account: "provider-\(id)")
+    }
+
+    private static func value(account: String) -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -46,12 +54,32 @@ enum KeychainStore {
     }
 
     static func save(token: String) throws {
+        try save(value: token, account: account)
+    }
+
+    static func saveProviderSecret(_ secret: String, id: String) throws {
+        try save(value: secret, account: "provider-\(id)")
+    }
+
+    static func deleteProviderSecret(id: String) throws {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: "provider-\(id)",
+        ]
+        let status = SecItemDelete(query as CFDictionary)
+        guard status == errSecSuccess || status == errSecItemNotFound else {
+            throw KeychainError(status: status)
+        }
+    }
+
+    private static func save(value: String, account: String) throws {
         let base: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
         ]
-        let data = Data(token.utf8)
+        let data = Data(value.utf8)
         let updateStatus = SecItemUpdate(
             base as CFDictionary,
             [kSecValueData as String: data] as CFDictionary

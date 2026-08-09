@@ -3,7 +3,8 @@
 MachBoost Team Gateway turns one Apple Silicon Mac into a private inference
 endpoint for a small team. It keeps supported MLX text and vision models
 resident, accepts concurrent OpenAI- and Ollama-compatible requests, and adds
-employee keys, limits, fair admission, local traces, and evaluations.
+employee keys, limits, fair admission, revision-aware memory, budgeted provider
+fallback, local traces, and evaluations.
 
 It is not a public edge gateway. MachBoost serves plain HTTP, does not terminate
 TLS, and does not provide an internet-facing identity provider. Bind it only to
@@ -30,7 +31,7 @@ employee tokens.
 
 The native macOS app starts its bundled daemon in Team Mode automatically. It
 stores the database in `~/Library/Application Support/MachBoost/team.sqlite3`
-and exposes Team and Logs & evals controls under Server.
+and exposes Team, Memory & fallback, and Logs & evals controls under Server.
 
 ## Issue Employee Keys
 
@@ -113,8 +114,108 @@ cache locality.
 Replicas are independent model instances. They improve isolation and can reduce
 queue latency, but consume additional unified memory and do not promise a linear
 GPU-throughput increase. MLX-VLM remains one replica per model because its
-mutable visual state is not replica-safe. MachBoost v0.8.0 does not implement
+mutable visual state is not replica-safe. MachBoost v0.9.0 does not implement
 continuous batching.
+
+## Team Memory And Exact Reuse
+
+Team memory is available only on workspace-backed requests. It is deliberately
+not one global chat transcript. Every entry is partitioned by workspace, scope,
+principal where private, repository revision, and dependency digests. This
+prevents one employee's unfinished work or one repository's facts from leaking
+into another request.
+
+Two scopes are supported:
+
+| Scope | Write policy | Read policy |
+|---|---|---|
+| `private` | Any authenticated employee; the default | Only the same employee key and administrators |
+| `team` | Administrators only | Authenticated workspace users |
+
+Automatic memory records a bounded, redacted summary of a completed exchange,
+not the full conversation. Retrieval uses local FTS ranking and a character
+budget. Entries with a mismatched repository revision or changed dependency
+digest are rejected as stale. Administrators can pin or publish reviewed facts,
+fixes, procedures, decisions, and summaries through `POST /api/memory`.
+
+```json
+{
+  "model": "qwen2.5-coder:7b",
+  "messages": [{"role": "user", "content": "How should checkout retries work?"}],
+  "stream": false,
+  "machboost": {
+    "workspace_id": "WORKSPACE_ID",
+    "memory": {
+      "mode": "private",
+      "search": true,
+      "remember": true,
+      "max_chars": 12000,
+      "exact_cache": true
+    }
+  }
+}
+```
+
+Exact-response reuse is off by default. It applies only to deterministic,
+non-streaming requests with temperature zero and no tools or images. Cache keys
+include the model, request, workspace, scope, principal, and revision. A hit
+returns the previously recorded response without model execution and increments
+avoided-token and avoided-cost counters. Sampling, visual inputs, tool calls,
+streaming, repository changes, or a different employee namespace bypass it.
+
+Inspect the ledger and savings locally:
+
+```sh
+curl -H "Authorization: Bearer $MACHBOOST_API_TOKEN" \
+  'http://127.0.0.1:11435/api/memory?workspace_id=WORKSPACE_ID'
+curl -H "Authorization: Bearer $MACHBOOST_API_TOKEN" \
+  http://127.0.0.1:11435/api/cache/metrics
+python3 scripts/benchmark_team_memory.py
+```
+
+The benchmark's prompt/completion savings are deterministic fixture accounting,
+not a model-throughput measurement. It also verifies private isolation,
+workspace isolation, shared retrieval, and revision invalidation.
+
+## External Provider Fallback
+
+Administrators can register OpenAI-compatible HTTPS providers for overflow,
+outage, or model fallback. Provider metadata and monthly usage are stored in
+SQLite. Plaintext API keys are not: the CLI daemon reads them from an environment
+variable or process memory, while the native app stores them in Keychain and
+restores them through the secret-only endpoint after daemon restart.
+
+Requests choose a policy under `machboost.route`:
+
+```json
+{
+  "model": "company-coder",
+  "messages": [{"role": "user", "content": "Review this patch."}],
+  "machboost": {
+    "route": {"mode": "local_first", "provider_id": "provider_123"}
+  }
+}
+```
+
+| Mode | Behavior |
+|---|---|
+| `local_only` | Never calls a provider; default |
+| `local_first` | Uses external inference only after a transient local failure before a response starts |
+| `external_first` | Tries the selected provider, then local only after a transient provider failure |
+| `external_only` | Requires the selected provider and never falls back locally |
+
+Fallback is intentionally narrow. Queue overload, timeout, connection failure,
+and selected 5xx/429 responses are transient. Authentication, request
+validation, unsupported models, and exhausted monthly budgets fail closed.
+Provider usage records request count, input/output tokens, configured unit
+prices, and estimated USD cost. The check prevents new calls once recorded spend
+reaches the monthly cap; it is not a prepaid billing guarantee for concurrent
+in-flight requests.
+
+External responses honor the OpenAI streaming contract. The current provider
+transport requests a buffered upstream response and emits it as a valid SSE
+chunk with `machboost.route.buffered_upstream=true`, rather than claiming native
+upstream token streaming.
 
 ## Private Traces
 
@@ -167,6 +268,13 @@ print(report["summary"])
 | `POST` | `/api/traces/delete` | Delete selected or all traces |
 | `GET`, `POST` | `/api/evaluations` | List or run evaluations |
 | `GET` | `/api/integrations` | Client connection settings |
+| `GET`, `POST` | `/api/memory` | List visible entries or publish an entry |
+| `POST` | `/api/memory/delete` | Delete authorized memory entries |
+| `GET` | `/api/cache/metrics` | Reuse, avoided-token, and namespace counters |
+| `GET`, `POST` | `/api/providers` | List or configure external providers |
+| `POST` | `/api/providers/secret` | Restore one process-only provider key |
+| `POST` | `/api/providers/delete` | Remove provider metadata and in-memory key |
+| `GET` | `/api/providers/usage` | Monthly provider token and cost accounting |
 
 Existing `/api/chat`, `/api/generate`, `/v1/chat/completions`, model lifecycle,
 workspace, metrics, streaming, and cancellation routes remain available.

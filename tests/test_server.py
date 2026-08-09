@@ -11,7 +11,9 @@ from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
+from machboost.models import resolve_model
 from machboost.scheduler import RequestAdmissionError
+from machboost.providers import ProviderStore
 from machboost.server import (
     MachBoostHTTPServer,
     OperationRegistry,
@@ -47,12 +49,23 @@ class FakeService:
     def reset_cache(self) -> None:
         self.reset_calls += 1
 
+    def encode(self, text):
+        return tuple(str(text).split())
+
+    def decode(self, tokens, **_kwargs):
+        return " ".join(tokens)
+
+    def embed(self, texts):
+        return [[float(len(text.split())), 1.0] for text in texts]
+
 
 class FakeAccelerator:
     def __init__(self) -> None:
         self.service = FakeService()
         self.chat_calls = []
         self.generate_calls = []
+        self.chat_options = []
+        self.generate_options = []
 
     def generate_chat(
         self,
@@ -62,15 +75,40 @@ class FakeAccelerator:
         context=None,
         on_text=None,
         tools=None,
+        enable_thinking=False,
+        stop_strings=None,
+        generation_options=None,
     ):
         self.chat_calls.append((messages, max_tokens, context))
+        self.chat_options.append(
+            {
+                "enable_thinking": enable_thinking,
+                "stop_strings": stop_strings,
+                "generation_options": generation_options,
+            }
+        )
         if on_text is not None:
             on_text("hello ")
             on_text("world")
         return "hello world", FakeStats()
 
-    def generate(self, prompt, *, max_tokens, context=None, on_text=None):
+    def generate(
+        self,
+        prompt,
+        *,
+        max_tokens,
+        context=None,
+        on_text=None,
+        stop_strings=None,
+        generation_options=None,
+    ):
         self.generate_calls.append((prompt, max_tokens, context))
+        self.generate_options.append(
+            {
+                "stop_strings": stop_strings,
+                "generation_options": generation_options,
+            }
+        )
         if on_text is not None:
             on_text("completed")
         return "completed", FakeStats(generated_tokens=1)
@@ -727,6 +765,80 @@ class HTTPServerTests(unittest.TestCase):
         self.assertEqual(len(self.loaded), 1)
         self.assertEqual(self.loaded[0][1].chat_calls[0][1], 11)
 
+    def test_ollama_num_ctx_truncates_with_loaded_tokenizer(self):
+        _, _, body = self.request(
+            "/api/generate",
+            {
+                "model": "mlx-community/example",
+                "prompt": "one two three four five",
+                "stream": False,
+                "options": {"num_ctx": 3, "num_predict": 1},
+            },
+        )
+
+        response = json.loads(body)
+        accelerator = self.loaded[0][1]
+        self.assertEqual(accelerator.generate_calls[0][0], "four five")
+        self.assertEqual(
+            response["machboost"]["stats"]["context_truncated_tokens"], 3
+        )
+
+    def test_ollama_context_overflow_can_fail_instead_of_shift(self):
+        with self.assertRaises(HTTPError) as raised:
+            self.request(
+                "/api/generate",
+                {
+                    "model": "mlx-community/example",
+                    "prompt": "one two three four five",
+                    "stream": False,
+                    "options": {
+                        "num_ctx": 3,
+                        "num_predict": 1,
+                        "truncate": False,
+                    },
+                },
+            )
+        self.assertEqual(raised.exception.code, 400)
+        self.assertIn("requires 5 tokens", raised.exception.read().decode("utf-8"))
+
+    def test_ollama_system_template_thinking_and_stop_are_forwarded(self):
+        self.request(
+            "/api/generate",
+            {
+                "model": "mlx-community/example",
+                "prompt": "hello",
+                "system": "be concise",
+                "template": "SYS={{ .System }} USER={{ .Prompt }}",
+                "stream": False,
+                "options": {
+                    "stop": ["END"],
+                    "temperature": 0.7,
+                    "top_p": 0.9,
+                    "repeat_penalty": 1.1,
+                },
+            },
+        )
+        self.request(
+            "/api/chat",
+            {
+                "model": "mlx-community/example",
+                "messages": [{"role": "user", "content": "solve"}],
+                "think": "high",
+                "stream": False,
+            },
+        )
+
+        accelerator = self.loaded[0][1]
+        self.assertEqual(
+            accelerator.generate_calls[0][0], "SYS=be concise USER=hello"
+        )
+        self.assertEqual(accelerator.generate_options[0]["stop_strings"], ["END"])
+        self.assertEqual(
+            accelerator.generate_options[0]["generation_options"],
+            {"temperature": 0.7, "top_p": 0.9, "repeat_penalty": 1.1},
+        )
+        self.assertEqual(accelerator.chat_options[0]["enable_thinking"], "high")
+
     def test_load_endpoint_preloads_without_generating(self):
         _, _, body = self.request(
             "/api/load",
@@ -1026,6 +1138,135 @@ class HTTPServerTests(unittest.TestCase):
         _, _, ps_body = self.request("/api/ps")
         self.assertEqual(json.loads(ps_body)["models"], [])
 
+    def test_ollama_alias_create_copy_show_run_and_delete(self):
+        _, _, created_body = self.request(
+            "/api/create",
+            {
+                "model": "company-coder:latest",
+                "from": "qwen2.5:3b",
+                "system": "Follow company conventions.",
+                "parameters": {"num_ctx": 4096, "temperature": 0},
+            },
+        )
+        self.request(
+            "/api/copy",
+            {"source": "company-coder:latest", "destination": "company-coder:backup"},
+        )
+        _, _, response_body = self.request(
+            "/api/chat",
+            {
+                "model": "company-coder:latest",
+                "messages": [{"role": "user", "content": "hello"}],
+                "stream": False,
+            },
+        )
+        _, _, show_body = self.request("/api/show", {"model": "company-coder:latest"})
+        _, _, tags_body = self.request("/api/tags")
+        _, _, deleted_body = self.request(
+            "/api/delete", {"model": "company-coder:backup"}
+        )
+
+        created = json.loads(created_body)
+        response = json.loads(response_body)
+        shown = json.loads(show_body)
+        names = {item["name"] for item in json.loads(tags_body)["models"]}
+        self.assertEqual(created["model"]["source"], "qwen2.5:3b")
+        self.assertEqual(response["model"], "company-coder:latest")
+        self.assertEqual(
+            self.loaded[0][0].model,
+            resolve_model("qwen2.5:3b").model,
+        )
+        injected = self.loaded[0][1].chat_calls[0][0][0]["content"]
+        self.assertIn("Follow company conventions", injected)
+        self.assertEqual(shown["alias"]["source"], "qwen2.5:3b")
+        self.assertIn("company-coder:latest", names)
+        self.assertIn("company-coder:backup", names)
+        self.assertTrue(json.loads(deleted_body)["removed"])
+
+    def test_alias_load_stop_and_delete_resolve_the_resident_source_model(self):
+        self.request(
+            "/api/create",
+            {"model": "company-coder:latest", "from": "qwen2.5:3b"},
+        )
+
+        _, _, loaded_body = self.request(
+            "/api/load",
+            {
+                "model": "company-coder:latest",
+                "options": {"num_ctx": 2048},
+                "keep_alive": "10m",
+            },
+        )
+        _, _, stopped_body = self.request(
+            "/api/stop", {"model": "company-coder:latest"}
+        )
+        self.request(
+            "/api/load", {"model": "company-coder:latest", "keep_alive": "10m"}
+        )
+        _, _, deleted_body = self.request(
+            "/api/delete", {"model": "company-coder:latest"}
+        )
+
+        loaded = json.loads(loaded_body)
+        self.assertEqual(
+            loaded["instance"]["model"],
+            resolve_model("qwen2.5:3b").model,
+        )
+        self.assertEqual(json.loads(stopped_body)["unloaded"], 1)
+        self.assertTrue(json.loads(deleted_body)["removed"])
+        self.assertEqual(self.server.manager.ps(), [])
+
+    def test_empty_ollama_request_loads_and_keep_alive_zero_unloads(self):
+        _, _, load_body = self.request(
+            "/api/chat",
+            {
+                "model": "qwen2.5:3b",
+                "messages": [],
+                "stream": False,
+                "keep_alive": "10m",
+            },
+        )
+        _, _, unload_body = self.request(
+            "/api/generate",
+            {
+                "model": "qwen2.5:3b",
+                "prompt": "",
+                "stream": False,
+                "keep_alive": 0,
+            },
+        )
+
+        self.assertEqual(json.loads(load_body)["done_reason"], "load")
+        self.assertEqual(json.loads(unload_body)["done_reason"], "unload")
+        self.assertEqual(json.loads(unload_body)["unloaded"], 1)
+
+    def test_ollama_and_openai_embedding_routes_share_resident_model(self):
+        _, _, ollama_body = self.request(
+            "/api/embed",
+            {
+                "model": "qwen2.5:3b",
+                "input": ["one two", "three"],
+                "options": {"num_ctx": 16},
+                "keep_alive": "10m",
+            },
+        )
+        _, _, legacy_body = self.request(
+            "/api/embeddings",
+            {"model": "qwen2.5:3b", "prompt": "four five six"},
+        )
+        _, _, openai_body = self.request(
+            "/v1/embeddings",
+            {"model": "qwen2.5:3b", "input": "seven eight"},
+        )
+
+        ollama = json.loads(ollama_body)
+        legacy = json.loads(legacy_body)
+        openai = json.loads(openai_body)
+        self.assertEqual(ollama["embeddings"], [[2.0, 1.0], [1.0, 1.0]])
+        self.assertEqual(legacy["embedding"], [3.0, 1.0])
+        self.assertEqual(openai["data"][0]["embedding"], [2.0, 1.0])
+        self.assertEqual(len(self.loaded), 1)
+
     def test_ollama_multimodal_chat_routes_to_vision_backend(self):
         payload = {
             "model": "qwen2.5-vl:3b",
@@ -1263,6 +1504,29 @@ class TeamGatewayHTTPTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.team_store = TeamStore(Path(self.temporary.name) / "team.sqlite3")
+        self.workspace_store = WorkspaceStore(Path(self.temporary.name) / "workspaces")
+        self.provider_calls = []
+
+        def provider_transport(config, path, payload, headers):
+            self.provider_calls.append((config, path, payload, headers))
+            return {
+                "id": "upstream",
+                "object": "chat.completion",
+                "model": payload["model"],
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "external answer"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 7, "completion_tokens": 2},
+            }
+
+        self.provider_store = ProviderStore(
+            Path(self.temporary.name) / "team.sqlite3",
+            transport=provider_transport,
+        )
         manager = RuntimeManager(loader=lambda config: FakeAccelerator())
         self.server = MachBoostHTTPServer(
             ("127.0.0.1", 0),
@@ -1270,6 +1534,8 @@ class TeamGatewayHTTPTests(unittest.TestCase):
             api_token="admin-secret",
             require_auth=True,
             team_store=self.team_store,
+            workspace_store=self.workspace_store,
+            provider_store=self.provider_store,
         )
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
@@ -1282,14 +1548,17 @@ class TeamGatewayHTTPTests(unittest.TestCase):
         self.thread.join(timeout=2.0)
         self.temporary.cleanup()
 
-    def request(self, path, payload=None, *, token="admin-secret"):
+    def request(self, path, payload=None, *, token="admin-secret", raw=False):
         data = None if payload is None else json.dumps(payload).encode("utf-8")
         headers = {"Authorization": f"Bearer {token}"}
         if data is not None:
             headers["Content-Type"] = "application/json"
         request = Request(self.base_url + path, data=data, headers=headers)
         with urlopen(request, timeout=3.0) as response:
-            return response.status, json.loads(response.read().decode("utf-8"))
+            body = response.read()
+            if raw:
+                return response.status, response.headers, body
+            return response.status, json.loads(body.decode("utf-8"))
 
     def create_employee_key(self, *, models=("mlx-community/example",)) -> str:
         _, body = self.request(
@@ -1384,6 +1653,205 @@ class TeamGatewayHTTPTests(unittest.TestCase):
         self.assertEqual(body["schema"], "machboost.integrations.v1")
         self.assertTrue(body["openai_base_url"].endswith("/v1"))
         self.assertIn("OLLAMA_HOST", body["clients"][1]["environment"])
+
+    def test_workspace_memory_and_exact_cache_skip_second_inference(self) -> None:
+        repository = Path(self.temporary.name) / "memory-repo"
+        repository.mkdir()
+        (repository / "auth.py").write_text(
+            "def authenticate(token):\n    return token\n", encoding="utf-8"
+        )
+        workspace = self.workspace_store.register(repository)
+        self.workspace_store.index(workspace.id)
+        payload = {
+            "model": "mlx-community/example",
+            "messages": [{"role": "user", "content": "Where is authenticate?"}],
+            "machboost": {
+                "workspace_id": workspace.id,
+                "memory": {"mode": "private", "exact_cache": True},
+            },
+        }
+
+        _, first = self.request("/v1/chat/completions", payload)
+        _, second = self.request("/v1/chat/completions", payload)
+        _, memories = self.request(f"/api/memory?workspace_id={workspace.id}")
+        _, metrics = self.request("/api/cache/metrics")
+
+        entry = next(iter(self.server.manager._models.values()))
+        self.assertEqual(len(entry.accelerator.chat_calls), 1)
+        self.assertNotIn("cache", first["machboost"])
+        self.assertTrue(second["machboost"]["cache"]["hit"])
+        self.assertEqual(second["choices"], first["choices"])
+        self.assertEqual(len(memories["memories"]), 1)
+        self.assertEqual(metrics["totals"]["exact_cache_hits"], 1)
+        self.assertEqual(metrics["totals"]["avoided_prompt_tokens"], 12)
+
+    def test_manual_team_memory_is_retrieved_and_can_be_deleted(self) -> None:
+        repository = Path(self.temporary.name) / "shared-repo"
+        repository.mkdir()
+        (repository / "build.py").write_text("LOCKFILE = 'uv.lock'\n", encoding="utf-8")
+        workspace = self.workspace_store.register(repository)
+        self.workspace_store.index(workspace.id)
+
+        _, created = self.request(
+            "/api/memory",
+            {
+                "workspace_id": workspace.id,
+                "scope": "team",
+                "kind": "procedure",
+                "title": "Repair dependency lock",
+                "content": "Run uv lock after changing pyproject.toml.",
+                "query_text": "dependency lock build",
+                "confidence": 0.9,
+                "validated_by": ["ci"],
+            },
+        )
+        _, response = self.request(
+            "/v1/chat/completions",
+            {
+                "model": "mlx-community/example",
+                "messages": [
+                    {"role": "user", "content": "How do I repair the dependency lock?"}
+                ],
+                "machboost": {
+                    "workspace_id": workspace.id,
+                    "memory": {"remember": False},
+                },
+            },
+        )
+        memory_id = created["memory"]["id"]
+        _, deleted = self.request("/api/memory/delete", {"memory_ids": [memory_id]})
+
+        entry = next(iter(self.server.manager._models.values()))
+        injected = "\n".join(
+            str(message.get("content") or "")
+            for message in entry.accelerator.chat_calls[0][0]
+        )
+        self.assertIn("Run uv lock", injected)
+        self.assertEqual(response["machboost"]["memory"]["retrieved"], 1)
+        self.assertEqual(deleted["removed"], 1)
+
+    def test_external_provider_configuration_and_routing(self) -> None:
+        _, configured = self.request(
+            "/api/providers",
+            {
+                "id": "fallback",
+                "name": "Fallback API",
+                "base_url": "https://inference.example.com",
+                "models": ["mlx-community/example"],
+                "api_key": "provider-secret",
+                "monthly_budget_usd": 5,
+                "input_cost_per_million": 1,
+                "output_cost_per_million": 2,
+            },
+        )
+        _, response = self.request(
+            "/v1/chat/completions",
+            {
+                "model": "mlx-community/example",
+                "messages": [{"role": "user", "content": "hello"}],
+                "machboost": {
+                    "route": {
+                        "mode": "external_only",
+                        "provider_id": "fallback",
+                    }
+                },
+            },
+        )
+        _, providers = self.request("/api/providers")
+        _, usage = self.request("/api/providers/usage")
+
+        self.assertTrue(configured["provider"]["has_secret"])
+        self.assertNotIn("api_key", configured["provider"])
+        self.assertEqual(
+            response["choices"][0]["message"]["content"], "external answer"
+        )
+        self.assertEqual(response["machboost"]["route"]["source"], "external")
+        self.assertEqual(
+            self.provider_calls[0][3]["Authorization"], "Bearer provider-secret"
+        )
+        self.assertEqual(providers["providers"][0]["id"], "fallback")
+        self.assertEqual(usage["usage"][0]["requests"], 1)
+
+    def test_external_provider_streaming_route_emits_compatible_sse(self) -> None:
+        self.request(
+            "/api/providers",
+            {
+                "id": "fallback",
+                "name": "Fallback API",
+                "base_url": "https://inference.example.com",
+                "models": ["mlx-community/example"],
+                "api_key": "provider-secret",
+            },
+        )
+
+        _, headers, body = self.request(
+            "/v1/chat/completions",
+            {
+                "model": "mlx-community/example",
+                "messages": [{"role": "user", "content": "hello"}],
+                "stream": True,
+                "machboost": {
+                    "route": {
+                        "mode": "external_only",
+                        "provider_id": "fallback",
+                    }
+                },
+            },
+            raw=True,
+        )
+
+        self.assertEqual(headers.get_content_type(), "text/event-stream")
+        self.assertTrue(body.rstrip().endswith(b"data: [DONE]"))
+        events = [
+            json.loads(line.removeprefix("data: "))
+            for line in body.decode("utf-8").splitlines()
+            if line.startswith("data: {")
+        ]
+        self.assertEqual(
+            events[0]["choices"][0]["delta"]["content"], "external answer"
+        )
+        self.assertEqual(events[-1]["machboost"]["route"]["source"], "external")
+        self.assertTrue(events[-1]["machboost"]["route"]["buffered_upstream"])
+        self.assertEqual(len(self.server.manager._models), 0)
+
+    def test_streaming_local_first_falls_back_before_headers_on_queue_overload(self) -> None:
+        self.request(
+            "/api/providers",
+            {
+                "id": "fallback",
+                "name": "Fallback API",
+                "base_url": "https://inference.example.com",
+                "models": ["mlx-community/example"],
+                "api_key": "provider-secret",
+            },
+        )
+
+        with patch.object(
+            self.server.manager,
+            "chat",
+            side_effect=RequestAdmissionError("queue is full", reason="queue_full"),
+        ):
+            _, headers, body = self.request(
+                "/v1/chat/completions",
+                {
+                    "model": "mlx-community/example",
+                    "messages": [{"role": "user", "content": "hello"}],
+                    "stream": True,
+                    "machboost": {
+                        "route": {
+                            "mode": "local_first",
+                            "provider_id": "fallback",
+                        }
+                    },
+                },
+                raw=True,
+            )
+
+        self.assertEqual(headers.get_content_type(), "text/event-stream")
+        self.assertIn(b"external answer", body)
+        self.assertTrue(body.rstrip().endswith(b"data: [DONE]"))
+        self.assertEqual(len(self.provider_calls), 1)
+        self.assertEqual(len(self.server.manager._models), 0)
 
 
 if __name__ == "__main__":

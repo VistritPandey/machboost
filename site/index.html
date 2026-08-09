@@ -193,7 +193,9 @@
               Give each employee a scoped key and point Cline, Kilo Code, or another
               OpenAI-compatible client at the same private endpoint. Models stay
               resident while MachBoost enforces model access, concurrency, request
-              rates, and fair queueing between employees.
+              rates, and fair queueing between employees. Revision-aware memory can
+              reuse validated repository knowledge without exposing private work,
+              while budgeted external providers remain an explicit fallback.
             </p>
             <a
               class="text-link"
@@ -212,7 +214,7 @@
               <div><dt>Identity</dt><dd>Scoped keys</dd></div>
               <div><dt>Admission</dt><dd>Tenant-fair</dd></div>
               <div><dt>Protocols</dt><dd>OpenAI + Ollama</dd></div>
-              <div><dt>Tools</dt><dd>Parallel calls</dd></div>
+              <div><dt>Memory</dt><dd>Private + shared</dd></div>
             </dl>
             <pre><code>export OPENAI_BASE_URL="http://TEAM-MAC:11435/v1"
 export OPENAI_API_KEY="mbk_employee_key"</code></pre>
@@ -226,14 +228,14 @@ export OPENAI_API_KEY="mbk_employee_key"</code></pre>
             <p>Model allowlists, scoped keys, per-minute limits, and revocation from the native app.</p>
           </div>
           <div>
-            <i data-lucide="git-branch" aria-hidden="true"></i>
-            <h3>Share repository context</h3>
-            <p>Register a codebase once, retrieve bounded evidence, and keep reusable prefixes stable.</p>
+            <i data-lucide="brain-circuit" aria-hidden="true"></i>
+            <h3>Reuse reviewed knowledge</h3>
+            <p>Keep unfinished work private, publish validated team memory, and reject stale repository revisions.</p>
           </div>
           <div>
             <i data-lucide="activity" aria-hidden="true"></i>
-            <h3>Inspect and evaluate</h3>
-            <p>Choose metadata, redacted, full, or no traces, then evaluate selected requests locally.</p>
+            <h3>Route, inspect, evaluate</h3>
+            <p>Apply provider budgets and transient fallback, inspect local traces, then evaluate selected requests.</p>
           </div>
         </div>
       </section>
@@ -293,6 +295,13 @@ export OPENAI_API_KEY="mbk_employee_key"</code></pre>
                   <td>100% expected answers</td>
                 </tr>
                 <tr class="control-row">
+                  <td>Five-developer memory check</td>
+                  <td>No model executed</td>
+                  <td colspan="2">12,000 fixture prompt tokens avoided</td>
+                  <td>Not a speed claim</td>
+                  <td>5/5 isolation and reuse checks</td>
+                </tr>
+                <tr class="control-row">
                   <td>First-view control</td>
                   <td>Qwen3-VL</td>
                   <td colspan="2">No reusable prefix</td>
@@ -308,6 +317,8 @@ export OPENAI_API_KEY="mbk_employee_key"</code></pre>
               Repository results use the same loaded MLX model, weights, prompts, and
               tokenization. Median prompt length was 10,405 tokens; 7,901 tokens were
               reused. The visual figure is the median of six model-level paired medians.
+              Team-memory token savings are deterministic accounting inputs that test
+              namespace isolation and invalidation; they do not measure model throughput.
             </p>
             <div class="artifact-links">
               <a
@@ -322,6 +333,9 @@ export OPENAI_API_KEY="mbk_employee_key"</code></pre>
               </a>
               <a href="https://github.com/VistritPandey/machboost/tree/main/paper">
                 Research paper <i data-lucide="arrow-up-right" aria-hidden="true"></i>
+              </a>
+              <a href="https://github.com/VistritPandey/machboost/blob/main/scripts/benchmark_team_memory.py">
+                Team-memory check <i data-lucide="arrow-up-right" aria-hidden="true"></i>
               </a>
             </div>
           </div>
@@ -503,8 +517,9 @@ response = client.chat.completions.create(
                 </button>
               </div>
               <pre id="terminal-code"><code>machboost serve
-machboost pull qwen2.5:3b
-machboost run qwen2.5:3b</code></pre>
+machboost pull qwen2.5-coder:7b
+machboost create company-coder --from qwen2.5-coder:7b --option num_ctx=8192
+machboost run company-coder</code></pre>
             </div>
           </div>
         </div>
