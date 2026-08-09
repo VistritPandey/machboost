@@ -105,6 +105,35 @@ class WorkspaceStoreTests(unittest.TestCase):
             (),
         )
 
+    def test_file_digests_track_changed_and_removed_files(self) -> None:
+        source = self.repo / "service.py"
+        removed = self.repo / "old.py"
+        source.write_text("VERSION = 1\n", encoding="utf-8")
+        removed.write_text("OLD = True\n", encoding="utf-8")
+        workspace = self.store.register(self.repo)
+
+        self.assertEqual(self.store.file_digests(workspace.id), {})
+        self.store.index(workspace.id)
+        first = self.store.file_digests(workspace.id)
+        selected = self.store.file_digests(
+            workspace.id, ["service.py", "missing.py", "service.py"]
+        )
+
+        self.assertEqual(set(first), {"old.py", "service.py"})
+        self.assertEqual(selected, {"service.py": first["service.py"]})
+
+        source.write_text("VERSION = 2\n", encoding="utf-8")
+        removed.unlink()
+        self.store.index(workspace.id)
+        second = self.store.file_digests(workspace.id)
+
+        self.assertEqual(set(second), {"service.py"})
+        self.assertNotEqual(second["service.py"], first["service.py"])
+
+    def test_file_digests_reject_unknown_workspace(self) -> None:
+        with self.assertRaises(WorkspaceError):
+            self.store.file_digests("missing")
+
     def test_query_limits_context_and_chunks_per_file(self) -> None:
         repeated = "\n".join(
             f"def shared_symbol_{index}():\n    return 'needle value {index}'"
