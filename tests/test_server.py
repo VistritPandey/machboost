@@ -54,6 +54,9 @@ class FakeService:
     def decode(self, tokens, **_kwargs):
         return " ".join(tokens)
 
+    def embed(self, texts):
+        return [[float(len(text.split())), 1.0] for text in texts]
+
 
 class FakeAccelerator:
     def __init__(self) -> None:
@@ -1134,6 +1137,135 @@ class HTTPServerTests(unittest.TestCase):
         _, _, ps_body = self.request("/api/ps")
         self.assertEqual(json.loads(ps_body)["models"], [])
 
+    def test_ollama_alias_create_copy_show_run_and_delete(self):
+        _, _, created_body = self.request(
+            "/api/create",
+            {
+                "model": "company-coder:latest",
+                "from": "qwen2.5:3b",
+                "system": "Follow company conventions.",
+                "parameters": {"num_ctx": 4096, "temperature": 0},
+            },
+        )
+        self.request(
+            "/api/copy",
+            {"source": "company-coder:latest", "destination": "company-coder:backup"},
+        )
+        _, _, response_body = self.request(
+            "/api/chat",
+            {
+                "model": "company-coder:latest",
+                "messages": [{"role": "user", "content": "hello"}],
+                "stream": False,
+            },
+        )
+        _, _, show_body = self.request("/api/show", {"model": "company-coder:latest"})
+        _, _, tags_body = self.request("/api/tags")
+        _, _, deleted_body = self.request(
+            "/api/delete", {"model": "company-coder:backup"}
+        )
+
+        created = json.loads(created_body)
+        response = json.loads(response_body)
+        shown = json.loads(show_body)
+        names = {item["name"] for item in json.loads(tags_body)["models"]}
+        self.assertEqual(created["model"]["source"], "qwen2.5:3b")
+        self.assertEqual(response["model"], "company-coder:latest")
+        self.assertEqual(
+            self.loaded[0][0].model,
+            "mlx-community/Qwen2.5-3B-Instruct-4bit",
+        )
+        injected = self.loaded[0][1].chat_calls[0][0][0]["content"]
+        self.assertIn("Follow company conventions", injected)
+        self.assertEqual(shown["alias"]["source"], "qwen2.5:3b")
+        self.assertIn("company-coder:latest", names)
+        self.assertIn("company-coder:backup", names)
+        self.assertTrue(json.loads(deleted_body)["removed"])
+
+    def test_alias_load_stop_and_delete_resolve_the_resident_source_model(self):
+        self.request(
+            "/api/create",
+            {"model": "company-coder:latest", "from": "qwen2.5:3b"},
+        )
+
+        _, _, loaded_body = self.request(
+            "/api/load",
+            {
+                "model": "company-coder:latest",
+                "options": {"num_ctx": 2048},
+                "keep_alive": "10m",
+            },
+        )
+        _, _, stopped_body = self.request(
+            "/api/stop", {"model": "company-coder:latest"}
+        )
+        self.request(
+            "/api/load", {"model": "company-coder:latest", "keep_alive": "10m"}
+        )
+        _, _, deleted_body = self.request(
+            "/api/delete", {"model": "company-coder:latest"}
+        )
+
+        loaded = json.loads(loaded_body)
+        self.assertEqual(
+            loaded["instance"]["model"],
+            "mlx-community/Qwen2.5-3B-Instruct-4bit",
+        )
+        self.assertEqual(json.loads(stopped_body)["unloaded"], 1)
+        self.assertTrue(json.loads(deleted_body)["removed"])
+        self.assertEqual(self.server.manager.ps(), [])
+
+    def test_empty_ollama_request_loads_and_keep_alive_zero_unloads(self):
+        _, _, load_body = self.request(
+            "/api/chat",
+            {
+                "model": "qwen2.5:3b",
+                "messages": [],
+                "stream": False,
+                "keep_alive": "10m",
+            },
+        )
+        _, _, unload_body = self.request(
+            "/api/generate",
+            {
+                "model": "qwen2.5:3b",
+                "prompt": "",
+                "stream": False,
+                "keep_alive": 0,
+            },
+        )
+
+        self.assertEqual(json.loads(load_body)["done_reason"], "load")
+        self.assertEqual(json.loads(unload_body)["done_reason"], "unload")
+        self.assertEqual(json.loads(unload_body)["unloaded"], 1)
+
+    def test_ollama_and_openai_embedding_routes_share_resident_model(self):
+        _, _, ollama_body = self.request(
+            "/api/embed",
+            {
+                "model": "qwen2.5:3b",
+                "input": ["one two", "three"],
+                "options": {"num_ctx": 16},
+                "keep_alive": "10m",
+            },
+        )
+        _, _, legacy_body = self.request(
+            "/api/embeddings",
+            {"model": "qwen2.5:3b", "prompt": "four five six"},
+        )
+        _, _, openai_body = self.request(
+            "/v1/embeddings",
+            {"model": "qwen2.5:3b", "input": "seven eight"},
+        )
+
+        ollama = json.loads(ollama_body)
+        legacy = json.loads(legacy_body)
+        openai = json.loads(openai_body)
+        self.assertEqual(ollama["embeddings"], [[2.0, 1.0], [1.0, 1.0]])
+        self.assertEqual(legacy["embedding"], [3.0, 1.0])
+        self.assertEqual(openai["data"][0]["embedding"], [2.0, 1.0])
+        self.assertEqual(len(self.loaded), 1)
+
     def test_ollama_multimodal_chat_routes_to_vision_backend(self):
         payload = {
             "model": "qwen2.5-vl:3b",
@@ -1415,14 +1547,17 @@ class TeamGatewayHTTPTests(unittest.TestCase):
         self.thread.join(timeout=2.0)
         self.temporary.cleanup()
 
-    def request(self, path, payload=None, *, token="admin-secret"):
+    def request(self, path, payload=None, *, token="admin-secret", raw=False):
         data = None if payload is None else json.dumps(payload).encode("utf-8")
         headers = {"Authorization": f"Bearer {token}"}
         if data is not None:
             headers["Content-Type"] = "application/json"
         request = Request(self.base_url + path, data=data, headers=headers)
         with urlopen(request, timeout=3.0) as response:
-            return response.status, json.loads(response.read().decode("utf-8"))
+            body = response.read()
+            if raw:
+                return response.status, response.headers, body
+            return response.status, json.loads(body.decode("utf-8"))
 
     def create_employee_key(self, *, models=("mlx-community/example",)) -> str:
         _, body = self.request(
@@ -1635,6 +1770,48 @@ class TeamGatewayHTTPTests(unittest.TestCase):
         )
         self.assertEqual(providers["providers"][0]["id"], "fallback")
         self.assertEqual(usage["usage"][0]["requests"], 1)
+
+    def test_external_provider_streaming_route_emits_compatible_sse(self) -> None:
+        self.request(
+            "/api/providers",
+            {
+                "id": "fallback",
+                "name": "Fallback API",
+                "base_url": "https://inference.example.com",
+                "models": ["mlx-community/example"],
+                "api_key": "provider-secret",
+            },
+        )
+
+        _, headers, body = self.request(
+            "/v1/chat/completions",
+            {
+                "model": "mlx-community/example",
+                "messages": [{"role": "user", "content": "hello"}],
+                "stream": True,
+                "machboost": {
+                    "route": {
+                        "mode": "external_only",
+                        "provider_id": "fallback",
+                    }
+                },
+            },
+            raw=True,
+        )
+
+        self.assertEqual(headers.get_content_type(), "text/event-stream")
+        self.assertTrue(body.rstrip().endswith(b"data: [DONE]"))
+        events = [
+            json.loads(line.removeprefix("data: "))
+            for line in body.decode("utf-8").splitlines()
+            if line.startswith("data: {")
+        ]
+        self.assertEqual(
+            events[0]["choices"][0]["delta"]["content"], "external answer"
+        )
+        self.assertEqual(events[-1]["machboost"]["route"]["source"], "external")
+        self.assertTrue(events[-1]["machboost"]["route"]["buffered_upstream"])
+        self.assertEqual(len(self.server.manager._models), 0)
 
 
 if __name__ == "__main__":
