@@ -61,6 +61,18 @@ class NativeFallbackService(ScriptedService):
         return tokens
 
 
+class NativeMetricService(NativeFallbackService):
+    last_native_metrics = {
+        "prompt_tokens": 120,
+        "prompt_eval_tokens": 30,
+        "cached_prompt_tokens": 90,
+        "prompt_cache_namespace": "workspace:repo:revision",
+        "prompt_eval_seconds": 0.25,
+        "generation_seconds": 0.5,
+        "time_to_first_token_seconds": 0.3,
+    }
+
+
 class ResumableFallbackService(ScriptedService):
     def __init__(self, prompt, completion):
         super().__init__(prompt, completion)
@@ -205,6 +217,21 @@ class AcceleratorTests(unittest.TestCase):
         self.assertEqual(result.text, completion)
         self.assertEqual(service.native_calls, 1)
         self.assertEqual(result.stats.accepted_draft_tokens, 0)
+
+    def test_native_path_preserves_prompt_cache_metrics(self):
+        prompt = "Question ending in XYZ!"
+        completion = "A fresh answer"
+        service = NativeMetricService(prompt, completion)
+        accelerator = Accelerator(service, context_texts=["abcdef"], ngram=4)
+
+        result = accelerator.generate_result(prompt, max_tokens=len(completion))
+
+        self.assertEqual(result.stats.prompt_tokens, 120)
+        self.assertEqual(result.stats.prompt_eval_tokens, 30)
+        self.assertEqual(result.stats.cached_prompt_tokens, 90)
+        self.assertEqual(
+            result.stats.prompt_cache_namespace, "workspace:repo:revision"
+        )
 
     def test_streaming_uses_incremental_detokenizer_instead_of_decode_per_token(self):
         prompt = "Complete: "
