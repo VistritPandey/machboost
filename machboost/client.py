@@ -237,6 +237,56 @@ class MachBoostClient:
             return self.stream("/api/pull", payload)
         return self.post("/api/pull", payload)
 
+    def create_model(
+        self,
+        name: str,
+        source: str,
+        *,
+        system: str = "",
+        template: str = "",
+        options: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
+        return self.post(
+            "/api/create",
+            {
+                "model": name,
+                "from": source,
+                "system": system,
+                "template": template,
+                "parameters": dict(options or {}),
+            },
+        )
+
+    def copy_model(self, source: str, destination: str) -> dict[str, Any]:
+        return self.post(
+            "/api/copy", {"source": source, "destination": destination}
+        )
+
+    def delete_model(self, model: str) -> bool:
+        try:
+            return bool(self.post("/api/delete", {"model": model}).get("removed"))
+        except MachBoostAPIError as exc:
+            if exc.status == 404:
+                return False
+            raise
+
+    def embed(
+        self,
+        model: str,
+        inputs: str | list[str],
+        *,
+        options: Optional[dict[str, Any]] = None,
+        keep_alive: Any = None,
+    ) -> list[list[float]]:
+        payload: dict[str, Any] = {
+            "model": model,
+            "input": inputs,
+            "options": dict(options or {}),
+        }
+        if keep_alive is not None:
+            payload["keep_alive"] = keep_alive
+        return list(self.post("/api/embed", payload).get("embeddings") or ())
+
     def load(
         self,
         model: str,
