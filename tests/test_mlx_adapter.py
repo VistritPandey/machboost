@@ -231,6 +231,55 @@ class MLXAdapterTest(unittest.TestCase):
         self.assertEqual(observed["prompt"], [100, 101, 102])
         self.assertEqual(observed["max_tokens"], 4)
 
+    def test_native_mlx_stream_applies_sampling_and_penalty_options(self):
+        observed = {}
+        mlx_lm = ModuleType("mlx_lm")
+        sample_utils = ModuleType("mlx_lm.sample_utils")
+        sampler = object()
+        processors = [object()]
+
+        def make_sampler(**kwargs):
+            observed["sampler_options"] = kwargs
+            return sampler
+
+        def make_logits_processors(**kwargs):
+            observed["processor_options"] = kwargs
+            return processors
+
+        def stream_generate(model, tokenizer, prompt, **kwargs):
+            observed["stream_options"] = kwargs
+            yield SimpleNamespace(token=1, text="one")
+
+        sample_utils.make_sampler = make_sampler
+        sample_utils.make_logits_processors = make_logits_processors
+        mlx_lm.stream_generate = stream_generate
+        service = MLXCausalLMService(object(), object())
+
+        with patch.dict(
+            "sys.modules",
+            {"mlx_lm": mlx_lm, "mlx_lm.sample_utils": sample_utils},
+        ):
+            service.generate_tokens(
+                (100,),
+                max_tokens=2,
+                generation_options={
+                    "temperature": 0.7,
+                    "top_p": 0.9,
+                    "top_k": 20,
+                    "min_p": 0.1,
+                    "repeat_penalty": 1.1,
+                    "repeat_last_n": 32,
+                    "presence_penalty": 0.2,
+                    "frequency_penalty": 0.3,
+                },
+            )
+
+        self.assertEqual(observed["sampler_options"]["temp"], 0.7)
+        self.assertEqual(observed["sampler_options"]["top_k"], 20)
+        self.assertEqual(observed["processor_options"]["repetition_penalty"], 1.1)
+        self.assertIs(observed["stream_options"]["sampler"], sampler)
+        self.assertIs(observed["stream_options"]["logits_processors"], processors)
+
     def test_native_mlx_stream_can_forward_predecoded_text(self):
         mlx_lm = ModuleType("mlx_lm")
 
