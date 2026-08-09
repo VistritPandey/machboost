@@ -45,6 +45,7 @@ class FakeStats:
 class FakeService:
     def __init__(self) -> None:
         self.reset_calls = 0
+        self.prompt_cache_configs = []
 
     def reset_cache(self) -> None:
         self.reset_calls += 1
@@ -57,6 +58,18 @@ class FakeService:
 
     def embed(self, texts):
         return [[float(len(text.split())), 1.0] for text in texts]
+
+    def configure_native_prompt_cache(
+        self, *, enabled, max_size, max_bytes, namespace
+    ) -> None:
+        self.prompt_cache_configs.append(
+            {
+                "enabled": enabled,
+                "max_size": max_size,
+                "max_bytes": max_bytes,
+                "namespace": namespace,
+            }
+        )
 
 
 class FakeAccelerator:
@@ -717,6 +730,10 @@ class HTTPServerTests(unittest.TestCase):
             response["machboost"]["stats"]["accepted_draft_tokens"], 2
         )
         self.assertEqual(response["machboost"]["backend"], "mlx")
+        self.assertEqual(
+            accelerator.service.prompt_cache_configs[-1]["namespace"],
+            f"workspace:{workspace.id}:unversioned",
+        )
 
     def test_streaming_workspace_response_retains_runtime_metrics(self):
         repository = Path(self.temporary.name) / "repository"
@@ -1754,11 +1771,16 @@ class TeamGatewayHTTPTests(unittest.TestCase):
         _, deleted = self.request("/api/memory/delete", {"memory_ids": [memory_id]})
 
         entry = next(iter(self.server.manager._models.values()))
-        injected = "\n".join(
-            str(message.get("content") or "")
-            for message in entry.accelerator.chat_calls[0][0]
-        )
+        messages = entry.accelerator.chat_calls[0][0]
+        injected = "\n".join(str(message.get("content") or "") for message in messages)
         self.assertIn("Run uv lock", injected)
+        system_messages = [
+            str(message.get("content") or "")
+            for message in messages
+            if message.get("role") == "system"
+        ]
+        self.assertIn("repository evidence", system_messages[0])
+        self.assertIn("prior team experience", system_messages[1])
         self.assertEqual(response["machboost"]["memory"]["retrieved"], 1)
         self.assertEqual(deleted["removed"], 1)
 
