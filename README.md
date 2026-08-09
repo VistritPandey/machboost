@@ -26,7 +26,7 @@ Text drafting helps only when the model's next tokens are recoverable from calle
 
 | Usually not a fit | Expected behavior |
 |---|---|
-| A first workspace question or unrelated unique question | Normal prefill; no reusable prefix exists yet. |
+| A first workspace question or a unique question without a workspace | Normal prefill; no reusable prefix exists yet. A topically unrelated question in the same workspace can still reuse the stable repository map. |
 | Brainstorming, creative writing, or novel reasoning | Little recoverable continuation, so usually near native speed. |
 | A changed or first-seen image | Repeated-image cache does not apply. |
 | An external backend without verifier hooks | Wrapper and measurement only; no native MachBoost token verification. |
@@ -242,8 +242,30 @@ print(response["machboost"]["workspace"]["citations"])
 ```
 
 Workspace requests opt into a bounded MLX prompt-prefix cache and use workspace
-affinity. Plain MLX chat keeps native cache behavior. On one Apple M5 Pro run
-over the same 183-file snapshot, six alternating-order Qwen2.5 3B pairs reduced
+affinity. The cache is shared by workspace content revision, not by chat thread
+or employee, while private memory and exact responses retain their separate
+access namespaces. Plain MLX chat keeps native cache behavior.
+
+An August 9 production-shaped audit indexed a private 8,754-file monorepo and
+used Qwen2.5 7B for standalone 192- and 256-token answers. Three adjacent coding
+pairs reused a median 3,269 of 4,243 prompt tokens, reduced prefill from `2.306s`
+to `0.605s` (`3.835x`), and reduced total wall time from `7.034s` to `5.377s`
+(`1.314x`). A separate control primed a frontend question and then asked about
+an unrelated scheduler subsystem. It reduced total time from `5.995s` to
+`4.217s` (`1.426x`). All six new-question pairs produced byte-identical greedy
+outputs; decode time was unchanged. This demonstrates centralized prefill reuse
+beyond what merely attaching a repository to each coding-agent chat provides.
+
+The same audit measured deterministic identical-request replay separately:
+`2.474s` generated versus `0.091s` cached (`28.557x`) across three exact hits,
+avoiding 8,985 prompt and 384 completion tokens. That number applies only to
+identical deterministic requests. Semantic memory recovered one omitted
+implementation concept in a small rubric, but added 414 prompt tokens and
+`0.239s` median latency; it is a context-quality feature, not a speed claim.
+
+The earlier short-answer prefix experiment remains useful as a prefill-heavy
+upper bound. On one Apple M5 Pro run over a 183-file snapshot, six
+alternating-order Qwen2.5 3B pairs reduced
 median wall time from `3.144s` to `1.024s` (`3.021x`), and Qwen2.5 7B reduced it
 from `6.587s` to `1.998s` (`3.282x`). All 12 pairs matched generated token IDs.
 Five rows per model used different questions and retrieved evidence; the
@@ -259,6 +281,13 @@ so that path remains native.
 Reproduce the same-model comparison:
 
 ```sh
+python3 scripts/benchmark_repository_reuse.py \
+  --workspace-id WORKSPACE_ID \
+  --model qwen2.5:7b \
+  --primer "Explain the existing subsystem and cite its implementation." \
+  --target "Design an adjacent change and cite the files to edit." \
+  --runs 3
+
 python3 scripts/benchmark_workspace_prefix.py \
   --model mlx-community/Qwen2.5-7B-Instruct-4bit \
   --workspace . \
@@ -268,7 +297,8 @@ python3 scripts/benchmark_workspace_prefix.py \
 ```
 
 See the [3B artifact](results/workspace_prefix_qwen25_3b_20260729.json) and
-[7B artifact](results/workspace_prefix_qwen25_7b_20260729.json).
+[7B artifact](results/workspace_prefix_qwen25_7b_20260729.json), plus the
+[sanitized private-repository audit](results/team_repository_reuse_qwen25_7b_20260809.json).
 
 ### Concurrent API Serving
 
@@ -425,6 +455,12 @@ shared retrieval, and token/cost accounting. Its fixture records five exact
 hits avoiding 12,000 prompt tokens and 600 completion tokens. Those values are
 synthetic accounting inputs; the benchmark explicitly does not claim faster
 model decoding.
+
+The private-repository audit adds a model-backed memory probe. Shared memory
+retrieved the prior exchange in `3/3` independent-thread runs and increased a
+narrow required-concept rubric from `4/8` to `5/8`, while median wall time rose
+from `5.341s` to `5.581s`. This is evidence that memory can recover relevant
+prior work, not evidence that it saves tokens or improves general answer quality.
 
 Trace storage is opt-in by content level: `off`, `metadata`, `redacted`, or
 `full`. Metadata-only is the default, with seven-day retention and a 256 MiB
@@ -788,6 +824,7 @@ Public benchmark artifacts live in [results](results/), with methods and limitat
 | `mlx_native_reentry_qwen25_3b_20260713.json` | same | experimental RAG re-entry | 5 | 100% | 1.58x |
 | `context_bench_llama32_3b_20260720.json` | `mlx-community/Llama-3.2-3B-Instruct-4bit` | same-model controlled code boundary | 6 | 100% exact output | 1.412x |
 | `llama32_3b_mlx_context_benchmark_20260716.json` | `mlx-community/Llama-3.2-3B-Instruct-4bit` | seven-fixture context suite | 21 | 95.24% exact output | 1.008x |
+| `team_repository_reuse_qwen25_7b_20260809.json` | `mlx-community/Qwen2.5-7B-Instruct-4bit` | new cross-thread private-repo questions | 6 | 6/6 byte-identical output | 1.31x related; 1.43x unrelated |
 | `vision_cache_qwen25_3b_20260714.json` | `mlx-community/Qwen2.5-VL-3B-Instruct-4bit` | repeated questions over one image | 12 | 100% | 18.33x |
 | `vision_cache_qwen3vl_2b_20260714.json` | `mlx-community/Qwen3-VL-2B-Instruct-4bit` | repeated questions over one image | 12 | 100% | 11.41x |
 | `vision_cache_qwen3vl_4b_20260714.json` | `mlx-community/Qwen3-VL-4B-Instruct-4bit` | same | 12 | 100% | 12.73x |
