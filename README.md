@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Website](https://img.shields.io/badge/Website-MachBoost-22c55e)](https://vistritpandey.github.io/machboost/)
 
-MachBoost is an alpha-stage, local-first inference server, team gateway, native macOS app, and Python package for MLX, MLX-VLM, and Hugging Face models. It offers an Ollama-like model workflow, keeps models resident between requests, and streams text and visual chat. Team Mode adds scoped employee keys, fair admission, private traces, and local evaluations. Optional acceleration paths target reusable local text, repeated image inputs, and selected Qwen3-VL visual-prefill workloads.
+MachBoost is an alpha-stage, local-first inference server, team gateway, native macOS app, and Python package for MLX, MLX-VLM, and Hugging Face models. It offers an Ollama-like model workflow, keeps models resident between requests, and streams text and visual chat. Team Mode adds scoped employee keys, fair admission, revision-aware private/shared memory, exact-request reuse, local traces, evaluations, and budgeted external-provider fallback. Optional acceleration paths target reusable local text, repeated image inputs, and selected Qwen3-VL visual-prefill workloads.
 
 The paths have different contracts. Plain chat delegates generation to the selected backend and mainly provides residency and API compatibility. Text drafting proposes tokens from caller-supplied context and verifies them with the target model, but the cache-enabled MLX path remains experimental because a recent Llama 3.2 audit found one token-sequence mismatch in 21 pairs. Repeated-image acceleration reuses process-local visual work for unchanged image bytes. First-view Qwen3-VL compression is explicitly approximate and can change answers.
 
@@ -40,6 +40,8 @@ Treat every workload as uncalibrated until it passes a same-model paired benchma
 | Plain resident text chat | Native MLX decode through a local server; no drafting without context | usable, with measurable server/streaming overhead versus direct `mlx-lm` |
 | Concurrent text API serving | bounded tenant-fair admission, explicit overload responses, per-key limits, and isolated model replicas | usable; replicas consume additional memory and do not guarantee higher GPU throughput |
 | Team gateway | hashed scoped keys, model allowlists, fair queueing, configurable local traces, and evaluations | usable on a trusted private network; MachBoost does not terminate TLS |
+| Team memory | private or administrator-published shared entries, workspace/revision/dependency isolation, bounded retrieval, and opt-in deterministic exact-response reuse | useful for recurring team work; not a decode-throughput speedup and not enabled as a universal response cache |
+| External fallback | OpenAI-compatible providers with process-only secrets, monthly budgets, cost accounting, and transient-failure routing | usable for resilience; remote providers require HTTPS and streaming may be buffered when the upstream response is buffered |
 | Repository workspace prefix reuse | same-snapshot Qwen2.5 3B and 7B audits reached 3.021x and 3.282x medians with 6/6 exact token pairs each | promising for later questions over a stable indexed repo; not a first-request, arbitrary-model, or decode-throughput claim |
 | Context-backed MLX text | latest broad Llama 3.2 3B suite was 1.008x aggregate with 20/21 exact pairs; favorable controlled continuations can be materially faster | experimental; never generalize a fixture result beyond its workload |
 | Repeated unchanged image | 5.14x-17.44x model-level paired medians on one synthetic image and short extraction prompts | promising for repeated-image prefill; not a first-view or decode result |
@@ -387,6 +389,43 @@ OpenAI and Ollama chat routes accept function tool definitions and return
 multiple requested tool calls. MachBoost does not execute tools; the calling
 agent retains its normal permission boundary.
 
+Repository-aware requests can also opt into the team memory ledger. Private
+entries remain visible only to their employee key. Shared entries must be
+published by an administrator, and retrieval rejects entries whose repository
+revision or file dependency digests are stale. Deterministic exact-response
+reuse is separately opt-in with `machboost.memory.exact_cache`; sampled, tool,
+image, and streaming requests are never served from that cache.
+
+```json
+{
+  "model": "qwen2.5-coder:7b",
+  "messages": [{"role": "user", "content": "How do we retry checkout timeouts?"}],
+  "stream": false,
+  "machboost": {
+    "workspace_id": "WORKSPACE_ID",
+    "memory": {"mode": "private", "remember": true, "exact_cache": true}
+  }
+}
+```
+
+Administrators can configure an OpenAI-compatible provider as `local_first`,
+`external_first`, or `external_only`. Local fallback occurs only for transient
+failures such as queue overload or timeout; authentication, validation, and
+budget errors fail closed. API keys live in process memory, an environment
+variable, or the macOS Keychain, never in the team database.
+
+Run the deterministic five-developer isolation/reuse benchmark with:
+
+```sh
+python3 scripts/benchmark_team_memory.py
+```
+
+The committed test checks private and workspace isolation, revision invalidation,
+shared retrieval, and token/cost accounting. Its fixture records five exact
+hits avoiding 12,000 prompt tokens and 600 completion tokens. Those values are
+synthetic accounting inputs; the benchmark explicitly does not claim faster
+model decoding.
+
 Trace storage is opt-in by content level: `off`, `metadata`, `redacted`, or
 `full`. Metadata-only is the default, with seven-day retention and a 256 MiB
 payload cap. Selected traces can receive deterministic latency/throughput
@@ -614,6 +653,8 @@ The Python package installs an Ollama-style resident model workflow:
 machboost list
 machboost list --json
 machboost pull qwen2.5:3b
+machboost create company-coder:latest --from qwen2.5-coder:7b --option num_ctx=8192
+machboost cp company-coder:latest company-coder:staging
 machboost warm qwen2.5:3b
 machboost run qwen2.5:3b
 machboost run qwen2.5-vl:3b --image ./image.png
@@ -623,6 +664,7 @@ machboost complete qwen2.5-coder:3b "def parse_config(text):"
 machboost ps
 machboost show qwen2.5:3b
 machboost stop qwen2.5:3b
+machboost rm company-coder:staging
 machboost shutdown
 ```
 
@@ -645,6 +687,27 @@ machboost run qwen2.5:3b --keep-alive forever
 ```
 
 Plain open-ended chat without local context delegates to the backend's native greedy generator and should report `estimated_speedup=1.00x`. It still traverses the resident HTTP/streaming layer, so direct in-process `mlx-lm` can have lower first-token latency. Algorithmic text speedups require useful `--context` that predicts upcoming tokens.
+
+### Ollama Compatibility
+
+MachBoost is a replacement-compatible server for common local and agent flows,
+not a binary clone of Ollama. Existing clients can point `OLLAMA_HOST` at the
+MachBoost endpoint and use chat, generation, model discovery, lifecycle,
+embeddings, images, tools, streaming, cancellation, and keep-alive behavior.
+
+| Surface | MachBoost support |
+|---|---|
+| `/api/chat`, `/api/generate` | streaming/non-streaming, system/templates, thinking toggle, tools, images on compatible VLMs |
+| `/api/tags`, `/api/ps`, `/api/show` | catalog, aliases, loaded instances, preflight |
+| `/api/pull`, `/api/create`, `/api/copy`, `/api/delete` | HF/MLX downloads and persistent local aliases; deleting an alias does not delete cached weights |
+| `/api/embed`, `/api/embeddings` | mean-pooled normalized embeddings from the resident model input layer |
+| Ollama options | `num_ctx`, `num_predict`, `num_keep`, truncation policy, seed, temperature, top-k/top-p/min-p, repetition/presence/frequency penalties, stop strings, format/schema |
+| Not equivalent | GGUF Modelfile builds, Ollama registry push, Ollama's internal model format, and every undocumented client assumption |
+
+`/api/push` returns `501` rather than pretending to publish weights. Structured
+output is validated after generation. Context limits are enforced with the
+loaded tokenizer, preserving system content and the latest user turn while
+dropping older turns when truncation is enabled.
 
 Useful native options:
 
