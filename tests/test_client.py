@@ -247,6 +247,84 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(post.call_args_list[0].args[0], "/api/create")
         self.assertEqual(post.call_args_list[2].args[1]["keep_alive"], "10m")
 
+    def test_client_exposes_memory_and_provider_administration(self):
+        with patch.object(
+            self.client,
+            "get",
+            side_effect=[
+                {"memories": [{"id": "mem_1"}]},
+                {"schema": "machboost.cache-metrics.v1", "totals": {}},
+                {"providers": [{"id": "provider_1"}]},
+                {"schema": "machboost.provider-usage.v1", "usage": []},
+            ],
+        ) as get, patch.object(
+            self.client,
+            "post",
+            side_effect=[
+                {"memory": {"id": "mem_2"}},
+                {"removed": 1},
+                {"provider": {"id": "provider_1"}},
+                {"provider_id": "provider_1", "has_secret": True},
+                {"provider_id": "provider_1", "removed": True},
+            ],
+        ) as post:
+            memories = self.client.memories(workspace_id="repo/a", limit=25)
+            metrics = self.client.cache_metrics()
+            providers = self.client.providers()
+            usage = self.client.provider_usage("provider_1")
+            memory = self.client.create_memory(
+                "repo/a",
+                "Retry policy",
+                "Reuse the idempotency key.",
+                scope="team",
+                validated_by=("ci",),
+            )
+            removed_memories = self.client.delete_memories(["mem_2"])
+            provider = self.client.configure_provider(
+                "Fallback",
+                "https://api.example.com",
+                ("company-coder",),
+                api_key_env="COMPANY_API_KEY",
+                monthly_budget_usd=25,
+                input_cost_per_million=1.5,
+            )
+            restored = self.client.set_provider_secret("provider_1", "secret")
+            removed_provider = self.client.delete_provider("provider_1")
+
+        self.assertEqual(memories[0]["id"], "mem_1")
+        self.assertEqual(metrics["schema"], "machboost.cache-metrics.v1")
+        self.assertEqual(providers[0]["id"], "provider_1")
+        self.assertEqual(usage["usage"], [])
+        self.assertEqual(memory["id"], "mem_2")
+        self.assertEqual(removed_memories, 1)
+        self.assertEqual(provider["id"], "provider_1")
+        self.assertTrue(restored)
+        self.assertTrue(removed_provider)
+        self.assertIn("workspace_id=repo%2Fa", get.call_args_list[0].args[0])
+        self.assertEqual(post.call_args_list[2].args[1]["monthly_budget_usd"], 25)
+        self.assertNotIn("api_key", post.call_args_list[2].args[1])
+
+    def test_client_forwards_memory_and_provider_route_extensions(self):
+        with patch.object(
+            self.client,
+            "post",
+            return_value={"message": {"role": "assistant", "content": "ok"}},
+        ) as post:
+            self.client.chat(
+                "company-coder",
+                [{"role": "user", "content": "Review this."}],
+                workspace_id="repo",
+                machboost={
+                    "memory": {"mode": "private", "exact_cache": True},
+                    "route": {"mode": "local_first", "provider_id": "provider_1"},
+                },
+                stream=False,
+            )
+
+        extension = post.call_args.args[1]["machboost"]
+        self.assertTrue(extension["memory"]["exact_cache"])
+        self.assertEqual(extension["route"]["mode"], "local_first")
+
     def test_http_errors_become_api_errors(self):
         with self.assertRaisesRegex(MachBoostAPIError, "missing required field"):
             self.client.post("/api/chat", {"messages": []})
