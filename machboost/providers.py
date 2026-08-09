@@ -444,6 +444,13 @@ def _can_fallback(exc: Exception) -> bool:
         return exc.transient
     if isinstance(exc, (TimeoutError, ConnectionError)):
         return True
+    if str(getattr(exc, "reason", "")) in {
+        "queue_full",
+        "queue_timeout",
+        "request_timeout",
+        "server_unavailable",
+    }:
+        return True
     return bool(getattr(exc, "transient", False))
 
 
