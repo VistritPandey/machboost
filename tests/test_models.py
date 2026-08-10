@@ -51,8 +51,12 @@ class ModelCatalogTests(unittest.TestCase):
         resolution = resolve_model("qwen3.5:9b", backend="dflash")
 
         self.assertEqual(resolution.backend, "dflash")
-        self.assertEqual(resolution.model, "mlx-community/Qwen3.5-9B-MLX-4bit")
+        self.assertEqual(resolution.model, "mlx-community/Qwen3.5-9B-MLX-bf16")
         self.assertEqual(resolution.alias, "qwen3.5:9b")
+
+    def test_explicit_dflash_backend_rejects_unsupported_alias(self):
+        with self.assertRaisesRegex(ValueError, "supported aliases"):
+            resolve_model("llama3.2:3b", backend="dflash")
 
     def test_catalog_rows_are_stable_and_sorted(self):
         rows = alias_rows()
