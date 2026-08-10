@@ -8,7 +8,7 @@ pip install -e .
 
 ## Start With Your Workload
 
-MachBoost text acceleration is context-dependent. It can be useful when the expected answer or continuation overlaps retrieved documents, repository code, policies, templates, logs, or other local text. A unique user question can still qualify when its answer is grounded in that material. A genuinely novel answer usually does not qualify and should fall back to native generation.
+MachBoost context drafting is context-dependent. It can be useful when the expected answer or continuation overlaps retrieved documents, repository code, policies, templates, logs, or other local text. A unique user question can still qualify when its answer is grounded in that material. A genuinely novel answer does not qualify for this path and should fall back to native generation. The separate DFlash backend described below can accelerate fresh output for selected model/draft pairs.
 
 Run the same-model evaluator before enabling the accelerated path:
 
@@ -33,6 +33,35 @@ python3 examples/python/benchmark_context_workload.py \
 ```
 
 This control will normally remain near native performance because the novel continuation is not recoverable from the documentation.
+
+## Fresh Prompts With Verified Decode
+
+DFlash proposes future tokens with a small block-diffusion model, then emits only
+tokens approved by the target model. It does not need reusable document text, but
+it only supports published target/draft pairs and is not guaranteed to beat native
+generation on every prompt.
+
+```sh
+pip install -e ".[dflash]"
+python3 examples/python/dflash_unique_prompt.py \
+  "Explain how a bounded worker queue should handle cancellation." \
+  --model qwen3.5:4b \
+  --max-tokens 256
+```
+
+The example keeps both models resident for the request, streams the answer, and
+prints accepted draft tokens, target calls, time to first token, throughput, and
+memory. Benchmark several workload fixtures before deployment:
+
+```sh
+machboost bench-decode qwen3.5:4b \
+  --prompt-file benchmarks/unique_decode_prompts.jsonl \
+  --runs 3 --max-tokens 512 --no-eos
+```
+
+Same-weight speedup and absolute speed against a quantized native model are
+different measurements. See [the unique-request contract](../../docs/unique-request-acceleration.md)
+for supported boundaries and interpretation.
 
 ## RAG And Internal Knowledge
 
