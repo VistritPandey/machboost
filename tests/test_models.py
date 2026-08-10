@@ -47,6 +47,13 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertEqual(resolution.backend, "mlx")
         self.assertIsNone(resolution.alias)
 
+    def test_explicit_dflash_backend_resolves_mlx_target_for_hybrid_alias(self):
+        resolution = resolve_model("qwen3.5:9b", backend="dflash")
+
+        self.assertEqual(resolution.backend, "dflash")
+        self.assertEqual(resolution.model, "mlx-community/Qwen3.5-9B-MLX-4bit")
+        self.assertEqual(resolution.alias, "qwen3.5:9b")
+
     def test_catalog_rows_are_stable_and_sorted(self):
         rows = alias_rows()
 
