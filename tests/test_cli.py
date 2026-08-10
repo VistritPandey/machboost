@@ -1,11 +1,12 @@
 import io
 import json
 import tempfile
+import types
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from machboost import __version__
 from machboost import cli
@@ -172,6 +173,49 @@ class CLITests(unittest.TestCase):
         self.assertEqual(options["draft_model"], "z-lab/custom-draft")
         self.assertEqual(options["draft_quant"], "w4:gs64")
         self.assertEqual(options["verify_mode"], "adaptive")
+
+    def test_decode_bench_resolves_bf16_target_and_forwards_suite(self):
+        args = cli.build_parser().parse_args(
+            [
+                "bench-decode",
+                "qwen3.5:4b",
+                "--prompt-file",
+                "benchmarks/unique_decode_prompts.jsonl",
+                "--draft-quant",
+                "w4:gs64",
+                "--max-tokens",
+                "256",
+                "--runs",
+                "2",
+                "--no-eos",
+                "--output",
+                "results/local/decode",
+            ]
+        )
+        benchmark = Mock(side_effect=SystemExit(0))
+        package = types.ModuleType("dflash_mlx")
+        package.__path__ = []
+        benchmark_module = types.ModuleType("dflash_mlx.benchmark")
+        benchmark_module.main = benchmark
+
+        with patch.dict(
+            "sys.modules",
+            {
+                "dflash_mlx": package,
+                "dflash_mlx.benchmark": benchmark_module,
+            },
+        ):
+            code = cli.run_decode_bench(args)
+
+        self.assertEqual(code, 0)
+        forwarded = benchmark.call_args.args[0]
+        self.assertIn("mlx-community/Qwen3.5-4B-MLX-bf16", forwarded)
+        self.assertIn("benchmarks/unique_decode_prompts.jsonl", forwarded)
+        self.assertIn("--no-eos", forwarded)
+        benchmark.assert_called_once_with(
+            forwarded,
+            prog="machboost bench-decode",
+        )
 
     def test_render_chat_prompt_includes_system_and_history(self):
         prompt = cli.render_chat_prompt(
