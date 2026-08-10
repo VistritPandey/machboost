@@ -21,6 +21,7 @@ class CLITests(unittest.TestCase):
         self.assertIn("transformers", data["optional_packages"])
         self.assertIn("available", data["optional_packages"]["transformers"])
         self.assertIn("mlx_vlm", data["optional_packages"])
+        self.assertIn("dflash_mlx", data["optional_packages"])
 
     def test_self_test_uses_verifier_path(self):
         data = self_test_data()
