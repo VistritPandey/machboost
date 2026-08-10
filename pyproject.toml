@@ -41,6 +41,11 @@ vision = [
   "mlx-vlm>=0.5.0",
   "Pillow",
 ]
+dflash = [
+  "dflash-mlx>=0.1.8",
+  "mlx>=0.31",
+  "mlx-lm>=0.31",
+]
 video = [
   "Pillow",
 ]
@@ -50,6 +55,7 @@ all = [
   "mlx",
   "mlx-lm",
   "mlx-vlm>=0.5.0",
+  "dflash-mlx>=0.1.8",
   "Pillow",
 ]
 
