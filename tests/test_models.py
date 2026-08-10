@@ -121,10 +121,15 @@ class ModelCatalogTests(unittest.TestCase):
             rows = catalog_rows(include_cached_repositories=False)
 
         accelerated = next(row for row in rows if row["name"] == "qwen3.5:4b-dflash")
+        experimental = next(row for row in rows if row["name"] == "qwen3.5:9b-dflash")
         self.assertEqual(accelerated["backend"], "dflash")
         self.assertEqual(accelerated["draft_repository"], "z-lab/Qwen3.5-4B-DFlash")
         self.assertTrue(accelerated["cached"])
         self.assertEqual(accelerated["disk_size_gb"], 2.0)
+        self.assertFalse(accelerated["experimental"])
+        self.assertEqual(accelerated["validation_status"], "passed_bounded_suite")
+        self.assertTrue(experimental["experimental"])
+        self.assertEqual(experimental["validation_status"], "divergence_observed")
 
     def test_desktop_catalog_discovers_compatible_custom_mlx_cache(self):
         with tempfile.TemporaryDirectory() as directory:
