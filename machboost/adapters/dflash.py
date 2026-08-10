@@ -71,10 +71,14 @@ class DFlashAccelerator:
         try:
             import mlx.core as mx
             from dflash_mlx.engine.events import SummaryEvent, TokenEvent
+            from dflash_mlx.metal_limits import apply_metal_limits
             from dflash_mlx.model import DFlashDraftModelArgs
             from dflash_mlx.runtime import get_stop_token_ids, stream_dflash_generate
             from dflash_mlx.runtime.bundle import load_runtime_bundle
-            from dflash_mlx.runtime.context import build_offline_runtime_context
+            from dflash_mlx.runtime.context import (
+                build_offline_runtime_context,
+                with_metal_limits,
+            )
         except ImportError as exc:
             raise ImportError(
                 "DFlash decoding requires `pip install machboost[dflash]`."
@@ -83,6 +87,10 @@ class DFlashAccelerator:
         runtime_context = build_offline_runtime_context(
             verify_mode=verify_mode,
             copyspec_mode="off",
+        )
+        runtime_context = with_metal_limits(
+            runtime_context,
+            apply_metal_limits(),
         )
         with cls._load_lock:
             bundle = _load_runtime_bundle_compat(
