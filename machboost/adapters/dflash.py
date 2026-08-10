@@ -56,6 +56,7 @@ class DFlashAccelerator:
         self._get_stop_token_ids = stop_token_ids_fn
         self._token_event_type = token_event_type
         self._summary_event_type = summary_event_type
+        self._generation_lock = threading.RLock()
         self._closed = False
 
     @classmethod
