@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 import time
+import inspect
 from dataclasses import asdict, dataclass
 from typing import Any, Callable, Iterable, Optional, Sequence
 
@@ -85,9 +86,9 @@ class DFlashAccelerator:
                 "DFlash decoding requires `pip install machboost[dflash]`."
             ) from exc
 
-        runtime_context = build_offline_runtime_context(
+        runtime_context = _build_runtime_context_compat(
+            build_offline_runtime_context,
             verify_mode=verify_mode,
-            copyspec_mode="off",
         )
         runtime_context = with_metal_limits(
             runtime_context,
@@ -375,3 +376,14 @@ def _load_runtime_bundle_compat(
         return load_runtime_bundle(**kwargs)
     finally:
         draft_args_type.from_dict = descriptor
+
+
+def _build_runtime_context_compat(
+    build_runtime_context: Callable[..., Any],
+    *,
+    verify_mode: str,
+) -> Any:
+    kwargs: dict[str, Any] = {"verify_mode": verify_mode}
+    if "copyspec_mode" in inspect.signature(build_runtime_context).parameters:
+        kwargs["copyspec_mode"] = "off"
+    return build_runtime_context(**kwargs)
