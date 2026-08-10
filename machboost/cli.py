@@ -1424,6 +1424,8 @@ def run_decode_bench(
         benchmark_args = [
             "--model",
             resolution.model,
+            "--verify-mode",
+            args.verify_mode,
             "--max-tokens",
             str(args.max_tokens),
             "--repeat",
@@ -1779,6 +1781,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Maximum JSONL prompts; defaults to every non-empty row.",
     )
     decode_bench.add_argument("--cooldown", type=int, default=1)
+    decode_bench.add_argument(
+        "--verify-mode",
+        choices=["dflash", "adaptive", "ddtree", "off"],
+        default="dflash",
+        help="Target verifier strategy; dflash matches the resident backend default.",
+    )
     decode_bench.add_argument(
         "--no-eos",
         action="store_true",
