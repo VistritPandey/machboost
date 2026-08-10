@@ -22,7 +22,13 @@ from . import __version__
 from .accelerator import Accelerator, render_chat_prompt
 from .memory import CacheNamespace, MemorySearch, TeamMemoryStore, exchange_memory
 from .model_store import ModelStore, StoredModel, apply_stored_model
-from .models import catalog_rows, model_targets, preflight_model, resolve_model
+from .models import (
+    catalog_rows,
+    model_repositories,
+    model_targets,
+    preflight_model,
+    resolve_model,
+)
 from .ollama_compat import (
     apply_generate_template,
     normalize_ollama_options,
@@ -254,6 +260,9 @@ class ModelConfig:
     lazy: bool = False
     vision_cache_size: int = 20
     replicas: int = DEFAULT_REPLICAS
+    draft_model: Optional[str] = None
+    draft_quant: Optional[str] = None
+    verify_mode: str = "adaptive"
 
 
 @dataclass
@@ -306,6 +315,10 @@ class LoadedModel:
             "boost_enabled": self.config.boost_enabled,
             "scheduler": self.scheduler.snapshot(),
         }
+        if self.config.backend == "dflash":
+            result["draft_model"] = self.config.draft_model
+            result["draft_quant"] = self.config.draft_quant
+            result["verify_mode"] = self.config.verify_mode
         cache_info = getattr(self.accelerator, "cache_info", None)
         if callable(cache_info):
             result["vision_cache"] = cache_info()
@@ -831,28 +844,59 @@ class RuntimeManager:
             from huggingface_hub import snapshot_download
         except ImportError as exc:
             raise ImportError("Model downloads require `huggingface-hub` or a MachBoost MLX/HF extra.") from exc
-        if progress is not None:
-            progress(
-                {
-                    "status": "resolving",
-                    "model": model,
-                    "resolved_model": resolution.model,
-                }
-            )
+        repositories = model_repositories(model)
+        downloaded_paths: list[str] = []
+        for index, repository in enumerate(repositories):
+            check_cancelled(cancel_event)
+            component = "target" if index == 0 else "draft"
+            if progress is not None:
+                progress(
+                    {
+                        "status": "resolving",
+                        "model": model,
+                        "resolved_model": repository,
+                        "repository": repository,
+                        "component": component,
+                    }
+                )
 
-        tqdm_class = download_progress_class(progress, cancel_event)
-        downloaded = snapshot_download(
-            repo_id=resolution.model,
-            revision=revision,
-            tqdm_class=tqdm_class,
-        )
-        check_cancelled(cancel_event)
+            def component_progress(
+                event: dict[str, Any],
+                *,
+                repository: str = repository,
+                component: str = component,
+            ) -> None:
+                if progress is not None:
+                    progress(
+                        {
+                            **event,
+                            "repository": repository,
+                            "component": component,
+                        }
+                    )
+
+            tqdm_class = download_progress_class(
+                component_progress if progress is not None else None,
+                cancel_event,
+            )
+            downloaded_paths.append(
+                str(
+                    snapshot_download(
+                        repo_id=repository,
+                        revision=revision if index == 0 else None,
+                        tqdm_class=tqdm_class,
+                    )
+                )
+            )
+            check_cancelled(cancel_event)
         return {
             "status": "success",
             "model": model,
             "resolved_model": resolution.model,
             "backend": resolution.backend,
-            "path": str(downloaded),
+            "path": downloaded_paths[0],
+            "paths": downloaded_paths,
+            "repositories": list(repositories),
         }
 
     def stop(self, model: Optional[str] = None) -> int:
@@ -961,6 +1005,9 @@ def model_config(
         lazy=bool(options.get("lazy", False)),
         vision_cache_size=max(1, int(options.get("vision_cache_size", 20))),
         replicas=effective_replicas,
+        draft_model=_optional_string(options.get("draft_model")),
+        draft_quant=_optional_string(options.get("draft_quant")),
+        verify_mode=str(options.get("verify_mode", "adaptive")),
     )
 
 
@@ -990,6 +1037,16 @@ def load_accelerator(config: ModelConfig) -> Accelerator:
             config.model,
             lazy=config.lazy,
             vision_cache_size=config.vision_cache_size,
+        )
+    if config.backend == "dflash":
+        from .adapters.dflash import DFlashAccelerator
+
+        return DFlashAccelerator.from_pretrained(
+            config.model,
+            draft_model=config.draft_model,
+            draft_quant=config.draft_quant,
+            verify_mode=config.verify_mode,
+            lazy=config.lazy,
         )
     if config.backend == "hf-vlm":
         raise ImportError(

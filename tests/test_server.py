@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import sys
 import tempfile
 import threading
 import time
+import types
 import unittest
 from dataclasses import dataclass
 from unittest.mock import patch
@@ -16,9 +18,12 @@ from machboost.scheduler import RequestAdmissionError
 from machboost.providers import ProviderStore
 from machboost.server import (
     MachBoostHTTPServer,
+    ModelConfig,
     OperationRegistry,
     RequestCancelled,
     RuntimeManager,
+    load_accelerator,
+    model_config,
     parse_keep_alive,
 )
 from machboost.team import TeamStore
@@ -301,6 +306,52 @@ class FakeClock:
 
 
 class RuntimeManagerTests(unittest.TestCase):
+    def test_dflash_model_config_defaults_to_adaptive_verification(self):
+        config = model_config("qwen3.5:9b", {"backend": "dflash"})
+
+        self.assertEqual(config.verify_mode, "adaptive")
+
+    def test_dflash_model_config_preserves_decoder_selection(self):
+        config = model_config(
+            "qwen3.5:9b",
+            {
+                "backend": "dflash",
+                "draft_model": "z-lab/custom-draft",
+                "draft_quant": "w4:gs64",
+                "verify_mode": "adaptive",
+            },
+        )
+
+        self.assertEqual(config.backend, "dflash")
+        self.assertEqual(config.draft_model, "z-lab/custom-draft")
+        self.assertEqual(config.draft_quant, "w4:gs64")
+        self.assertEqual(config.verify_mode, "adaptive")
+
+    def test_dflash_loader_receives_resident_decoder_options(self):
+        sentinel = object()
+        config = ModelConfig(
+            model="mlx-community/Qwen3.5-9B-MLX-4bit",
+            backend="dflash",
+            draft_model="z-lab/Qwen3.5-9B-DFlash",
+            draft_quant="w4",
+            verify_mode="adaptive",
+            lazy=True,
+        )
+        with patch(
+            "machboost.adapters.dflash.DFlashAccelerator.from_pretrained",
+            return_value=sentinel,
+        ) as load:
+            result = load_accelerator(config)
+
+        self.assertIs(result, sentinel)
+        load.assert_called_once_with(
+            config.model,
+            draft_model=config.draft_model,
+            draft_quant=config.draft_quant,
+            verify_mode=config.verify_mode,
+            lazy=True,
+        )
+
     def test_generation_throughput_excludes_pull_duration(self):
         now = [0.0]
         registry = OperationRegistry(clock=lambda: now[0])
@@ -349,6 +400,24 @@ class RuntimeManagerTests(unittest.TestCase):
         )
         self.assertEqual(manager.stop("mlx-community/example"), 1)
         self.assertEqual(manager.ps(), [])
+
+    def test_dflash_alias_loads_accelerated_backend_without_request_options(self):
+        loaded = []
+        manager = RuntimeManager(
+            loader=lambda config: loaded.append(config) or FakeAccelerator()
+        )
+
+        manager.chat(
+            "qwen3.5:4b-dflash",
+            [{"role": "user", "content": "Explain a mutex."}],
+        )
+
+        self.assertEqual(len(loaded), 1)
+        self.assertEqual(loaded[0].backend, "dflash")
+        self.assertEqual(
+            loaded[0].model,
+            "mlx-community/Qwen3.5-4B-MLX-bf16",
+        )
 
     def test_finite_keep_alive_evicts_idle_model(self):
         clock = FakeClock()
@@ -416,6 +485,41 @@ class RuntimeManagerTests(unittest.TestCase):
         self.assertEqual(len(manager.ps()), 2)
         self.assertEqual(manager.stop("qwen2.5:3b"), 2)
         self.assertEqual(manager.ps(), [])
+
+    def test_pull_dflash_alias_downloads_target_and_draft(self):
+        calls = []
+        events = []
+
+        def download(*, repo_id, revision, tqdm_class):
+            calls.append((repo_id, revision, tqdm_class))
+            return f"/cache/{repo_id.replace('/', '--')}"
+
+        manager = RuntimeManager(loader=lambda config: FakeAccelerator())
+        fake_hub = types.ModuleType("huggingface_hub")
+        fake_hub.snapshot_download = download
+        with patch.dict(sys.modules, {"huggingface_hub": fake_hub}):
+            result = manager.pull(
+                "qwen3.5:4b-dflash",
+                revision="target-revision",
+                progress=events.append,
+            )
+
+        self.assertEqual(
+            [(repo_id, revision) for repo_id, revision, _ in calls],
+            [
+                ("mlx-community/Qwen3.5-4B-MLX-bf16", "target-revision"),
+                ("z-lab/Qwen3.5-4B-DFlash", None),
+            ],
+        )
+        self.assertEqual(result["backend"], "dflash")
+        self.assertEqual(len(result["paths"]), 2)
+        self.assertEqual(
+            [(event["component"], event["repository"]) for event in events],
+            [
+                ("target", "mlx-community/Qwen3.5-4B-MLX-bf16"),
+                ("draft", "z-lab/Qwen3.5-4B-DFlash"),
+            ],
+        )
 
     def test_two_text_replicas_execute_same_model_requests_concurrently(self):
         probe = ConcurrencyProbe(target=2)

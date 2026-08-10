@@ -1,11 +1,12 @@
 import io
 import json
 import tempfile
+import types
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from machboost import __version__
 from machboost import cli
@@ -21,6 +22,7 @@ class CLITests(unittest.TestCase):
         self.assertIn("transformers", data["optional_packages"])
         self.assertIn("available", data["optional_packages"]["transformers"])
         self.assertIn("mlx_vlm", data["optional_packages"])
+        self.assertIn("dflash_mlx", data["optional_packages"])
 
     def test_self_test_uses_verifier_path(self):
         data = self_test_data()
@@ -149,6 +151,199 @@ class CLITests(unittest.TestCase):
     def test_short_model_alias_selects_native_mlx_backend(self):
         with patch("machboost.models.native_mlx_available", return_value=True):
             self.assertEqual(cli.select_native_backend("qwen2.5:3b", "auto"), "mlx")
+
+    def test_native_run_parses_dflash_decoder_options(self):
+        args = cli.build_parser().parse_args(
+            [
+                "run",
+                "qwen3.5:9b",
+                "--backend",
+                "dflash",
+                "--draft-model",
+                "z-lab/custom-draft",
+                "--draft-quant",
+                "w4:gs64",
+                "--verify-mode",
+                "adaptive",
+            ]
+        )
+
+        options = cli.native_server_options(args)
+        self.assertEqual(options["backend"], "dflash")
+        self.assertEqual(options["draft_model"], "z-lab/custom-draft")
+        self.assertEqual(options["draft_quant"], "w4:gs64")
+        self.assertEqual(options["verify_mode"], "adaptive")
+
+    def test_decode_bench_resolves_bf16_target_and_forwards_suite(self):
+        args = cli.build_parser().parse_args(
+            [
+                "bench-decode",
+                "qwen3.5:4b",
+                "--prompt-file",
+                "benchmarks/unique_decode_prompts.jsonl",
+                "--draft-quant",
+                "w4:gs64",
+                "--max-tokens",
+                "256",
+                "--runs",
+                "2",
+                "--no-eos",
+                "--output",
+                "results/local/decode",
+            ]
+        )
+        benchmark = Mock(side_effect=SystemExit(0))
+        package = types.ModuleType("dflash_mlx")
+        package.__path__ = []
+        benchmark_module = types.ModuleType("dflash_mlx.benchmark")
+        benchmark_module.main = benchmark
+        model_module = types.ModuleType("dflash_mlx.model")
+
+        class DraftArgs:
+            @classmethod
+            def from_dict(cls, params):
+                return params
+
+        model_module.DFlashDraftModelArgs = DraftArgs
+
+        with patch.dict(
+            "sys.modules",
+            {
+                "dflash_mlx": package,
+                "dflash_mlx.benchmark": benchmark_module,
+                "dflash_mlx.model": model_module,
+            },
+        ):
+            code = cli.run_decode_bench(args)
+
+        self.assertEqual(code, 0)
+        forwarded = benchmark.call_args.args[0]
+        self.assertIn("mlx-community/Qwen3.5-4B-MLX-bf16", forwarded)
+        self.assertIn("benchmarks/unique_decode_prompts.jsonl", forwarded)
+        self.assertIn("--no-eos", forwarded)
+        self.assertEqual(forwarded[forwarded.index("--limit") + 1], "3")
+        self.assertEqual(forwarded[forwarded.index("--verify-mode") + 1], "adaptive")
+        self.assertEqual(args.cooldown, 1)
+        benchmark.assert_called_once_with(
+            forwarded,
+            prog="machboost bench-decode",
+        )
+
+    def test_decode_prompt_limit_rejects_invalid_jsonl(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "prompts.jsonl"
+            path.write_text('{"prompt":"ok"}\nnot-json\n', encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "line 2"):
+                cli._jsonl_row_count(str(path))
+
+    def test_decode_validation_prompt_loader_honors_limit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "prompts.jsonl"
+            path.write_text(
+                '{"id":"one","prompt":"First"}\n'
+                '{"id":"two","prompt":"Second"}\n',
+                encoding="utf-8",
+            )
+            args = SimpleNamespace(prompt=None, prompt_file=str(path), limit=1)
+
+            rows = cli._decode_validation_prompts(args)
+
+        self.assertEqual(rows, [{"id": "one", "prompt": "First"}])
+
+    def test_decode_output_validation_reports_first_token_difference(self):
+        class Tokenizer:
+            def apply_chat_template(self, messages, **kwargs):
+                return messages[0]["content"]
+
+            def encode(self, text):
+                return [ord(character) for character in text]
+
+        accelerator = SimpleNamespace(
+            model=object(),
+            tokenizer=Tokenizer(),
+            generate=lambda prompt, max_tokens: (
+                "abX",
+                SimpleNamespace(acceptance_ratio=0.75),
+            ),
+            close=Mock(),
+        )
+        mlx = types.ModuleType("mlx")
+        mlx.__path__ = []
+        mlx_core = types.ModuleType("mlx.core")
+        mlx_core.clear_cache = Mock()
+        mlx_lm = types.ModuleType("mlx_lm")
+        mlx_lm.generate = lambda *args, **kwargs: "abc"
+        sample_utils = types.ModuleType("mlx_lm.sample_utils")
+        sample_utils.make_sampler = lambda **kwargs: object()
+
+        with (
+            patch.dict(
+                "sys.modules",
+                {
+                    "mlx": mlx,
+                    "mlx.core": mlx_core,
+                    "mlx_lm": mlx_lm,
+                    "mlx_lm.sample_utils": sample_utils,
+                },
+            ),
+            patch(
+                "machboost.adapters.dflash.DFlashAccelerator.from_pretrained",
+                return_value=accelerator,
+            ),
+        ):
+            result = cli.validate_decode_outputs(
+                "acme/target",
+                [{"id": "fixture", "prompt": "hello"}],
+                draft_model=None,
+                draft_quant=None,
+                verify_mode="adaptive",
+                max_tokens=3,
+            )
+
+        self.assertEqual(result["exact_matches"], 0)
+        self.assertEqual(result["exact_match_rate"], 0.0)
+        self.assertEqual(result["results"][0]["common_prefix_tokens"], 2)
+        self.assertEqual(
+            result["results"][0]["first_difference"],
+            {"index": 2, "native_token": ord("c"), "accelerated_token": ord("X")},
+        )
+        accelerator.close.assert_called_once()
+
+    def test_decode_benchmark_fails_when_output_validation_diverges(self):
+        args = cli.build_parser().parse_args(
+            [
+                "bench-decode",
+                "qwen3.5:4b",
+                "--prompt",
+                "hello",
+                "--validation-tokens",
+                "16",
+            ]
+        )
+        package = types.ModuleType("dflash_mlx")
+        package.__path__ = []
+        benchmark_module = types.ModuleType("dflash_mlx.benchmark")
+        benchmark_module.main = Mock(return_value=None)
+        model_module = types.ModuleType("dflash_mlx.model")
+        model_module.DFlashDraftModelArgs = type("DraftArgs", (), {})
+        validation = {"rows": 1, "exact_matches": 0}
+
+        with (
+            patch.dict(
+                "sys.modules",
+                {
+                    "dflash_mlx": package,
+                    "dflash_mlx.benchmark": benchmark_module,
+                    "dflash_mlx.model": model_module,
+                },
+            ),
+            patch("machboost.cli.validate_decode_outputs", return_value=validation),
+            patch("machboost.adapters.dflash._load_runtime_bundle_compat"),
+        ):
+            code = cli.run_decode_bench(args, error_stream=io.StringIO())
+
+        self.assertEqual(code, 1)
 
     def test_render_chat_prompt_includes_system_and_history(self):
         prompt = cli.render_chat_prompt(

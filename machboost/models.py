@@ -30,6 +30,15 @@ class ModelResolution:
     alias: Optional[str] = None
 
 
+@dataclass(frozen=True)
+class DFlashAlias:
+    name: str
+    target: str
+    draft: str
+    download_size_gb: float
+    minimum_memory_gb: float
+
+
 MODEL_ALIASES = {
     alias.name: alias
     for alias in (
@@ -179,6 +188,33 @@ RECOMMENDED_MODELS = {
     "qwen3-vl:4b",
 }
 
+DFLASH_TARGETS = {
+    "qwen3:4b": "Qwen/Qwen3-4B",
+    "qwen3:8b": "Qwen/Qwen3-8B",
+    "qwen3.5:4b": "mlx-community/Qwen3.5-4B-MLX-bf16",
+    "qwen3.5:9b": "mlx-community/Qwen3.5-9B-MLX-bf16",
+}
+
+DFLASH_ALIASES = {
+    alias.name: alias
+    for alias in (
+        DFlashAlias(
+            "qwen3.5:4b-dflash",
+            "mlx-community/Qwen3.5-4B-MLX-bf16",
+            "z-lab/Qwen3.5-4B-DFlash",
+            10.3,
+            16.0,
+        ),
+        DFlashAlias(
+            "qwen3.5:9b-dflash",
+            "mlx-community/Qwen3.5-9B-MLX-bf16",
+            "z-lab/Qwen3.5-9B-DFlash",
+            21.1,
+            32.0,
+        ),
+    )
+}
+
 
 def native_mlx_available() -> bool:
     return (
@@ -199,12 +235,37 @@ def resolve_model(model: str, backend: str = "auto") -> ModelResolution:
         raise ValueError("model name cannot be empty")
 
     path = Path(requested).expanduser()
+    dflash_alias = DFLASH_ALIASES.get(requested.lower())
+    if dflash_alias is not None:
+        if backend not in {"auto", "dflash"}:
+            raise ValueError(
+                f"model alias {requested!r} requires the DFlash backend, not {backend!r}"
+            )
+        return ModelResolution(
+            requested=requested,
+            model=dflash_alias.target,
+            backend="dflash",
+            alias=dflash_alias.name,
+        )
     alias = MODEL_ALIASES.get(requested.lower())
     if alias is None:
         selected = select_backend_for_repo(requested, backend)
         return ModelResolution(requested=requested, model=str(path) if path.exists() else requested, backend=selected)
 
     selected = backend
+    if selected == "dflash":
+        dflash_target = DFLASH_TARGETS.get(alias.name)
+        if dflash_target is None:
+            raise ValueError(
+                f"model alias {requested!r} is not supported by the DFlash backend; "
+                f"supported aliases: {', '.join(sorted(DFLASH_TARGETS))}"
+            )
+        return ModelResolution(
+            requested=requested,
+            model=dflash_target,
+            backend="dflash",
+            alias=alias.name,
+        )
     if alias.capability == "vision":
         if selected == "auto":
             selected = "mlx-vlm" if native_mlx_vlm_available() and alias.mlx else "hf-vlm"
@@ -243,7 +304,19 @@ def looks_like_vision_model(model: str) -> bool:
 
 
 def alias_rows() -> list[dict]:
-    return [MODEL_ALIASES[name].to_dict() for name in sorted(MODEL_ALIASES)]
+    rows = [MODEL_ALIASES[name].to_dict() for name in sorted(MODEL_ALIASES)]
+    rows.extend(
+        {
+            "name": alias.name,
+            "mlx": alias.target,
+            "hf": None,
+            "capability": "chat",
+            "backend": "dflash",
+            "draft": alias.draft,
+        }
+        for alias in DFLASH_ALIASES.values()
+    )
+    return sorted(rows, key=lambda row: str(row["name"]))
 
 
 def catalog_rows(
@@ -255,6 +328,11 @@ def catalog_rows(
     catalog_repositories = {
         alias.mlx for alias in MODEL_ALIASES.values() if alias.mlx is not None
     }
+    catalog_repositories.update(
+        repository
+        for alias in DFLASH_ALIASES.values()
+        for repository in (alias.target, alias.draft)
+    )
     for name in sorted(MODEL_ALIASES):
         alias = MODEL_ALIASES[name]
         backend = "mlx-vlm" if alias.capability == "vision" else "mlx"
@@ -281,6 +359,40 @@ def catalog_rows(
                 "disk_size_gb": _directory_size_gb(cached_path),
                 "minimum_memory_gb": minimum_memory_gb,
                 "support": "ready" if backend_available(backend) else "missing_runtime",
+                "support_reason": None,
+            }
+        )
+    for name in sorted(DFLASH_ALIASES):
+        alias = DFLASH_ALIASES[name]
+        validation_status = (
+            "passed_bounded_suite"
+            if name == "qwen3.5:4b-dflash"
+            else "divergence_observed"
+        )
+        target_path = cached_repo_path(alias.target)
+        draft_path = cached_repo_path(alias.draft)
+        cached = target_path is not None and draft_path is not None
+        rows.append(
+            {
+                "name": name,
+                "display_name": _display_name(name),
+                "repository": alias.target,
+                "draft_repository": alias.draft,
+                "backend": "dflash",
+                "capabilities": ["chat", "completion"],
+                "cached": cached,
+                "cached_path": str(target_path) if cached else None,
+                "recommended": name == "qwen3.5:4b-dflash",
+                "tested": True,
+                "experimental": name != "qwen3.5:4b-dflash",
+                "validation_status": validation_status,
+                "download_size_gb": alias.download_size_gb,
+                "disk_size_gb": sum(
+                    _directory_size_gb(path) or 0.0
+                    for path in (target_path, draft_path)
+                ),
+                "minimum_memory_gb": alias.minimum_memory_gb,
+                "support": "ready" if backend_available("dflash") else "missing_runtime",
                 "support_reason": None,
             }
         )
@@ -537,7 +649,11 @@ def preflight_model(
         if not model_type:
             raise ValueError("config.json does not define model_type")
         result["model_type"] = model_type
-        _validate_mlx_architecture(config, resolution.backend)
+        _validate_mlx_architecture(
+            config,
+            resolution.backend,
+            model_ref=resolution.model,
+        )
     except (ImportError, OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
         result["reason"] = str(exc)
         return result
@@ -552,6 +668,8 @@ def backend_available(backend: str) -> bool:
         return native_mlx_available()
     if backend == "mlx-vlm":
         return native_mlx_vlm_available()
+    if backend == "dflash":
+        return native_mlx_available() and importlib.util.find_spec("dflash_mlx") is not None
     if backend == "hf":
         return importlib.util.find_spec("torch") is not None and importlib.util.find_spec("transformers") is not None
     return False
@@ -575,15 +693,28 @@ def cached_repo_path(model: Optional[str]) -> Optional[Path]:
     return snapshot_path.resolve()
 
 
-def _validate_mlx_architecture(config: dict[str, Any], backend: str) -> None:
+def _validate_mlx_architecture(
+    config: dict[str, Any],
+    backend: str,
+    *,
+    model_ref: Optional[str] = None,
+) -> None:
     model_type = str(config["model_type"]).lower()
-    if backend == "mlx":
+    if backend in {"mlx", "dflash"}:
         from mlx_lm.utils import MODEL_REMAPPING
 
         mapped = MODEL_REMAPPING.get(model_type, model_type)
         module = importlib.import_module(f"mlx_lm.models.{mapped}")
         if not hasattr(module, "Model") or not hasattr(module, "ModelArgs"):
             raise ValueError(f"Model type {mapped} is missing MLX model classes")
+        if backend == "dflash":
+            from dflash_mlx.runtime.registry import resolve_model_support_spec
+
+            model_name = str(model_ref or config.get("name_or_path") or "")
+            if resolve_model_support_spec(model_name) is None:
+                raise ValueError(
+                    "model is not in the installed DFlash target registry; pass a supported Qwen or Gemma target"
+                )
         return
     if backend == "mlx-vlm":
         from mlx_vlm.utils import get_model_and_args
@@ -601,7 +732,21 @@ def _display_name(alias: str) -> str:
 
 def model_targets(model: str) -> set[str]:
     requested = model.strip()
+    dflash_alias = DFLASH_ALIASES.get(requested.lower())
+    if dflash_alias is not None:
+        return {dflash_alias.target}
     alias = MODEL_ALIASES.get(requested.lower())
     if alias is None:
         return {str(Path(requested).expanduser()) if Path(requested).expanduser().exists() else requested}
     return {target for target in (alias.mlx, alias.hf) if target}
+
+
+def model_repositories(model: str, backend: str = "auto") -> tuple[str, ...]:
+    """Return every repository required to load a model selection."""
+    requested = model.strip()
+    dflash_alias = DFLASH_ALIASES.get(requested.lower())
+    if dflash_alias is not None:
+        if backend not in {"auto", "dflash"}:
+            resolve_model(requested, backend)
+        return (dflash_alias.target, dflash_alias.draft)
+    return (resolve_model(requested, backend).model,)

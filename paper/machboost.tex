@@ -26,7 +26,7 @@
 \maketitle
 
 \begin{abstract}
-MachBoost is a local inference package for conditional acceleration. Its text paths either draft candidate tokens from explicit context or reuse model state for an unchanged repository prefix. Visual requests can reuse state derived from unchanged image bytes or, experimentally, shorten a new image's visual sequence after Qwen3-VL completes early cross-modal fusion. A team gateway adds revision-aware private and shared memory, deterministic exact-request reuse, and budgeted external-provider fallback; these serving features are kept separate in the evaluation. Controlled repository-prefix experiments on an Apple M5 Pro report 2.97$\times$ and 3.23$\times$ median speedups across five changing questions on Qwen2.5 3B and 7B. A later audit uses an 8,754-file private production repository, a 7B model, and independent standalone threads. Reusing 75--77\% of prompt tokens reduces median prefill by 3.75--3.84$\times$ and end-to-end time by 1.31--1.43$\times$ across six paired new-question runs. Decode time is unchanged, and all six pairs are byte-identical under greedy generation. Exact deterministic replay reaches 28.56$\times$ in a separate three-pair test; semantic memory improves one narrow rubric from 4/8 to 5/8 but adds 0.239 seconds. Separate context-drafting experiments on an Apple M1 Max are less consistent: a favorable 3B Qwen code fixture reaches 1.96$\times$, while a broader Llama 3.2 3B audit records a 1.008$\times$ aggregate median and exact token equality in 20 of 21 pairs. Across six Qwen vision models, repeated-image paired medians range from 5.14$\times$ to 17.44$\times$. A ten-image Qwen3-VL 8B TextVQA pilot with all caches disabled reaches a 1.67$\times$ aggregate speedup after retaining a median 35.12\% of visual hidden states. Native and compressed paths each answer eight questions correctly, although normalized outputs agree on seven. The measurements support distinct, workload-dependent contracts rather than universal faster inference.
+MachBoost is a local inference package for conditional acceleration. Its text paths draft from explicit context, reuse model state for an unchanged repository prefix, or use a target-verified block-diffusion drafter for selected fresh prompts. Visual requests can reuse state derived from unchanged image bytes or, experimentally, shorten a new image's visual sequence after Qwen3-VL completes early cross-modal fusion. A team gateway adds revision-aware private and shared memory, deterministic exact-request reuse, and budgeted external-provider fallback; these serving features are kept separate in the evaluation. Controlled repository-prefix experiments on an Apple M5 Pro report 2.97$\times$ and 3.23$\times$ median speedups across five changing questions on Qwen2.5 3B and 7B. A later audit uses an 8,754-file private production repository, a 7B model, and independent standalone threads. Reusing 75--77\% of prompt tokens reduces median prefill by 3.75--3.84$\times$ and end-to-end time by 1.31--1.43$\times$ across six paired new-question runs. Decode time is unchanged, and all six pairs are byte-identical under greedy generation. On fresh 512-token outputs, Qwen3.5 4B BF16 block-diffusion decoding raises median throughput from 29.36 to 48.52 tokens/s across three prompt families, a 1.65$\times$ median; prompt medians range from 1.31$\times$ to 2.43$\times$, and all three 128-token validation prefixes match native greedy output. The same-weight 9B BF16 row reaches 1.61$\times$ but matches only two of three validation prefixes. A practical 9B 4-bit control reaches 1.32$\times$ and also diverges. Separate context-drafting experiments on an Apple M1 Max are less consistent: a favorable 3B Qwen code fixture reaches 1.96$\times$, while a broader Llama 3.2 3B audit records a 1.008$\times$ aggregate median and exact token equality in 20 of 21 pairs. Across six Qwen vision models, repeated-image paired medians range from 5.14$\times$ to 17.44$\times$. A ten-image Qwen3-VL 8B TextVQA pilot with all caches disabled reaches a 1.67$\times$ aggregate speedup after retaining a median 35.12\% of visual hidden states. Native and compressed paths each answer eight questions correctly, although normalized outputs agree on seven. The measurements support distinct, workload-dependent contracts rather than universal faster inference.
 \end{abstract}
 
 \section{Introduction}
@@ -68,7 +68,8 @@ This paper contributes the following:
   \item paired bootstrap intervals and atomic checkpoints for multi-dataset first-view ablations;
   \item an FFmpeg-based temporal adapter that selects chronological scene-change frames before the existing multi-image VLM path;
   \item a paired unique-image TextVQA pilot against the same model's full-token path, with both cache systems disabled and raw outputs retained;
-  \item negative experiments with a small draft model, an MTP draft path, DFlash, an Apple Neural Engine draft, and lossless weight compression.
+  \item a resident MLX integration of DFlash block-diffusion drafting, adaptive verification, paired same-target benchmarks, and a strict greedy-output validation gate;
+  \item negative experiments with a small autoregressive draft model, an MTP draft path, an Apple Neural Engine draft, and lossless weight compression.
 \end{itemize}
 
 \section{Background and Related Work}
@@ -77,6 +78,18 @@ Speculative decoding was introduced as a way to accelerate autoregressive transf
 MachBoost is closest to methods that exploit references or prompt overlap rather than an auxiliary draft model. LLMA observes that outputs in retrieval and reference-grounded scenarios often share spans with the input reference, then verifies copied spans to preserve greedy output \cite{yang2023llma}. Prompt Lookup Decoding replaces the draft model with n-gram matching over the prompt \cite{saxena2023promptlookup}; PLD+ extends that idea by using language-model artifacts such as attention or hidden states to rank candidate spans \cite{somasundaram2024pldplus}. Hugging Face Transformers exposes prompt lookup through \texttt{prompt\_lookup\_num\_tokens} in assisted generation \cite{huggingface2026assisted}. MachBoost differs mainly in packaging and operating assumptions: it treats local files and retrieved snippets as ordinary inputs to the accelerator, keeps benchmark data machine-readable, and makes low-overlap prompts a measured fallback case rather than an error.
 
 Results above 2$\times$ elsewhere generally require more than process tuning. ReDrafter trains a recurrent draft conditioned on target hidden state and reports up to 2.3$\times$ on Apple Silicon \cite{zhang2024redrafter}. QuantSpec changes the draft's weight and KV-cache representation and reports speedups up to about 2.5$\times$ in long-context inference \cite{tiwari2025quantspec}. Mirror-SD maps complementary draft and target work across GPU and NPU devices and reports 2.8--5.8$\times$ on server-scale models \cite{bhendawade2025mirror}. At the runtime layer, BaseRT's native Metal kernels report up to 1.35$\times$ over MLX decode rather than a universal 2$\times$ \cite{rathnayaka2026basert}. These are different operating points: trained model changes, heterogeneous execution, or low-level kernels. MachBoost's current context path needs none of them, but only applies when the requested continuation overlaps local text.
+
+DFlash replaces serial autoregressive drafting with a block-diffusion model and
+reports up to 7.1$\times$ speedup when a long proposed block is accepted
+\cite{chen2026dflash}. Its speed still depends on target verification cost,
+draft cost, and acceptance. A recent consumer-hardware study reaches at most
+1.61$\times$ and finds that three of five speculative configurations regress
+\cite{chordiya2026lossless}. AngelSpec addresses workload heterogeneity by
+training separate conversational MTP and code/mathematics block-diffusion
+drafters, then allocating verification depth with a profiled cost model
+\cite{liu2026angelspec}. MachBoost does not train a new drafter. It integrates a
+published DFlash pair into a local server and measures where adaptive block
+selection survives Apple Silicon's runtime costs.
 
 The same distinction appears outside text generation. Diffusion workloads can reuse intermediate transformations across denoising steps; EasyCache reports 2.1--3.3$\times$ for several video models \cite{zhou2025easycache}. That mechanism does not transfer directly to autoregressive text decoding. It does, however, support a broader product design in which one package selects a backend-specific accelerator rather than pretending that a single algorithm fits text, image, audio, and video models.
 
@@ -137,6 +150,28 @@ Under deterministic target arithmetic, the intended invariant is:
   \mathrm{Boost}(M,x,C,T) = \mathrm{Greedy}(M,x,T)
 \]
 for a maximum generation length $T$. Batched and scalar floating-point paths can still choose different argmax tokens at a near tie, so this is tested rather than assumed. Every benchmark row records an \texttt{output\_match} flag from the native and accelerated token IDs.
+
+\subsection{Block-Diffusion Drafting for Fresh Prompts}
+The context drafter cannot help when the continuation is absent from local text.
+For selected Qwen targets, MachBoost therefore exposes a separate DFlash backend.
+A lightweight diffusion model proposes up to 16 future tokens in parallel. The
+target scores the proposal and commits only the accepted prefix plus the target
+residual at the first rejection. No token chosen solely by the draft is returned.
+
+The default verifier adapts its proposed block length from recent acceptance and
+measured cycle cost. A fixed 16-token verifier has higher upside when acceptance
+stays high, but it can spend more time verifying rejected positions than serial
+decoding would have spent generating the accepted prefix. The resident server
+therefore treats the accelerated pair as its own model alias rather than silently
+replacing a native alias. Both target and draft weights must be present before the
+catalog marks the alias ready.
+
+Target approval is not by itself evidence that two runtime paths produce the same
+token sequence. Batched verification and scalar native decoding can reach a
+near-tied argmax through different floating-point reductions. MachBoost reruns a
+bounded greedy continuation through both paths, records token hashes and the first
+different position, and makes the benchmark exit nonzero on divergence. This gate
+tests runtime equivalence; it does not estimate semantic answer quality.
 
 \subsection{Keeping the Cache Path Stable}
 Verification writes candidate entries to the MLX prompt cache. Accepted entries remain useful; rejected entries must not survive. MachBoost trims the rejected suffix in place when the cache type permits it. If safe trimming is unavailable, the service reconstructs the accepted prefix. Prompt initialization follows \texttt{mlx-lm}'s split prefill trajectory, processing the final prompt token separately. Once no further context candidate exists, the service hands the live verifier cache to \texttt{mlx\_lm.generate\_step}; the remaining response therefore uses the runtime's optimized asynchronous decoder instead of a Python-level \texttt{argmax}/synchronize loop.
@@ -252,6 +287,7 @@ MachBoost is implemented as a small Python package with no required runtime depe
   \item \texttt{machboost[mlx]} for MLX and \texttt{mlx-lm},
   \item \texttt{machboost[hf]} for PyTorch and Transformers,
   \item \texttt{machboost[vision]} for MLX-VLM,
+  \item \texttt{machboost[dflash]} for target-verified block-diffusion decoding,
   \item \texttt{machboost[video]} for Pillow-based frame comparison, with FFmpeg supplied by the host,
   \item Ollama HTTP support for benchmarking and capability detection.
 \end{itemize}
@@ -259,6 +295,12 @@ MachBoost is implemented as a small Python package with no required runtime depe
 The core package defines a \texttt{StepService} protocol with \texttt{next\_token(prefix)} and an optional \texttt{verify(prefix, candidate)} hook. A service with only \texttt{next\_token} can use the wrapper but cannot skip target work. A verifier can accept several draft tokens per target call. The high-level \texttt{Accelerator} loads MLX or Hugging Face models, reads strings, files, or directories as context, and exposes \texttt{benchmark}, \texttt{calibrate}, and \texttt{generate}.
 
 Version 0.2.0 added a resident HTTP process; version 0.5.1 gives idle models a five-minute lifetime by default and retains them indefinitely only when requested. The process owns loaded accelerators, serializes requests per model, supports explicit unloading, and performs a short text-model compile warm-up before the first prompt. The CLI can start the server automatically, preload an alias such as \texttt{qwen2.5:3b}, and issue chat or raw completion requests without reloading weights. The server exposes \texttt{/api/chat}, \texttt{/api/generate}, model lifecycle endpoints, and OpenAI-compatible chat and completion endpoints. Native MLX streaming forwards \texttt{mlx-lm}'s already-detokenized text segments; verified multi-token spans use a stateful streaming detokenizer. This avoids the earlier cost of decoding the entire token prefix once per emitted token.
+
+Accelerated aliases such as \texttt{qwen3.5:4b-dflash} use the same standard
+model field as other endpoints. Pulling one downloads its BF16 target and paired
+draft; the server keeps both resident behind the existing bounded queue. This is
+an explicit model selection. MachBoost does not silently substitute it for the
+smaller 4-bit \texttt{qwen3.5:4b} alias.
 
 The current server also owns the repository index and exposes workspace
 registration, reindex, search, listing, and deletion routes. Chat and generation
@@ -294,6 +336,15 @@ and 48 GB unified memory, running macOS 26.6. The environment uses Python
 \path{mlx-community/Qwen2.5-3B-Instruct-4bit} and
 \path{mlx-community/Qwen2.5-7B-Instruct-4bit}. The JSON artifacts store this
 machine and package provenance.
+
+Fresh-decode measurements use the same M5 Pro and software versions plus the
+shippable \texttt{dflash-mlx} 0.1.8 wheel. The same-weight targets are
+\path{mlx-community/Qwen3.5-4B-MLX-bf16} and
+\path{mlx-community/Qwen3.5-9B-MLX-bf16}; a Qwen3.5 9B 4-bit conversion supplies
+a practical quantized control. The draft weights are the corresponding
+\path{z-lab} DFlash repositories. Model load is excluded. Throughput tests force
+512 generated tokens to expose steady-state decode; a separate 128-token greedy
+gate compares native and accelerated token sequences.
 
 The benchmark requests 64 greedy tokens for three fixture families: literal Python continuation, retrieval-grounded answering, and open-ended writing. Each family is repeated five times with a fresh nonce under both default and re-entry profiles. Baseline and accelerated order alternate. Wall time includes prompt processing. The baseline calls \texttt{mlx-lm}'s native streaming generator; it is not MachBoost's \texttt{next\_token} loop. The artifacts \path{results/mlx_native_default_qwen25_3b_20260713.json} and \path{results/mlx_native_reentry_qwen25_3b_20260713.json} contain prompts, token previews, raw times, package versions, hardware data, and each run's order.
 
@@ -408,6 +459,48 @@ partitioning and metrics accumulation, not latency, throughput, answer quality,
 or likely production hit rate. The reproducible implementation is
 \path{scripts/benchmark_team_memory.py}; its assertions run in the package test
 suite.
+
+\subsection{Fresh-Prompt Block-Diffusion Results}
+The fresh-prompt suite contains one mathematical derivation, one bounded worker
+queue implementation, and one incident-response plan. Each target is loaded once
+per prompt family. Native and DFlash paths use the same target weights, chat
+template, greedy decoding, and 512-token cap. Three measured repetitions follow
+warm-up; medians below are taken over prompt-family medians.
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{llrrrr}
+\toprule
+Target & Verifier & Native & DFlash & Speedup & Acceptance \\
+\midrule
+Qwen3.5 4B BF16 & adaptive & 29.36 & 48.52 & 1.65$\times$ & 71.5\% \\
+Qwen3.5 9B BF16 & adaptive & 16.55 & 26.44 & 1.61$\times$ & 68.9\% \\
+Qwen3.5 9B 4-bit & adaptive & 54.63 & 68.32 & 1.32$\times$ & 67.8\% \\
+Qwen3.5 9B 4-bit & fixed 16 & 51.43 & 44.14 & 0.84$\times$ & 72.9\% \\
+\bottomrule
+\end{tabular}
+\caption{Fresh-prompt decode throughput in tokens/s on the M5 Pro. The BF16
+row isolates the decoding method. The 4-bit rows test a practical target and
+show why block length must adapt.}
+\label{tab:dflash}
+\end{table}
+
+The 4B per-prompt medians are 2.43$\times$ for reasoning, 1.31$\times$ for
+code, and 1.65$\times$ for the operations plan. Its three accelerated
+continuations match native greedy output for all 128 validation tokens. The 9B
+BF16 medians are 2.42$\times$, 1.58$\times$, and 1.61$\times$; its code
+validation diverges at token 65. The 9B 4-bit adaptive medians are
+1.73$\times$, 1.22$\times$, and 1.32$\times$; fixed verification regresses
+code and operations to 0.84$\times$ and 0.76$\times$. A separate two-sentence
+4-bit prompt diverges at token 21. These mismatches are retained as negative
+correctness evidence, so the 9B path is not promoted as equivalent.
+
+The 4B BF16 row does not imply that it outruns every quantized implementation in
+absolute tokens/s. It answers a same-weight question: how much target decode work
+the block drafter removes. The 9B 4-bit row answers a deployment question and
+shows a smaller gain. Neither table entry includes model loading, and a short
+answer can remain dominated by prefill and first-token latency.
 
 \subsection{Native-Baseline Results}
 \begin{table}[H]
@@ -593,14 +686,13 @@ We tested several ways to extend acceleration beyond literal context overlap. Ta
 \toprule
 Path & Local result & Main constraint \\
 \midrule
-DFlash, Qwen3.5 9B & 0.66$\times$ at 128; 0.96$\times$ at 512 & M1 lacks the newer accelerator path; draft emulation costs more than accepted work saves. \\
 Qwen2.5 0.5B draft for 3B target & 0.38--0.78$\times$ & Acceptance of roughly 36--58\% did not repay serial draft generation. \\
 Ollama embedded MTP & 12.7--24.3 tok/s versus roughly 40 tok/s baseline & The tested draft depths added overhead on this model and machine. \\
 ANE 0.5B draft & 51.1 decode tok/s & A one-token ANE draft cannot feed a 3B MLX target near 102 tok/s economically; multi-token heads are needed. \\
 Lossless Q4 compression & 1.08--1.15$\times$ ideal entropy bound & The quantized weights are already close to high entropy; decoder cost would reduce the gain further. \\
 \bottomrule
 \end{tabular}
-\caption{Exploratory paths that did not beat native generation locally. Each result is specific to the tested model, implementation, and M1 Max.}
+\caption{Exploratory paths that did not beat native generation locally. Each result is specific to the tested model, implementation, and M1 Max. DFlash moved to Table~\ref{tab:dflash} after testing its native M5 runtime.}
 \label{tab:negative}
 \end{table}
 
@@ -608,6 +700,17 @@ The failures share a simple accounting problem. A draft only helps when the time
 
 \section{Limitations}
 The text-drafting evidence begins with 30 controlled Qwen rows and adds a 21-pair Llama 3.2 audit on the same machine. The favorable Qwen code fixture substantially contains the desired continuation; it demonstrates the mechanism but does not estimate real-world eligibility. In the broader Llama suite, most fixtures accept no tokens, the aggregate median is 1.008$\times$, and one cache-enabled JSON pair is not token-identical. The strict verifier restores equality in its smaller control but is about 4.8$\times$ slower than native generation.
+
+The DFlash matrix has only three prompt families, one machine, two target sizes,
+one draft family, and greedy decoding. The 512-token cap emphasizes decode and
+overstates the benefit for short answers. The 4B validation covers 384 generated
+tokens in total, not a task-quality benchmark. The 9B 4-bit divergence shows that
+target verification does not eliminate implementation-level non-invariance
+between batched and scalar MLX paths. This is consistent with an open
+\texttt{mlx-lm} report of greedy speculative divergence, but the local evidence
+does not identify the responsible kernel or prove semantic equivalence. Sampling,
+tool calls, long context, concurrent batching, energy, and model families outside
+the published DFlash registry remain untested.
 
 The repository-prefix evidence now covers one 183-file controlled snapshot and
 one 8,754-file private production snapshot, six new-question pairs in the
@@ -657,12 +760,21 @@ revision, model size, and concurrent clients. Block-level KV reuse or continuous
 batching could extend the gain beyond a single exact prefix, but neither is
 implemented here.
 
-The second track accepts model-specific preparation. A multi-token drafter distilled from the target could run on the Apple Neural Engine while target verification runs on the GPU, following the heterogeneous lesson of Mirror-SD. Quantized draft weights and KV state could reduce memory traffic in long contexts. Both ideas exceed the scope of a wrapper and should be treated as separate research prototypes with quality and compatibility tests.
+The second track accepts model-specific preparation. The immediate decode study
+should sweep a public workload mixture, estimate expected utility from online
+acceptance and cycle cost, and select native, MTP, or block-diffusion decoding per
+request. AngelSpec reports that conversational MTP and code/mathematics diffusion
+drafters occupy different operating regions; the Apple Silicon question is whether
+that routing survives unified-memory contention. A multi-token drafter could also
+run on the Apple Neural Engine while target verification runs on the GPU, following
+the heterogeneous lesson of Mirror-SD. Quantized draft weights and windowed draft
+KV state may reduce memory traffic in long contexts. Each path needs an output gate,
+a native no-regression fallback, and concurrent-serving measurements.
 
 The immediate visual work is external validity. After resolving or isolating the observed native high-resolution MLX failure, the checkpointed harness should run ChartQA, DocVQA, MMMU, TextVQA, spatial reasoning, and hallucination-sensitive datasets independently. It should add non-Qwen VLMs, sweep layer, retention ratio, image size, and answer length, and report confidence intervals, memory, energy, and task metrics. The implemented random control is the first comparison; attention ranking, AdaptInfer, and ZOO-Prune remain necessary to determine whether query-weighted merging contributes beyond token count alone. Automatic policies should remain disabled unless a model/task calibration set clears both latency and quality gates. Video evaluation should compare uniform sampling, RGB change selection, query-aware selection, PruneVid, and EchoPrune on temporal question-answering benchmarks.
 
 \section{Conclusion}
-MachBoost now has four measured conditional paths, one unvalidated temporal adapter, and a namespaced team-memory serving path. In the private-repository audit, six independent-thread new-question pairs reuse 75--77\% of prompt tokens. Prefill is 3.75--3.84$\times$ faster, while unchanged decode limits end-to-end speedup to 1.31--1.43$\times$. All paired outputs are byte-identical under greedy generation, but small rubric scores show that equality is not the same as answer quality. Exact replay reaches 28.56$\times$ only for identical deterministic requests. Semantic memory retrieves prior team context but costs 414 extra prompt tokens and 0.239 seconds in its three-run probe. Token drafting remains less settled: a favorable Qwen code fixture reaches 1.96$\times$, while a broader Llama 3.2 3B suite is exact in 20 of 21 pairs and has a 1.008$\times$ aggregate median. Across six visual models, short repeated questions over one unchanged image produce model-level paired medians from 5.14$\times$ to 17.44$\times$. For a new image, post-fusion Qwen3-VL compression reaches 1.67$\times$ aggregate speedup on a ten-row TextVQA pilot while both modes score 8/10; this path is approximate and normalized outputs agree on 70\%. The evidence supports a local serving layer that selects among narrow mechanisms. It does not support a universal faster-inference claim.
+MachBoost now has five measured conditional paths, one unvalidated temporal adapter, and a namespaced team-memory serving path. In the private-repository audit, six independent-thread new-question pairs reuse 75--77\% of prompt tokens. Prefill is 3.75--3.84$\times$ faster, while unchanged decode limits end-to-end speedup to 1.31--1.43$\times$. All paired outputs are byte-identical under greedy generation, but small rubric scores show that equality is not the same as answer quality. Exact replay reaches 28.56$\times$ only for identical deterministic requests. Semantic memory retrieves prior team context but costs 414 extra prompt tokens and 0.239 seconds in its three-run probe. For fresh output, adaptive DFlash raises Qwen3.5 4B BF16 median decode throughput by 1.65$\times$, with prompt-family medians from 1.31$\times$ to 2.43$\times$ and three of three 128-token validation prefixes exact. The same-weight 9B BF16 control reaches 1.61$\times$ but matches only two of three prefixes; a practical 9B 4-bit control reaches 1.32$\times$ and also diverges. Context drafting remains less settled: a favorable Qwen code fixture reaches 1.96$\times$, while a broader Llama 3.2 3B suite is exact in 20 of 21 pairs and has a 1.008$\times$ aggregate median. Across six visual models, short repeated questions over one unchanged image produce model-level paired medians from 5.14$\times$ to 17.44$\times$. For a new image, post-fusion Qwen3-VL compression reaches 1.67$\times$ aggregate speedup on a ten-row TextVQA pilot while both modes score 8/10; this path is approximate and normalized outputs agree on 70\%. The evidence supports a local serving layer that selects among narrow mechanisms and refuses failed equivalence gates. It does not support a universal faster-inference claim.
 
 \bibliographystyle{plain}
 \small

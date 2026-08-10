@@ -4,9 +4,9 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Website](https://img.shields.io/badge/Website-MachBoost-22c55e)](https://vistritpandey.github.io/machboost/)
 
-MachBoost is an alpha-stage, local-first inference server, team gateway, native macOS app, and Python package for MLX, MLX-VLM, and Hugging Face models. It offers an Ollama-like model workflow, keeps models resident between requests, and streams text and visual chat. Team Mode adds scoped employee keys, fair admission, revision-aware private/shared memory, exact-request reuse, local traces, evaluations, and budgeted external-provider fallback. Optional acceleration paths target reusable local text, repeated image inputs, and selected Qwen3-VL visual-prefill workloads.
+MachBoost is an alpha-stage, local-first inference server, team gateway, native macOS app, and Python package for MLX, MLX-VLM, and Hugging Face models. It offers an Ollama-like model workflow, keeps models resident between requests, and streams text and visual chat. Team Mode adds scoped employee keys, fair admission, revision-aware private/shared memory, exact-request reuse, local traces, evaluations, and budgeted external-provider fallback. Optional acceleration paths target fresh text decoding on selected Qwen models, reusable local text, repeated image inputs, and selected Qwen3-VL visual-prefill workloads.
 
-The paths have different contracts. Plain chat delegates generation to the selected backend and mainly provides residency and API compatibility. Text drafting proposes tokens from caller-supplied context and verifies them with the target model, but the cache-enabled MLX path remains experimental because a recent Llama 3.2 audit found one token-sequence mismatch in 21 pairs. Repeated-image acceleration reuses process-local visual work for unchanged image bytes. First-view Qwen3-VL compression is explicitly approximate and can change answers.
+The paths have different contracts. Plain chat delegates generation to the selected backend and mainly provides residency and API compatibility. The optional DFlash backend proposes blocks for fresh prompts and emits only tokens approved by the target model. Context drafting instead proposes tokens from caller-supplied text; its cache-enabled MLX path remains experimental because a recent Llama 3.2 audit found one token-sequence mismatch in 21 pairs. Repeated-image acceleration reuses process-local visual work for unchanged image bytes. First-view Qwen3-VL compression is explicitly approximate and can change answers.
 
 MachBoost does not upload telemetry, mutate global runtime settings, or change model weights. It does not claim universal speedups, file-identical equivalence across model conversions, or quality preservation for approximate visual compression.
 
@@ -14,7 +14,9 @@ MachBoost does not upload telemetry, mutate global runtime settings, or change m
 
 MachBoost is not a universal `2x-8x` switch. A speedup measured on a context-backed completion or repeated image must not be applied to unrelated prompts, new images, different models, or different machines.
 
-Text drafting helps only when the model's next tokens are recoverable from caller-supplied local context and the target model accepts those draft tokens. Repository workspaces use a separate mechanism: a stable file/symbol map and query-specific code retrieval stay within a bounded prompt, while MLX can reuse the exact stable prefix on later workspace requests. The question itself can be new, but the first request still pays normal indexing and prefill costs. A novel message outside a workspace normally falls back to native generation, where expected algorithmic speedup is about `1.0x` and the server layer can add latency.
+Context drafting helps only when the model's next tokens are recoverable from caller-supplied local text and the target model accepts those draft tokens. Repository workspaces use a separate mechanism: a stable file/symbol map and query-specific code retrieval stay within a bounded prompt, while MLX can reuse the exact stable prefix on later workspace requests. The question itself can be new, but the first request still pays normal indexing and prefill costs. Without a supported verified-decoding backend, a novel message outside a workspace falls back to native generation, where expected algorithmic speedup is about `1.0x` and the server layer can add latency.
+
+DFlash is the first MachBoost path aimed directly at unique output decoding. It is explicit opt-in, greedy-only, text-only, and limited to published model/draft pairs. On this Apple M5 Pro, the same Qwen3.5 4B BF16 target reached a `1.65x` median decode-throughput speedup across three fresh 512-token prompt families; per-prompt medians ranged from `1.31x` for code to `2.43x` for reasoning, and all three 128-token validation prefixes matched native greedy output. The same-weight 9B BF16 row reached `1.61x`, with one prompt at `2.42x`, but only 2/3 validation prefixes matched. Both used the shippable `dflash-mlx==0.1.8` wheel. A practical Qwen3.5 9B 4-bit control reached `1.32x` with adaptive verification and also diverged; fixed 16-token verification regressed to `0.84x` overall. These are decode results, not universal end-to-end, quality-equivalence, or short-answer claims.
 
 | Likely fit | Why it can help |
 |---|---|
@@ -22,12 +24,14 @@ Text drafting helps only when the model's next tokens are recoverable from calle
 | Repository-aware code completion | Generated code can continue patterns already present in the repository. |
 | Policy, checklist, and runbook assistants | Responses frequently reproduce stable approved wording. |
 | Config, JSON, and template generation | Outputs often contain predictable local structures and repeated fields. |
+| Fresh reasoning on a supported DFlash target | Parallel draft blocks can reduce expensive target-model decode passes when acceptance is high. |
 | Repeated questions over the same image | Visual encoding and matching prompt-prefix work may be reusable. |
 
 | Usually not a fit | Expected behavior |
 |---|---|
-| A first workspace question or a unique question without a workspace | Normal prefill; no reusable prefix exists yet. A topically unrelated question in the same workspace can still reuse the stable repository map. |
-| Brainstorming, creative writing, or novel reasoning | Little recoverable continuation, so usually near native speed. |
+| A first workspace question or a unique question without a supported decode pair | Normal prefill; no reusable prefix exists yet. A topically unrelated question in the same workspace can still reuse the stable repository map. |
+| Context-only drafting for brainstorming or creative writing | Little continuation is recoverable from supplied text, so this path is usually near native speed. DFlash has a separate workload-dependent contract. |
+| Unsupported or low-acceptance DFlash workloads | Native generation can be faster; use the adaptive verifier and a paired workload benchmark. |
 | A changed or first-seen image | Repeated-image cache does not apply. |
 | An external backend without verifier hooks | Wrapper and measurement only; no native MachBoost token verification. |
 
@@ -38,6 +42,7 @@ Treat every workload as uncalibrated until it passes a same-model paired benchma
 | Path | Current evidence | Product status |
 |---|---|---|
 | Plain resident text chat | Native MLX decode through a local server; no drafting without context | usable, with measurable server/streaming overhead versus direct `mlx-lm` |
+| Fresh-prompt DFlash decode | Qwen3.5 4B BF16 median was 1.65x with 3/3 validation prefixes exact; Qwen3.5 9B BF16 reached 1.61x with 2/3 exact | 4B alias is opt-in; 9B remains experimental; greedy-only and workload-dependent |
 | Concurrent text API serving | bounded tenant-fair admission, explicit overload responses, per-key limits, and isolated model replicas | usable; replicas consume additional memory and do not guarantee higher GPU throughput |
 | Team gateway | hashed scoped keys, model allowlists, fair queueing, configurable local traces, and evaluations | usable on a trusted private network; MachBoost does not terminate TLS |
 | Team memory | private or administrator-published shared entries, workspace/revision/dependency isolation, bounded retrieval, and opt-in deterministic exact-response reuse | useful for recurring team work; not a decode-throughput speedup and not enabled as a universal response cache |
@@ -65,6 +70,7 @@ Install optional backends as needed:
 pip install -e ".[mlx]"
 pip install -e ".[hf]"
 pip install -e ".[vision]"
+pip install -e ".[dflash]"
 pip install -e ".[video]"
 pip install -e ".[all]"
 ```
@@ -74,6 +80,7 @@ Install directly from GitHub:
 ```sh
 pip install "machboost[mlx] @ git+https://github.com/VistritPandey/machboost.git"
 pip install "machboost[vision] @ git+https://github.com/VistritPandey/machboost.git"
+pip install "machboost[dflash] @ git+https://github.com/VistritPandey/machboost.git"
 ```
 
 Update an existing install:
@@ -166,6 +173,32 @@ machboost bench-context qwen2.5:3b \
 ```
 
 `bench-context` alternates native-first and MachBoost-first pairs, requires an even measured-run count, and compares generated token IDs. Its aggregate speedup is invalidated if any pair differs. The report also shows accepted draft tokens and logical target-call reduction. A valid result with zero accepted drafts means the tested context did not engage the algorithm.
+
+Run target-verified decoding for a fresh prompt on a supported pair:
+
+```sh
+machboost pull qwen3.5:4b-dflash
+machboost run qwen3.5:4b-dflash --show-stats
+machboost bench-decode qwen3.5:4b \
+  --prompt-file benchmarks/unique_decode_prompts.jsonl \
+  --runs 3 --max-tokens 512 --no-eos
+```
+
+The `-dflash` aliases work in the ordinary OpenAI/Ollama `model` field and
+download both their target and draft repositories. They intentionally select BF16 Qwen3.5 targets so the paired
+benchmark compares the same target weights without a quantization confound.
+They therefore download and use substantially more memory than the normal
+4-bit aliases, plus a separate draft model. `bench-decode` measures native and
+DFlash throughput from the same target and runs every JSONL row by default. It
+also validates native and accelerated greedy token sequences for 128 tokens and
+exits nonzero on any mismatch; set `--validation-tokens 0` only for an intentional
+non-equivalent throughput diagnostic.
+Remove `--no-eos` for realistic complete-answer latency. See the
+[unique-request acceleration contract](docs/unique-request-acceleration.md)
+and [Python example](examples/python/dflash_unique_prompt.py).
+The normalized [unique-decode evidence matrix](results/unique_decode_qwen35_20260810.json)
+contains the 4B and 9B BF16 rows, strict output-gate metadata, memory measurements,
+and the quantized control.
 
 Use full repository IDs when a model has no short alias. If the model is not cached, the selected backend may download it through its normal Hugging Face or MLX loader. Use `--local-files-only` with Hugging Face to require an existing cache.
 

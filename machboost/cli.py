@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import os
@@ -130,6 +131,9 @@ def doctor_data() -> dict:
             "mlx": asdict(package_status("mlx")),
             "mlx_lm": asdict(package_status("mlx_lm", distribution_name="mlx-lm")),
             "mlx_vlm": asdict(package_status("mlx_vlm", distribution_name="mlx-vlm")),
+            "dflash_mlx": asdict(
+                package_status("dflash_mlx", distribution_name="dflash-mlx")
+            ),
         },
     }
 
@@ -225,6 +229,7 @@ def native_backend_status() -> dict:
     mlx = package_status("mlx")
     mlx_lm = package_status("mlx_lm", distribution_name="mlx-lm")
     mlx_vlm = package_status("mlx_vlm", distribution_name="mlx-vlm")
+    dflash_mlx = package_status("dflash_mlx", distribution_name="dflash-mlx")
     return {
         "hf": {
             "available": torch.available and transformers.available,
@@ -245,6 +250,14 @@ def native_backend_status() -> dict:
             "packages": {
                 "mlx": asdict(mlx),
                 "mlx_vlm": asdict(mlx_vlm),
+            },
+        },
+        "dflash": {
+            "available": mlx.available and mlx_lm.available and dflash_mlx.available,
+            "packages": {
+                "mlx": asdict(mlx),
+                "mlx_lm": asdict(mlx_lm),
+                "dflash_mlx": asdict(dflash_mlx),
             },
         },
     }
@@ -486,6 +499,16 @@ def load_native_accelerator(args: argparse.Namespace, *, stream=None):
             resolution.model,
             lazy=args.lazy,
             vision_cache_size=args.vision_cache_size,
+        )
+    if backend == "dflash":
+        from .adapters.dflash import DFlashAccelerator
+
+        return DFlashAccelerator.from_pretrained(
+            resolution.model,
+            draft_model=args.draft_model,
+            draft_quant=args.draft_quant,
+            verify_mode=args.verify_mode,
+            lazy=args.lazy,
         )
     raise ValueError(f"unsupported backend: {backend}")
 
@@ -767,6 +790,9 @@ def native_server_options(args: argparse.Namespace) -> dict:
         "vision_token_layer": args.vision_token_layer,
         "vision_token_bucket": args.vision_token_bucket,
         "vision_calibration": args.vision_calibration,
+        "draft_model": args.draft_model,
+        "draft_quant": args.draft_quant,
+        "verify_mode": args.verify_mode,
     }
 
 
@@ -1383,6 +1409,248 @@ def run_context_bench(
     return 0 if artifact["summary"]["valid"] else 1
 
 
+def run_decode_bench(
+    args: argparse.Namespace,
+    *,
+    error_stream=None,
+) -> int:
+    error_stream = error_stream or sys.stderr
+    try:
+        from dflash_mlx.benchmark import main as dflash_benchmark_main
+        from dflash_mlx.model import DFlashDraftModelArgs
+
+        from .adapters.dflash import _load_runtime_bundle_compat
+
+        resolution = resolve_model(args.model, "dflash")
+        validation_valid = True
+        benchmark_args = [
+            "--model",
+            resolution.model,
+            "--verify-mode",
+            args.verify_mode,
+            "--max-tokens",
+            str(args.max_tokens),
+            "--repeat",
+            str(args.runs),
+            "--cooldown",
+            str(args.cooldown),
+        ]
+        if args.prompt:
+            benchmark_args.extend(["--prompt", args.prompt])
+        if args.prompt_file:
+            benchmark_args.extend(["--prompt-file", args.prompt_file])
+            limit = args.limit or _jsonl_row_count(args.prompt_file)
+            benchmark_args.extend(["--limit", str(limit)])
+        if args.draft_model:
+            benchmark_args.extend(["--draft", args.draft_model])
+        if args.draft_quant:
+            benchmark_args.extend(["--draft-quant", args.draft_quant])
+        if args.no_eos:
+            benchmark_args.append("--no-eos")
+        if args.output:
+            benchmark_args.extend(["--out", args.output])
+        try:
+            _load_runtime_bundle_compat(
+                lambda: dflash_benchmark_main(
+                    benchmark_args,
+                    prog="machboost bench-decode",
+                ),
+                DFlashDraftModelArgs,
+            )
+        except SystemExit as exc:
+            return int(exc.code or 0)
+        if args.validation_tokens > 0:
+            prompts = _decode_validation_prompts(args)
+            if prompts:
+                validation = validate_decode_outputs(
+                    resolution.model,
+                    prompts,
+                    draft_model=args.draft_model,
+                    draft_quant=args.draft_quant,
+                    verify_mode=args.verify_mode,
+                    max_tokens=args.validation_tokens,
+                )
+                print(
+                    "output validation: "
+                    f"{validation['exact_matches']}/{validation['rows']} exact "
+                    f"at {args.validation_tokens} token(s)",
+                    file=error_stream,
+                )
+                validation_valid = validation["exact_matches"] == validation["rows"]
+                if not validation_valid:
+                    print(
+                        "output validation failed: accelerated greedy tokens differ from native MLX; "
+                        "treat the throughput result as non-equivalent",
+                        file=error_stream,
+                    )
+                if args.output:
+                    output_dir = Path(args.output).expanduser()
+                    output_dir.mkdir(parents=True, exist_ok=True)
+                    validation_path = output_dir / "output_validation.json"
+                    validation_path.write_text(
+                        json.dumps(validation, indent=2) + "\n",
+                        encoding="utf-8",
+                    )
+                    results_path = output_dir / "results.json"
+                    if results_path.is_file():
+                        results = json.loads(results_path.read_text(encoding="utf-8"))
+                        results["output_validation"] = validation
+                        results_path.write_text(
+                            json.dumps(results, indent=2) + "\n",
+                            encoding="utf-8",
+                        )
+        return 0 if validation_valid else 1
+    except (ImportError, OSError, ValueError) as exc:
+        print(f"machboost bench-decode error: {exc}", file=error_stream)
+        return 2
+
+
+def _jsonl_row_count(path: str) -> int:
+    count = 0
+    with Path(path).expanduser().open(encoding="utf-8") as stream:
+        for line_number, line in enumerate(stream, start=1):
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    f"invalid JSONL in {path} at line {line_number}: {exc.msg}"
+                ) from exc
+            if not isinstance(row, dict):
+                raise ValueError(f"invalid JSONL object in {path} at line {line_number}")
+            count += 1
+    if count == 0:
+        raise ValueError(f"prompt file is empty: {path}")
+    return count
+
+
+def _decode_validation_prompts(args: argparse.Namespace) -> list[dict[str, str]]:
+    if args.prompt:
+        return [{"id": "custom", "prompt": str(args.prompt)}]
+    if not args.prompt_file:
+        return []
+    rows: list[dict[str, str]] = []
+    with Path(args.prompt_file).expanduser().open(encoding="utf-8") as stream:
+        for line_number, line in enumerate(stream, start=1):
+            if not line.strip():
+                continue
+            value = json.loads(line)
+            prompt = str(value.get("prompt") or "").strip()
+            if not prompt:
+                raise ValueError(
+                    f"JSONL prompt is empty in {args.prompt_file} at line {line_number}"
+                )
+            rows.append(
+                {
+                    "id": str(value.get("id") or f"row-{line_number}"),
+                    "prompt": prompt,
+                }
+            )
+            if args.limit and len(rows) >= args.limit:
+                break
+    return rows
+
+
+def validate_decode_outputs(
+    model: str,
+    prompts: Sequence[dict[str, str]],
+    *,
+    draft_model: Optional[str],
+    draft_quant: Optional[str],
+    verify_mode: str,
+    max_tokens: int,
+) -> dict:
+    import mlx.core as mx
+    from mlx_lm import generate as native_generate
+    from mlx_lm.sample_utils import make_sampler
+
+    from .adapters.dflash import DFlashAccelerator
+
+    accelerator = DFlashAccelerator.from_pretrained(
+        model,
+        draft_model=draft_model,
+        draft_quant=draft_quant,
+        verify_mode=verify_mode,
+        lazy=True,
+    )
+    rows = []
+    try:
+        for item in prompts:
+            prompt = accelerator.tokenizer.apply_chat_template(
+                [{"role": "user", "content": item["prompt"]}],
+                tokenize=False,
+                add_generation_prompt=True,
+            )
+            mx.clear_cache()
+            native_text = native_generate(
+                accelerator.model,
+                accelerator.tokenizer,
+                prompt=prompt,
+                max_tokens=max_tokens,
+                sampler=make_sampler(temp=0.0),
+                verbose=False,
+            )
+            mx.clear_cache()
+            accelerated_text, stats = accelerator.generate(
+                prompt,
+                max_tokens=max_tokens,
+            )
+            native_tokens = list(accelerator.tokenizer.encode(native_text))
+            accelerated_tokens = list(accelerator.tokenizer.encode(accelerated_text))
+            common = next(
+                (
+                    index
+                    for index, pair in enumerate(zip(native_tokens, accelerated_tokens))
+                    if pair[0] != pair[1]
+                ),
+                min(len(native_tokens), len(accelerated_tokens)),
+            )
+            rows.append(
+                {
+                    "id": item["id"],
+                    "exact": native_tokens == accelerated_tokens,
+                    "native_tokens": len(native_tokens),
+                    "accelerated_tokens": len(accelerated_tokens),
+                    "common_prefix_tokens": common,
+                    "first_difference": (
+                        None
+                        if native_tokens == accelerated_tokens
+                        else {
+                            "index": common,
+                            "native_token": native_tokens[common]
+                            if common < len(native_tokens)
+                            else None,
+                            "accelerated_token": accelerated_tokens[common]
+                            if common < len(accelerated_tokens)
+                            else None,
+                        }
+                    ),
+                    "native_token_hash": _token_hash(native_tokens),
+                    "accelerated_token_hash": _token_hash(accelerated_tokens),
+                    "acceptance_ratio": stats.acceptance_ratio,
+                }
+            )
+    finally:
+        accelerator.close()
+    exact_matches = sum(bool(row["exact"]) for row in rows)
+    return {
+        "schema_version": "machboost.decode-output-validation.v1",
+        "model": model,
+        "greedy": True,
+        "max_tokens": max_tokens,
+        "rows": len(rows),
+        "exact_matches": exact_matches,
+        "exact_match_rate": exact_matches / len(rows) if rows else None,
+        "results": rows,
+    }
+
+
+def _token_hash(tokens: Sequence[int]) -> str:
+    payload = ",".join(str(token) for token in tokens).encode("ascii")
+    return hashlib.sha256(payload).hexdigest()
+
+
 def _context_benchmark_prompt(args: argparse.Namespace) -> str:
     if args.prompt and args.prompt_file:
         raise ValueError("use either --prompt or --prompt-file, not both")
@@ -1617,7 +1885,7 @@ def build_parser() -> argparse.ArgumentParser:
     bench.add_argument("--max-tokens", type=int, default=32)
     bench.add_argument(
         "--backend",
-        choices=["auto", "mlx", "hf"],
+        choices=["auto", "mlx", "hf", "dflash"],
         default="auto",
     )
     bench.add_argument("--keep-alive", default="5m")
@@ -1659,6 +1927,46 @@ def build_parser() -> argparse.ArgumentParser:
     context_bench.add_argument("--local-files-only", action="store_true")
     context_bench.add_argument("--json", action="store_true")
     context_bench.add_argument("--output", help="Write the JSON artifact to this path.")
+
+    decode_bench = subcommands.add_parser(
+        "bench-decode",
+        help="Benchmark native MLX against target-verified DFlash decoding.",
+    )
+    decode_bench.add_argument("model", help="Supported model alias or repository.")
+    decode_prompt = decode_bench.add_mutually_exclusive_group()
+    decode_prompt.add_argument("--prompt", help="Single unique prompt to benchmark.")
+    decode_prompt.add_argument(
+        "--prompt-file",
+        help="JSONL prompt suite with id, suite, and prompt fields.",
+    )
+    decode_bench.add_argument("--draft-model", help="DFlash draft repository override.")
+    decode_bench.add_argument("--draft-quant", help="Draft quantization such as w4:gs64.")
+    decode_bench.add_argument("--max-tokens", type=int, default=512)
+    decode_bench.add_argument("--runs", type=int, default=3)
+    decode_bench.add_argument(
+        "--limit",
+        type=int,
+        help="Maximum JSONL prompts; defaults to every non-empty row.",
+    )
+    decode_bench.add_argument("--cooldown", type=int, default=1)
+    decode_bench.add_argument(
+        "--verify-mode",
+        choices=["dflash", "adaptive", "ddtree", "off"],
+        default="adaptive",
+        help="Target verifier strategy; adaptive avoids costly full blocks when acceptance drops.",
+    )
+    decode_bench.add_argument(
+        "--no-eos",
+        action="store_true",
+        help="Ignore EOS so every leg measures the requested decode length.",
+    )
+    decode_bench.add_argument(
+        "--validation-tokens",
+        type=int,
+        default=128,
+        help="Compare native and accelerated greedy outputs at this length; zero disables validation.",
+    )
+    decode_bench.add_argument("--output", help="DFlash benchmark artifact directory.")
 
     warm = subcommands.add_parser("warm", help="Preload a native model into resident memory.")
     add_native_run_arguments(warm)
@@ -1775,9 +2083,9 @@ def add_native_run_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--backend",
-        choices=["auto", "mlx", "hf", "mlx-vlm", "hf-vlm"],
+        choices=["auto", "mlx", "hf", "mlx-vlm", "hf-vlm", "dflash"],
         default="auto",
-        help="Model backend. Auto selects text or vision MLX/HF adapters from the model architecture.",
+        help="Model backend. DFlash enables target-verified block-diffusion decoding on supported MLX text models.",
     )
     parser.add_argument(
         "--context",
@@ -1789,6 +2097,20 @@ def add_native_run_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--max-tokens", type=int, default=128)
     parser.add_argument("--ngram", type=int, default=2)
     parser.add_argument("--max-draft-tokens", type=int, default=8)
+    parser.add_argument(
+        "--draft-model",
+        help="DFlash draft repository override; supported targets resolve a tested draft automatically.",
+    )
+    parser.add_argument(
+        "--draft-quant",
+        help="DFlash draft quantization, for example w4 or w4:gs64.",
+    )
+    parser.add_argument(
+        "--verify-mode",
+        choices=["dflash", "adaptive", "ddtree", "off"],
+        default="adaptive",
+        help="DFlash target verification strategy.",
+    )
     parser.add_argument("--candidate-limit", type=int, default=1)
     parser.add_argument(
         "--reentry-probe-tokens",
@@ -1947,6 +2269,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return run_latency_bench(args)
     if args.command == "bench-context":
         return run_context_bench(args)
+    if args.command == "bench-decode":
+        return run_decode_bench(args)
     if args.command == "serve":
         return run_serve(args)
     if args.command == "warm":

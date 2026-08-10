@@ -1,6 +1,6 @@
 import unittest
 
-from machboost import CorpusDrafter, machboost
+from machboost import CorpusDrafter, DFlashAccelerator, DFlashRunStats, machboost
 
 
 class ScriptedVerifierService:
@@ -57,6 +57,10 @@ class ScriptedVerifierWithNativeTail(ScriptedVerifierService):
 
 
 class PythonPackageTest(unittest.TestCase):
+    def test_dflash_types_are_available_from_top_level_package(self):
+        self.assertEqual(DFlashAccelerator.__name__, "DFlashAccelerator")
+        self.assertEqual(DFlashRunStats.__name__, "DFlashRunStats")
+
     def test_corpus_drafter_uses_observed_history(self):
         drafter = CorpusDrafter([1, 2, 3, 4, 5, 6], ngram=2, max_draft_tokens=4)
         drafter.reset([1, 2])

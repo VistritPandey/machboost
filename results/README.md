@@ -8,11 +8,59 @@ The artifacts measure different mechanisms and should not be combined into one h
 
 - **Serving/runtime:** warm model residency, client latency, and backend throughput. These rows do not exercise context drafting unless context is explicitly supplied.
 - **Context-backed text:** paired native and drafted generation using one model conversion. Exact output equality is required for an exact-path claim.
+- **Fresh target-verified decode:** paired native and block-diffusion generation using the same target weights. Throughput and bounded greedy-output equality are reported separately.
 - **Repeated-image reuse:** later questions over identical image bytes after an explicit prime. These are not first-view results.
 - **First-view visual compression:** new images with caches disabled. This path is approximate, so task score and output equality are reported separately.
 - **Video frame selection:** preprocessing/frame-count evidence only until a completed VLM task benchmark is committed.
 
 Results below are single-machine experiments unless stated otherwise. Ratios of medians and medians of paired ratios are different statistics and are labeled separately.
+
+## Fresh Qwen3.5 Decode Audit, August 10 2026
+
+Artifact: `unique_decode_qwen35_20260810.json`
+
+Hardware: Apple M5 Pro, 48 GB unified memory
+
+Shippable runtime: Python 3.13.3, MLX 0.31.2, `mlx-lm` 0.31.3, and
+`dflash-mlx` 0.1.8
+
+Each target is measured natively and with adaptive DFlash decoding using the
+same target repository and weights. The suite contains reasoning, code, and
+operations prompts. Every throughput leg generates 512 tokens with EOS ignored,
+and each prompt family has three measured repetitions. A separate realistic-EOS
+gate compares the first 128 greedy tokens and stores token hashes rather than
+model text.
+
+| Target | Native | DFlash | Median | Prompt range | Peak MLX memory | Strict output gate |
+|---|---:|---:|---:|---:|---:|---:|
+| Qwen3.5 4B BF16 | 29.36 tok/s | 48.52 tok/s | 1.649x | 1.309-2.431x | 8.51 / 8.98 GB | 3/3 exact |
+| Qwen3.5 9B BF16 | 16.55 tok/s | 26.44 tok/s | 1.607x | 1.575-2.424x | 18.00 / 18.85 GB | 2/3 exact |
+
+The 9B mismatch occurs in the code fixture at generated token 65. The benchmark
+returns a nonzero exit status for this result, so the 9B alias remains
+experimental even though every prompt family is faster. The 4B alias passes the
+current strict gate, but three prompts do not establish equivalence on unseen
+workloads.
+
+A separate 9B 4-bit diagnostic reaches 1.318x with adaptive verification, while
+fixed 16-token verification regresses to 0.842x overall. That diagnostic used a
+newer editable DFlash runtime and also showed output divergence, so it is retained
+as a routing control rather than a release claim.
+
+Reproduce the shippable 4B row with:
+
+```sh
+python3 -m pip install "machboost[dflash] @ git+https://github.com/VistritPandey/machboost.git"
+machboost bench-decode qwen3.5:4b \
+  --prompt-file benchmarks/unique_decode_prompts.jsonl \
+  --draft-quant w4:gs64 \
+  --runs 3 --max-tokens 512 --no-eos \
+  --output results/local/qwen35-4b-decode
+```
+
+These rows measure output decode after model load. They do not imply that BF16
+DFlash outruns every quantized native runtime, that a short request is 1.6x faster
+end to end, or that reasoning prompts generally exceed 2x.
 
 ## Cross-Thread Private Repository Audit, August 9 2026
 
