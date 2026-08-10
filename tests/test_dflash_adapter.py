@@ -154,6 +154,21 @@ class DFlashAdapterTests(unittest.TestCase):
                 stop_strings=["STOP"],
             )
 
+    def test_resident_replicas_do_not_share_a_python_generation_lock(self):
+        other = DFlashAccelerator(
+            self.bundle,
+            runtime_context=object(),
+            stream_generate_fn=lambda **_: iter(()),
+            stop_token_ids_fn=lambda _: [],
+            token_event_type=TokenEvent,
+            summary_event_type=SummaryEvent,
+        )
+
+        self.assertIsNot(
+            self.accelerator._generation_lock,
+            other._generation_lock,
+        )
+
     def test_normalizes_nested_checkpoint_config_and_restores_runtime(self):
         class DraftArgs:
             @classmethod
