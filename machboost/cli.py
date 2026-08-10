@@ -1751,7 +1751,7 @@ def build_parser() -> argparse.ArgumentParser:
     decode_bench.add_argument("--draft-quant", help="Draft quantization such as w4:gs64.")
     decode_bench.add_argument("--max-tokens", type=int, default=512)
     decode_bench.add_argument("--runs", type=int, default=3)
-    decode_bench.add_argument("--cooldown", type=float, default=1.0)
+    decode_bench.add_argument("--cooldown", type=int, default=1)
     decode_bench.add_argument(
         "--no-eos",
         action="store_true",
