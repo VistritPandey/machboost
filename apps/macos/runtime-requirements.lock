@@ -365,6 +365,9 @@ datasets==5.0.0 \
     --hash=sha256:7dd34927a0fd7046e98aad5cb9430e699c373238a15befa7b9bf22b991a7fee6 \
     --hash=sha256:83dbbbdb07a33b82192b8c419deb18739b138ee2ce1a322d55ce6b100954ec1a
     # via mlx-vlm
+dflash-mlx==0.1.8 \
+    --hash=sha256:639eb6f92de40405a42784d080b1c5b36d0f175d514314e1671c09e30e309f9c
+    # via -r runtime-requirements.in
 dill==0.4.1 \
     --hash=sha256:1e1ce33e978ae97fcfcff5638477032b801c46c7c65cf717f95fbc2248f79a9d \
     --hash=sha256:423092df4182177d4d8ba8290c8a5b640c66ab35ec7da59ccfa00f6fa3eea5fa
@@ -756,6 +759,7 @@ mlx==0.31.2 \
     --hash=sha256:edb9797db7d852477ca1c99708058654ee860d4148fe5765f0d55528e2b1aa22
     # via
     #   -r runtime-requirements.in
+    #   dflash-mlx
     #   mlx-audio
     #   mlx-lm
     #   mlx-vlm
@@ -768,6 +772,7 @@ mlx-lm==0.31.3 \
     --hash=sha256:758cfddf1180053b7613db76fad3d246a331a2a905808e1164a275621fc983b8
     # via
     #   -r runtime-requirements.in
+    #   dflash-mlx
     #   mlx-audio
     #   mlx-vlm
 mlx-metal==0.31.2 \
