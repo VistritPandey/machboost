@@ -304,6 +304,11 @@ class FakeClock:
 
 
 class RuntimeManagerTests(unittest.TestCase):
+    def test_dflash_model_config_defaults_to_adaptive_verification(self):
+        config = model_config("qwen3.5:9b", {"backend": "dflash"})
+
+        self.assertEqual(config.verify_mode, "adaptive")
+
     def test_dflash_model_config_preserves_decoder_selection(self):
         config = model_config(
             "qwen3.5:9b",
