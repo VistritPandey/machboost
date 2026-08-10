@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import os
@@ -1457,6 +1458,39 @@ def run_decode_bench(
             )
         except SystemExit as exc:
             return int(exc.code or 0)
+        if args.validation_tokens > 0:
+            prompts = _decode_validation_prompts(args)
+            if prompts:
+                validation = validate_decode_outputs(
+                    resolution.model,
+                    prompts,
+                    draft_model=args.draft_model,
+                    draft_quant=args.draft_quant,
+                    verify_mode=args.verify_mode,
+                    max_tokens=args.validation_tokens,
+                )
+                print(
+                    "output validation: "
+                    f"{validation['exact_matches']}/{validation['rows']} exact "
+                    f"at {args.validation_tokens} token(s)",
+                    file=error_stream,
+                )
+                if args.output:
+                    output_dir = Path(args.output).expanduser()
+                    output_dir.mkdir(parents=True, exist_ok=True)
+                    validation_path = output_dir / "output_validation.json"
+                    validation_path.write_text(
+                        json.dumps(validation, indent=2) + "\n",
+                        encoding="utf-8",
+                    )
+                    results_path = output_dir / "results.json"
+                    if results_path.is_file():
+                        results = json.loads(results_path.read_text(encoding="utf-8"))
+                        results["output_validation"] = validation
+                        results_path.write_text(
+                            json.dumps(results, indent=2) + "\n",
+                            encoding="utf-8",
+                        )
         return 0
     except (ImportError, OSError, ValueError) as exc:
         print(f"machboost bench-decode error: {exc}", file=error_stream)
@@ -1481,6 +1515,132 @@ def _jsonl_row_count(path: str) -> int:
     if count == 0:
         raise ValueError(f"prompt file is empty: {path}")
     return count
+
+
+def _decode_validation_prompts(args: argparse.Namespace) -> list[dict[str, str]]:
+    if args.prompt:
+        return [{"id": "custom", "prompt": str(args.prompt)}]
+    if not args.prompt_file:
+        return []
+    rows: list[dict[str, str]] = []
+    with Path(args.prompt_file).expanduser().open(encoding="utf-8") as stream:
+        for line_number, line in enumerate(stream, start=1):
+            if not line.strip():
+                continue
+            value = json.loads(line)
+            prompt = str(value.get("prompt") or "").strip()
+            if not prompt:
+                raise ValueError(
+                    f"JSONL prompt is empty in {args.prompt_file} at line {line_number}"
+                )
+            rows.append(
+                {
+                    "id": str(value.get("id") or f"row-{line_number}"),
+                    "prompt": prompt,
+                }
+            )
+            if args.limit and len(rows) >= args.limit:
+                break
+    return rows
+
+
+def validate_decode_outputs(
+    model: str,
+    prompts: Sequence[dict[str, str]],
+    *,
+    draft_model: Optional[str],
+    draft_quant: Optional[str],
+    verify_mode: str,
+    max_tokens: int,
+) -> dict:
+    import mlx.core as mx
+    from mlx_lm import generate as native_generate
+    from mlx_lm.sample_utils import make_sampler
+
+    from .adapters.dflash import DFlashAccelerator
+
+    accelerator = DFlashAccelerator.from_pretrained(
+        model,
+        draft_model=draft_model,
+        draft_quant=draft_quant,
+        verify_mode=verify_mode,
+        lazy=True,
+    )
+    rows = []
+    try:
+        for item in prompts:
+            prompt = accelerator.tokenizer.apply_chat_template(
+                [{"role": "user", "content": item["prompt"]}],
+                tokenize=False,
+                add_generation_prompt=True,
+            )
+            mx.clear_cache()
+            native_text = native_generate(
+                accelerator.model,
+                accelerator.tokenizer,
+                prompt=prompt,
+                max_tokens=max_tokens,
+                sampler=make_sampler(temp=0.0),
+                verbose=False,
+            )
+            mx.clear_cache()
+            accelerated_text, stats = accelerator.generate(
+                prompt,
+                max_tokens=max_tokens,
+            )
+            native_tokens = list(accelerator.tokenizer.encode(native_text))
+            accelerated_tokens = list(accelerator.tokenizer.encode(accelerated_text))
+            common = next(
+                (
+                    index
+                    for index, pair in enumerate(zip(native_tokens, accelerated_tokens))
+                    if pair[0] != pair[1]
+                ),
+                min(len(native_tokens), len(accelerated_tokens)),
+            )
+            rows.append(
+                {
+                    "id": item["id"],
+                    "exact": native_tokens == accelerated_tokens,
+                    "native_tokens": len(native_tokens),
+                    "accelerated_tokens": len(accelerated_tokens),
+                    "common_prefix_tokens": common,
+                    "first_difference": (
+                        None
+                        if native_tokens == accelerated_tokens
+                        else {
+                            "index": common,
+                            "native_token": native_tokens[common]
+                            if common < len(native_tokens)
+                            else None,
+                            "accelerated_token": accelerated_tokens[common]
+                            if common < len(accelerated_tokens)
+                            else None,
+                        }
+                    ),
+                    "native_token_hash": _token_hash(native_tokens),
+                    "accelerated_token_hash": _token_hash(accelerated_tokens),
+                    "acceptance_ratio": stats.acceptance_ratio,
+                }
+            )
+    finally:
+        accelerator.close()
+    exact_matches = sum(bool(row["exact"]) for row in rows)
+    return {
+        "schema_version": "machboost.decode-output-validation.v1",
+        "model": model,
+        "greedy": True,
+        "max_tokens": max_tokens,
+        "rows": len(rows),
+        "exact_matches": exact_matches,
+        "exact_match_rate": exact_matches / len(rows) if rows else None,
+        "results": rows,
+    }
+
+
+def _token_hash(tokens: Sequence[int]) -> str:
+    payload = ",".join(str(token) for token in tokens).encode("ascii")
+    return hashlib.sha256(payload).hexdigest()
 
 
 def _context_benchmark_prompt(args: argparse.Namespace) -> str:
@@ -1791,6 +1951,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-eos",
         action="store_true",
         help="Ignore EOS so every leg measures the requested decode length.",
+    )
+    decode_bench.add_argument(
+        "--validation-tokens",
+        type=int,
+        default=128,
+        help="Compare native and accelerated greedy outputs at this length; zero disables validation.",
     )
     decode_bench.add_argument("--output", help="DFlash benchmark artifact directory.")
 
