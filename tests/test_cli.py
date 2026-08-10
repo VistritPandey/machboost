@@ -197,12 +197,21 @@ class CLITests(unittest.TestCase):
         package.__path__ = []
         benchmark_module = types.ModuleType("dflash_mlx.benchmark")
         benchmark_module.main = benchmark
+        model_module = types.ModuleType("dflash_mlx.model")
+
+        class DraftArgs:
+            @classmethod
+            def from_dict(cls, params):
+                return params
+
+        model_module.DFlashDraftModelArgs = DraftArgs
 
         with patch.dict(
             "sys.modules",
             {
                 "dflash_mlx": package,
                 "dflash_mlx.benchmark": benchmark_module,
+                "dflash_mlx.model": model_module,
             },
         ):
             code = cli.run_decode_bench(args)
