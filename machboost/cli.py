@@ -1435,6 +1435,8 @@ def run_decode_bench(
             benchmark_args.extend(["--prompt", args.prompt])
         if args.prompt_file:
             benchmark_args.extend(["--prompt-file", args.prompt_file])
+            limit = args.limit or _jsonl_row_count(args.prompt_file)
+            benchmark_args.extend(["--limit", str(limit)])
         if args.draft_model:
             benchmark_args.extend(["--draft", args.draft_model])
         if args.draft_quant:
@@ -1457,6 +1459,26 @@ def run_decode_bench(
     except (ImportError, OSError, ValueError) as exc:
         print(f"machboost bench-decode error: {exc}", file=error_stream)
         return 2
+
+
+def _jsonl_row_count(path: str) -> int:
+    count = 0
+    with Path(path).expanduser().open(encoding="utf-8") as stream:
+        for line_number, line in enumerate(stream, start=1):
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    f"invalid JSONL in {path} at line {line_number}: {exc.msg}"
+                ) from exc
+            if not isinstance(row, dict):
+                raise ValueError(f"invalid JSONL object in {path} at line {line_number}")
+            count += 1
+    if count == 0:
+        raise ValueError(f"prompt file is empty: {path}")
+    return count
 
 
 def _context_benchmark_prompt(args: argparse.Namespace) -> str:
@@ -1751,6 +1773,11 @@ def build_parser() -> argparse.ArgumentParser:
     decode_bench.add_argument("--draft-quant", help="Draft quantization such as w4:gs64.")
     decode_bench.add_argument("--max-tokens", type=int, default=512)
     decode_bench.add_argument("--runs", type=int, default=3)
+    decode_bench.add_argument(
+        "--limit",
+        type=int,
+        help="Maximum JSONL prompts; defaults to every non-empty row.",
+    )
     decode_bench.add_argument("--cooldown", type=int, default=1)
     decode_bench.add_argument(
         "--no-eos",
