@@ -26,7 +26,7 @@
 \maketitle
 
 \begin{abstract}
-MachBoost is a local inference package for conditional acceleration. Its text paths draft from explicit context, reuse model state for an unchanged repository prefix, or use a target-verified block-diffusion drafter for selected fresh prompts. Visual requests can reuse state derived from unchanged image bytes or, experimentally, shorten a new image's visual sequence after Qwen3-VL completes early cross-modal fusion. A team gateway adds revision-aware private and shared memory, deterministic exact-request reuse, and budgeted external-provider fallback; these serving features are kept separate in the evaluation. Controlled repository-prefix experiments on an Apple M5 Pro report 2.97$\times$ and 3.23$\times$ median speedups across five changing questions on Qwen2.5 3B and 7B. A later audit uses an 8,754-file private production repository, a 7B model, and independent standalone threads. Reusing 75--77\% of prompt tokens reduces median prefill by 3.75--3.84$\times$ and end-to-end time by 1.31--1.43$\times$ across six paired new-question runs. Decode time is unchanged, and all six pairs are byte-identical under greedy generation. On fresh 512-token outputs, Qwen3.5 4B BF16 block-diffusion decoding raises median throughput from 28.25 to 46.81 tokens/s across three prompt families, a 1.64$\times$ median; prompt medians range from 1.31$\times$ to 2.54$\times$, and all three 128-token validation prefixes match native greedy output. A practical 9B 4-bit control reaches 1.32$\times$ with adaptive verification but does not always preserve the native MLX sequence. Separate context-drafting experiments on an Apple M1 Max are less consistent: a favorable 3B Qwen code fixture reaches 1.96$\times$, while a broader Llama 3.2 3B audit records a 1.008$\times$ aggregate median and exact token equality in 20 of 21 pairs. Across six Qwen vision models, repeated-image paired medians range from 5.14$\times$ to 17.44$\times$. A ten-image Qwen3-VL 8B TextVQA pilot with all caches disabled reaches a 1.67$\times$ aggregate speedup after retaining a median 35.12\% of visual hidden states. Native and compressed paths each answer eight questions correctly, although normalized outputs agree on seven. The measurements support distinct, workload-dependent contracts rather than universal faster inference.
+MachBoost is a local inference package for conditional acceleration. Its text paths draft from explicit context, reuse model state for an unchanged repository prefix, or use a target-verified block-diffusion drafter for selected fresh prompts. Visual requests can reuse state derived from unchanged image bytes or, experimentally, shorten a new image's visual sequence after Qwen3-VL completes early cross-modal fusion. A team gateway adds revision-aware private and shared memory, deterministic exact-request reuse, and budgeted external-provider fallback; these serving features are kept separate in the evaluation. Controlled repository-prefix experiments on an Apple M5 Pro report 2.97$\times$ and 3.23$\times$ median speedups across five changing questions on Qwen2.5 3B and 7B. A later audit uses an 8,754-file private production repository, a 7B model, and independent standalone threads. Reusing 75--77\% of prompt tokens reduces median prefill by 3.75--3.84$\times$ and end-to-end time by 1.31--1.43$\times$ across six paired new-question runs. Decode time is unchanged, and all six pairs are byte-identical under greedy generation. On fresh 512-token outputs, Qwen3.5 4B BF16 block-diffusion decoding raises median throughput from 29.36 to 48.52 tokens/s across three prompt families, a 1.65$\times$ median; prompt medians range from 1.31$\times$ to 2.43$\times$, and all three 128-token validation prefixes match native greedy output. The same-weight 9B BF16 row reaches 1.61$\times$ but matches only two of three validation prefixes. A practical 9B 4-bit control reaches 1.32$\times$ and also diverges. Separate context-drafting experiments on an Apple M1 Max are less consistent: a favorable 3B Qwen code fixture reaches 1.96$\times$, while a broader Llama 3.2 3B audit records a 1.008$\times$ aggregate median and exact token equality in 20 of 21 pairs. Across six Qwen vision models, repeated-image paired medians range from 5.14$\times$ to 17.44$\times$. A ten-image Qwen3-VL 8B TextVQA pilot with all caches disabled reaches a 1.67$\times$ aggregate speedup after retaining a median 35.12\% of visual hidden states. Native and compressed paths each answer eight questions correctly, although normalized outputs agree on seven. The measurements support distinct, workload-dependent contracts rather than universal faster inference.
 \end{abstract}
 
 \section{Introduction}
@@ -337,9 +337,10 @@ and 48 GB unified memory, running macOS 26.6. The environment uses Python
 \path{mlx-community/Qwen2.5-7B-Instruct-4bit}. The JSON artifacts store this
 machine and package provenance.
 
-Fresh-decode measurements use the same M5 Pro and software versions plus
-\texttt{dflash-mlx} 0.1.10. The principal target is
-\path{mlx-community/Qwen3.5-4B-MLX-bf16}; a Qwen3.5 9B 4-bit conversion supplies
+Fresh-decode measurements use the same M5 Pro and software versions plus the
+shippable \texttt{dflash-mlx} 0.1.8 wheel. The same-weight targets are
+\path{mlx-community/Qwen3.5-4B-MLX-bf16} and
+\path{mlx-community/Qwen3.5-9B-MLX-bf16}; a Qwen3.5 9B 4-bit conversion supplies
 a practical quantized control. The draft weights are the corresponding
 \path{z-lab} DFlash repositories. Model load is excluded. Throughput tests force
 512 generated tokens to expose steady-state decode; a separate 128-token greedy
@@ -473,7 +474,8 @@ warm-up; medians below are taken over prompt-family medians.
 \toprule
 Target & Verifier & Native & DFlash & Speedup & Acceptance \\
 \midrule
-Qwen3.5 4B BF16 & adaptive & 28.25 & 46.81 & 1.64$\times$ & 71.5\% \\
+Qwen3.5 4B BF16 & adaptive & 29.36 & 48.52 & 1.65$\times$ & 71.5\% \\
+Qwen3.5 9B BF16 & adaptive & 16.55 & 26.44 & 1.61$\times$ & 68.9\% \\
 Qwen3.5 9B 4-bit & adaptive & 54.63 & 68.32 & 1.32$\times$ & 67.8\% \\
 Qwen3.5 9B 4-bit & fixed 16 & 51.43 & 44.14 & 0.84$\times$ & 72.9\% \\
 \bottomrule
@@ -484,14 +486,15 @@ show why block length must adapt.}
 \label{tab:dflash}
 \end{table}
 
-The 4B per-prompt medians are 2.54$\times$ for reasoning, 1.31$\times$ for
-code, and 1.64$\times$ for the operations plan. Its three accelerated
+The 4B per-prompt medians are 2.43$\times$ for reasoning, 1.31$\times$ for
+code, and 1.65$\times$ for the operations plan. Its three accelerated
 continuations match native greedy output for all 128 validation tokens. The 9B
-adaptive medians are 1.73$\times$, 1.22$\times$, and 1.32$\times$; fixed
-verification regresses code and operations to 0.84$\times$ and 0.76$\times$.
-The adaptive 9B validation matches two of three suite prefixes. A separate
-two-sentence prompt diverges at token 21. These mismatches are retained as
-negative correctness evidence, so the 9B path is not promoted as equivalent.
+BF16 medians are 2.42$\times$, 1.58$\times$, and 1.61$\times$; its code
+validation diverges at token 65. The 9B 4-bit adaptive medians are
+1.73$\times$, 1.22$\times$, and 1.32$\times$; fixed verification regresses
+code and operations to 0.84$\times$ and 0.76$\times$. A separate two-sentence
+4-bit prompt diverges at token 21. These mismatches are retained as negative
+correctness evidence, so the 9B path is not promoted as equivalent.
 
 The 4B BF16 row does not imply that it outruns every quantized implementation in
 absolute tokens/s. It answers a same-weight question: how much target decode work
@@ -771,7 +774,7 @@ a native no-regression fallback, and concurrent-serving measurements.
 The immediate visual work is external validity. After resolving or isolating the observed native high-resolution MLX failure, the checkpointed harness should run ChartQA, DocVQA, MMMU, TextVQA, spatial reasoning, and hallucination-sensitive datasets independently. It should add non-Qwen VLMs, sweep layer, retention ratio, image size, and answer length, and report confidence intervals, memory, energy, and task metrics. The implemented random control is the first comparison; attention ranking, AdaptInfer, and ZOO-Prune remain necessary to determine whether query-weighted merging contributes beyond token count alone. Automatic policies should remain disabled unless a model/task calibration set clears both latency and quality gates. Video evaluation should compare uniform sampling, RGB change selection, query-aware selection, PruneVid, and EchoPrune on temporal question-answering benchmarks.
 
 \section{Conclusion}
-MachBoost now has five measured conditional paths, one unvalidated temporal adapter, and a namespaced team-memory serving path. In the private-repository audit, six independent-thread new-question pairs reuse 75--77\% of prompt tokens. Prefill is 3.75--3.84$\times$ faster, while unchanged decode limits end-to-end speedup to 1.31--1.43$\times$. All paired outputs are byte-identical under greedy generation, but small rubric scores show that equality is not the same as answer quality. Exact replay reaches 28.56$\times$ only for identical deterministic requests. Semantic memory retrieves prior team context but costs 414 extra prompt tokens and 0.239 seconds in its three-run probe. For fresh output, adaptive DFlash raises Qwen3.5 4B BF16 median decode throughput by 1.64$\times$, with prompt-family medians from 1.31$\times$ to 2.54$\times$ and three of three 128-token validation prefixes exact. The practical 9B 4-bit control reaches 1.32$\times$ but does not always reproduce native MLX tokens; fixed verification regresses overall. Context drafting remains less settled: a favorable Qwen code fixture reaches 1.96$\times$, while a broader Llama 3.2 3B suite is exact in 20 of 21 pairs and has a 1.008$\times$ aggregate median. Across six visual models, short repeated questions over one unchanged image produce model-level paired medians from 5.14$\times$ to 17.44$\times$. For a new image, post-fusion Qwen3-VL compression reaches 1.67$\times$ aggregate speedup on a ten-row TextVQA pilot while both modes score 8/10; this path is approximate and normalized outputs agree on 70\%. The evidence supports a local serving layer that selects among narrow mechanisms and refuses failed equivalence gates. It does not support a universal faster-inference claim.
+MachBoost now has five measured conditional paths, one unvalidated temporal adapter, and a namespaced team-memory serving path. In the private-repository audit, six independent-thread new-question pairs reuse 75--77\% of prompt tokens. Prefill is 3.75--3.84$\times$ faster, while unchanged decode limits end-to-end speedup to 1.31--1.43$\times$. All paired outputs are byte-identical under greedy generation, but small rubric scores show that equality is not the same as answer quality. Exact replay reaches 28.56$\times$ only for identical deterministic requests. Semantic memory retrieves prior team context but costs 414 extra prompt tokens and 0.239 seconds in its three-run probe. For fresh output, adaptive DFlash raises Qwen3.5 4B BF16 median decode throughput by 1.65$\times$, with prompt-family medians from 1.31$\times$ to 2.43$\times$ and three of three 128-token validation prefixes exact. The same-weight 9B BF16 control reaches 1.61$\times$ but matches only two of three prefixes; a practical 9B 4-bit control reaches 1.32$\times$ and also diverges. Context drafting remains less settled: a favorable Qwen code fixture reaches 1.96$\times$, while a broader Llama 3.2 3B suite is exact in 20 of 21 pairs and has a 1.008$\times$ aggregate median. Across six visual models, short repeated questions over one unchanged image produce model-level paired medians from 5.14$\times$ to 17.44$\times$. For a new image, post-fusion Qwen3-VL compression reaches 1.67$\times$ aggregate speedup on a ten-row TextVQA pilot while both modes score 8/10; this path is approximate and normalized outputs agree on 70\%. The evidence supports a local serving layer that selects among narrow mechanisms and refuses failed equivalence gates. It does not support a universal faster-inference claim.
 
 \bibliographystyle{plain}
 \small
