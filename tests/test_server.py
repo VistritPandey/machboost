@@ -466,6 +466,39 @@ class RuntimeManagerTests(unittest.TestCase):
         self.assertEqual(manager.stop("qwen2.5:3b"), 2)
         self.assertEqual(manager.ps(), [])
 
+    def test_pull_dflash_alias_downloads_target_and_draft(self):
+        calls = []
+        events = []
+
+        def download(*, repo_id, revision, tqdm_class):
+            calls.append((repo_id, revision, tqdm_class))
+            return f"/cache/{repo_id.replace('/', '--')}"
+
+        manager = RuntimeManager(loader=lambda config: FakeAccelerator())
+        with patch("huggingface_hub.snapshot_download", side_effect=download):
+            result = manager.pull(
+                "qwen3.5:4b-dflash",
+                revision="target-revision",
+                progress=events.append,
+            )
+
+        self.assertEqual(
+            [(repo_id, revision) for repo_id, revision, _ in calls],
+            [
+                ("mlx-community/Qwen3.5-4B-MLX-bf16", "target-revision"),
+                ("z-lab/Qwen3.5-4B-DFlash", None),
+            ],
+        )
+        self.assertEqual(result["backend"], "dflash")
+        self.assertEqual(len(result["paths"]), 2)
+        self.assertEqual(
+            [(event["component"], event["repository"]) for event in events],
+            [
+                ("target", "mlx-community/Qwen3.5-4B-MLX-bf16"),
+                ("draft", "z-lab/Qwen3.5-4B-DFlash"),
+            ],
+        )
+
     def test_two_text_replicas_execute_same_model_requests_concurrently(self):
         probe = ConcurrencyProbe(target=2)
         loaded = []
