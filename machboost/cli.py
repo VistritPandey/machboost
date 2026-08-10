@@ -487,6 +487,16 @@ def load_native_accelerator(args: argparse.Namespace, *, stream=None):
             lazy=args.lazy,
             vision_cache_size=args.vision_cache_size,
         )
+    if backend == "dflash":
+        from .adapters.dflash import DFlashAccelerator
+
+        return DFlashAccelerator.from_pretrained(
+            resolution.model,
+            draft_model=args.draft_model,
+            draft_quant=args.draft_quant,
+            verify_mode=args.verify_mode,
+            lazy=args.lazy,
+        )
     raise ValueError(f"unsupported backend: {backend}")
 
 
@@ -767,6 +777,9 @@ def native_server_options(args: argparse.Namespace) -> dict:
         "vision_token_layer": args.vision_token_layer,
         "vision_token_bucket": args.vision_token_bucket,
         "vision_calibration": args.vision_calibration,
+        "draft_model": args.draft_model,
+        "draft_quant": args.draft_quant,
+        "verify_mode": args.verify_mode,
     }
 
 
@@ -1617,7 +1630,7 @@ def build_parser() -> argparse.ArgumentParser:
     bench.add_argument("--max-tokens", type=int, default=32)
     bench.add_argument(
         "--backend",
-        choices=["auto", "mlx", "hf"],
+        choices=["auto", "mlx", "hf", "dflash"],
         default="auto",
     )
     bench.add_argument("--keep-alive", default="5m")
@@ -1775,9 +1788,9 @@ def add_native_run_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--backend",
-        choices=["auto", "mlx", "hf", "mlx-vlm", "hf-vlm"],
+        choices=["auto", "mlx", "hf", "mlx-vlm", "hf-vlm", "dflash"],
         default="auto",
-        help="Model backend. Auto selects text or vision MLX/HF adapters from the model architecture.",
+        help="Model backend. DFlash enables target-verified block-diffusion decoding on supported MLX text models.",
     )
     parser.add_argument(
         "--context",
@@ -1789,6 +1802,20 @@ def add_native_run_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--max-tokens", type=int, default=128)
     parser.add_argument("--ngram", type=int, default=2)
     parser.add_argument("--max-draft-tokens", type=int, default=8)
+    parser.add_argument(
+        "--draft-model",
+        help="DFlash draft repository override; supported targets resolve a tested draft automatically.",
+    )
+    parser.add_argument(
+        "--draft-quant",
+        help="DFlash draft quantization, for example w4 or w4:gs64.",
+    )
+    parser.add_argument(
+        "--verify-mode",
+        choices=["dflash", "adaptive", "ddtree", "off"],
+        default="dflash",
+        help="DFlash target verification strategy.",
+    )
     parser.add_argument("--candidate-limit", type=int, default=1)
     parser.add_argument(
         "--reentry-probe-tokens",
