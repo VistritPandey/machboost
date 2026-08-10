@@ -1,0 +1,167 @@
+{
+  "schema_version": "machboost.unique-decode-evidence.v1",
+  "created_at": "2026-08-10",
+  "claim_scope": "Fresh greedy text decode on selected Qwen3.5 target/draft pairs",
+  "hardware": {
+    "chip": "Apple M5 Pro",
+    "cpu_cores": 18,
+    "unified_memory_gb": 48,
+    "operating_system": "macOS 26.6"
+  },
+  "shippable_runtime": {
+    "python": "3.13.3",
+    "mlx": "0.31.2",
+    "mlx_lm": "0.31.3",
+    "dflash_mlx": "0.1.8"
+  },
+  "method": {
+    "prompt_suite": "benchmarks/unique_decode_prompts.jsonl",
+    "prompt_families": [
+      "reasoning-functional-equation",
+      "code-bounded-worker-queue",
+      "operations-incident-plan"
+    ],
+    "throughput_tokens": 512,
+    "measured_repetitions_per_prompt": 3,
+    "temperature": 0,
+    "ignore_eos_for_throughput": true,
+    "verification_mode": "adaptive",
+    "output_validation_tokens": 128,
+    "output_validation_ignores_eos": false,
+    "load_time_included": false,
+    "comparison": "Native and DFlash legs use the same target repository, weights, chat template, and greedy settings."
+  },
+  "shippable_results": [
+    {
+      "target": "mlx-community/Qwen3.5-4B-MLX-bf16",
+      "draft": "z-lab/Qwen3.5-4B-DFlash",
+      "draft_quant": "w4:gs64",
+      "summary": {
+        "native_decode_tokens_per_second_median": 29.358099770791185,
+        "dflash_decode_tokens_per_second_median": 48.51923235561868,
+        "speedup_median": 1.648752599894537,
+        "acceptance_ratio_median": 0.71484375,
+        "native_ttft_ms_median": 885.5178329977207,
+        "dflash_ttft_ms_median": 823.435542,
+        "native_peak_mlx_memory_gb_median": 8.507713124,
+        "dflash_peak_mlx_memory_gb_median": 8.979198347
+      },
+      "prompts": [
+        {
+          "id": "reasoning-functional-equation",
+          "native_tokens_per_second": 30.155291800499384,
+          "dflash_tokens_per_second": 73.72774770718628,
+          "speedup": 2.430972609328364,
+          "acceptance_ratio": 0.814453125
+        },
+        {
+          "id": "code-bounded-worker-queue",
+          "native_tokens_per_second": 29.358099770791185,
+          "dflash_tokens_per_second": 38.42386939084575,
+          "speedup": 1.308799605248097,
+          "acceptance_ratio": 0.640625
+        },
+        {
+          "id": "operations-incident-plan",
+          "native_tokens_per_second": 29.313813926955337,
+          "dflash_tokens_per_second": 48.51923235561868,
+          "speedup": 1.648752599894537,
+          "acceptance_ratio": 0.71484375
+        }
+      ],
+      "output_validation": {
+        "exact_matches": 3,
+        "rows": 3,
+        "exact_match_rate": 1.0,
+        "token_hashes": {
+          "reasoning-functional-equation": "a5b3b4af6be70c7d9ada8294069db5961c86b1759a4a5cd5c3a896a7b8c0ed36",
+          "code-bounded-worker-queue": "396d675395b86206896cc44566fff15c2330727989454554f30cd85d037a8a39",
+          "operations-incident-plan": "cde5d3f6716a9c426b70cd4355e4f7ffdfa46df40a3d498468cf60440eb756cf"
+        }
+      }
+    },
+    {
+      "target": "mlx-community/Qwen3.5-9B-MLX-bf16",
+      "draft": "z-lab/Qwen3.5-9B-DFlash",
+      "draft_quant": "w4",
+      "summary": {
+        "native_decode_tokens_per_second_median": 16.545530239344654,
+        "dflash_decode_tokens_per_second_median": 26.435721155529148,
+        "speedup_median": 1.6072307641722399,
+        "acceptance_ratio_median": 0.689453125,
+        "native_ttft_ms_median": 1915.338166996662,
+        "dflash_ttft_ms_median": 2098.903375,
+        "native_peak_mlx_memory_gb_median": 17.999223728,
+        "dflash_peak_mlx_memory_gb_median": 18.845586025
+      },
+      "prompts": [
+        {
+          "id": "reasoning-functional-equation",
+          "native_tokens_per_second": 15.717317113980984,
+          "dflash_tokens_per_second": 38.866576736397,
+          "speedup": 2.423714160850765,
+          "acceptance_ratio": 0.791015625
+        },
+        {
+          "id": "code-bounded-worker-queue",
+          "native_tokens_per_second": 16.545530239344654,
+          "dflash_tokens_per_second": 26.006717703210516,
+          "speedup": 1.5751247941943427,
+          "acceptance_ratio": 0.68359375
+        },
+        {
+          "id": "operations-incident-plan",
+          "native_tokens_per_second": 16.683109082799398,
+          "dflash_tokens_per_second": 26.435721155529148,
+          "speedup": 1.6072307641722399,
+          "acceptance_ratio": 0.689453125
+        }
+      ],
+      "output_validation": {
+        "exact_matches": 2,
+        "rows": 3,
+        "exact_match_rate": 0.6666666666666666,
+        "mismatch": {
+          "id": "code-bounded-worker-queue",
+          "first_difference_token_index": 65,
+          "native_token": 23022,
+          "accelerated_token": 63173,
+          "native_token_hash": "08b0c080b16a9b0665ba36653f5010377230672728f6ecaeae964c893c2b41f8",
+          "accelerated_token_hash": "1f22fa928034401a23a96d9d3a06405237ab709ccc31d1864fe8b927653ff242"
+        }
+      }
+    }
+  ],
+  "quantized_control": {
+    "runtime": "editable dflash-mlx 0.1.10; diagnostic, not the bundled release runtime",
+    "target": "mlx-community/Qwen3.5-9B-MLX-4bit",
+    "adaptive": {
+      "native_tokens_per_second_median": 54.625881746175345,
+      "dflash_tokens_per_second_median": 68.32161205488428,
+      "speedup_median": 1.3183460693913418,
+      "prompt_speedup_range": [1.2177719422790578, 1.7309074477607584],
+      "acceptance_ratio_median": 0.677734375,
+      "output_divergence_observed": true
+    },
+    "fixed_16": {
+      "native_tokens_per_second_median": 51.425842155276925,
+      "dflash_tokens_per_second_median": 44.13975323004033,
+      "speedup_median": 0.8419111426756976,
+      "prompt_speedup_range": [0.7606287000163491, 1.6282490555265956]
+    }
+  },
+  "interpretation": [
+    "The 4B BF16 result supports a conditional fresh-decode acceleration claim on this model, prompt suite, runtime, and machine.",
+    "The 9B results fail the strict output-equivalence gate and remain experimental even where throughput improves.",
+    "A reasoning prompt exceeds 2x on both BF16 targets, but the three-family medians remain near 1.6x.",
+    "These results do not establish universal end-to-end speedup, semantic quality equivalence, sampling equivalence, or performance on unseen workloads.",
+    "BF16 DFlash pairs use substantially more disk and unified memory than ordinary 4-bit native aliases."
+  ],
+  "related_primary_sources": [
+    "https://arxiv.org/abs/2602.06036",
+    "https://github.com/bstnxbt/dflash-mlx",
+    "https://github.com/ml-explore/mlx-lm/issues/1470",
+    "https://arxiv.org/abs/2607.17283",
+    "https://arxiv.org/abs/2607.25852"
+  ]
+}
