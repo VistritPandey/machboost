@@ -1427,8 +1427,6 @@ def run_decode_bench(
             str(args.runs),
             "--cooldown",
             str(args.cooldown),
-            "--copyspec-mode",
-            "off",
         ]
         if args.prompt:
             benchmark_args.extend(["--prompt", args.prompt])
