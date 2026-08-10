@@ -21,7 +21,23 @@ Install the optional runtime and run a supported alias:
 
 ```sh
 pip install -e ".[dflash]"
-machboost run qwen3.5:4b --backend dflash --show-stats
+machboost pull qwen3.5:4b-dflash
+machboost run qwen3.5:4b-dflash --show-stats
+```
+
+The `-dflash` suffix is a normal MachBoost model name. OpenAI- and
+Ollama-compatible clients select it through their standard `model` field; they do
+not need a MachBoost-specific request extension. Pulling the alias downloads both
+the target and its paired draft model, and catalog cache state is ready only when
+both repositories are present.
+
+```json
+{
+  "model": "qwen3.5:4b-dflash",
+  "messages": [{"role": "user", "content": "Explain a mutex."}],
+  "temperature": 0,
+  "stream": true
+}
 ```
 
 Benchmark fresh prompts against ordinary autoregressive generation from the same
@@ -36,14 +52,36 @@ machboost bench-decode qwen3.5:4b \
   --output results/local/qwen35-4b-decode
 ```
 
-`bench-decode` runs every non-empty JSONL row unless `--limit` is supplied. The
-`--no-eos` setting is useful for steady-state throughput comparisons; it is not a
-realistic chat-latency measurement. Run without it when measuring complete answers.
+`bench-decode` runs every non-empty JSONL row unless `--limit` is supplied. It also
+compares native and accelerated greedy outputs for the first 128 generated tokens,
+stores only token hashes and mismatch metadata, and exits nonzero if any sequence
+differs. Set `--validation-tokens 0` only when intentionally collecting a
+non-equivalent throughput diagnostic. The `--no-eos` setting is useful for
+steady-state throughput comparisons; it is not a realistic chat-latency
+measurement. Run without it when measuring complete answers.
 
 The default adaptive verifier reduces the proposed block when recent acceptance is
 too low. A fixed `--verify-mode dflash` can be faster for highly predictable output,
 but it can regress workloads with lower acceptance. Always calibrate against the
 same target weights and representative prompts before selecting it.
+
+## Current Apple M5 Pro evidence
+
+The checked-in three-prompt suite covers mathematical reasoning, code generation,
+and an operations plan. Each throughput row uses 512 generated tokens, three
+measured repetitions, greedy decoding, and the same loaded target weights for native
+and accelerated legs.
+
+| Target | Verifier | Native | DFlash | Median | Prompt range | Output gate |
+|---|---:|---:|---:|---:|---:|---:|
+| Qwen3.5 4B BF16 | adaptive | 28.25 tok/s | 46.81 tok/s | 1.64x | 1.31-2.54x | 3/3 exact at 128 tokens |
+| Qwen3.5 9B 4-bit | adaptive | 54.63 tok/s | 68.32 tok/s | 1.32x | 1.22-1.73x | divergence observed; experimental |
+| Qwen3.5 9B 4-bit | fixed 16 | 51.43 tok/s | 44.14 tok/s | 0.84x | 0.76-1.63x | not promoted |
+
+The 9B adaptive result is useful as a practical quantized control, but its greedy
+output did not always match native MLX. The 4B BF16 path passed the strict sequence
+gate on this suite. Neither result establishes quality or equivalence for unseen
+prompts, another runtime version, or a different quantization.
 
 ## Boundaries
 
@@ -54,6 +92,9 @@ same target weights and representative prompts before selecting it.
 - Target verification means no draft-only token is emitted. It does not guarantee
   byte equality with a different runtime, prompt template, quantization, or floating
   point dispatch path.
+- `mlx-lm` currently has an open report of greedy speculative decoding diverging
+  from plain generation. MachBoost therefore measures token equality instead of
+  inferring it from the algorithm's verifier contract.
 - Full-precision DFlash and quantized native generation answer different practical
   questions. Same-weight speedup measures the decoding algorithm; absolute tokens
   per second against a quantized runtime measures user-visible performance.
@@ -86,7 +127,7 @@ license boundary, and a no-regression routing gate.
 
 - [DFlash: Block Diffusion for Flash Speculative Decoding](https://arxiv.org/abs/2602.06036)
 - [DFlash MLX runtime](https://github.com/bstnxbt/dflash-mlx)
+- [MLX-LM greedy speculative divergence report](https://github.com/ml-explore/mlx-lm/issues/1470)
 - [Speculative Speculative Decoding](https://arxiv.org/abs/2603.03251)
 - [BaseRT on M5 neural accelerators](https://arxiv.org/abs/2607.19438)
 - [MLX-LM EAGLE-3 Apple Silicon analysis](https://github.com/ml-explore/mlx-lm/discussions/890)
-
