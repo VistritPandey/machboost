@@ -1416,6 +1416,9 @@ def run_decode_bench(
     error_stream = error_stream or sys.stderr
     try:
         from dflash_mlx.benchmark import main as dflash_benchmark_main
+        from dflash_mlx.model import DFlashDraftModelArgs
+
+        from .adapters.dflash import _load_runtime_bundle_compat
 
         resolution = resolve_model(args.model, "dflash")
         benchmark_args = [
@@ -1441,9 +1444,12 @@ def run_decode_bench(
         if args.output:
             benchmark_args.extend(["--out", args.output])
         try:
-            dflash_benchmark_main(
-                benchmark_args,
-                prog="machboost bench-decode",
+            _load_runtime_bundle_compat(
+                lambda: dflash_benchmark_main(
+                    benchmark_args,
+                    prog="machboost bench-decode",
+                ),
+                DFlashDraftModelArgs,
             )
         except SystemExit as exc:
             return int(exc.code or 0)
