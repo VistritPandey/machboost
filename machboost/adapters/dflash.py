@@ -67,7 +67,7 @@ class DFlashAccelerator:
         *,
         draft_model: Optional[str] = None,
         draft_quant: Optional[str] = None,
-        verify_mode: str = "dflash",
+        verify_mode: str = "adaptive",
         lazy: bool = True,
     ) -> "DFlashAccelerator":
         try:
