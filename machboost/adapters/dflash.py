@@ -49,6 +49,7 @@ class DFlashAccelerator:
         self.runtime_context = runtime_context
         self.model = bundle.target_model
         self.tokenizer = bundle.tokenizer
+        self.service = self
         self.model_name = str(bundle.resolved_model_ref)
         self.draft_model_name = str(bundle.resolved_draft_ref)
         self._stream_generate = stream_generate_fn
@@ -113,6 +114,8 @@ class DFlashAccelerator:
         temperature: float = 0.0,
         enable_thinking: bool = False,
         generation_options: Optional[dict[str, Any]] = None,
+        stop_strings: Optional[Sequence[str]] = None,
+        tools: Optional[Sequence[dict[str, Any]]] = None,
         **_: Any,
     ) -> tuple[str, DFlashRunStats]:
         if context:
@@ -122,7 +125,12 @@ class DFlashAccelerator:
         options = dict(generation_options or {})
         effective_temperature = float(options.get("temperature", temperature))
         self._require_greedy(effective_temperature)
-        prompt = self._chat_prompt(messages, enable_thinking=enable_thinking)
+        self._require_no_stop_strings(stop_strings)
+        prompt = self._chat_prompt(
+            messages,
+            enable_thinking=enable_thinking,
+            tools=tools,
+        )
         return self._generate_prompt(prompt, max_tokens=max_tokens, on_text=on_text)
 
     def generate(
@@ -133,6 +141,7 @@ class DFlashAccelerator:
         context: Optional[Iterable[str] | str] = None,
         on_text: Optional[Callable[[str], None]] = None,
         generation_options: Optional[dict[str, Any]] = None,
+        stop_strings: Optional[Sequence[str]] = None,
         **_: Any,
     ) -> tuple[str, DFlashRunStats]:
         if context:
@@ -141,6 +150,7 @@ class DFlashAccelerator:
             )
         options = dict(generation_options or {})
         self._require_greedy(float(options.get("temperature", 0.0)))
+        self._require_no_stop_strings(stop_strings)
         return self._generate_prompt(prompt, max_tokens=max_tokens, on_text=on_text)
 
     def _chat_prompt(
@@ -148,12 +158,15 @@ class DFlashAccelerator:
         messages: Sequence[dict[str, Any]],
         *,
         enable_thinking: bool,
+        tools: Optional[Sequence[dict[str, Any]]],
     ) -> str:
         kwargs = {
             "tokenize": False,
             "add_generation_prompt": True,
             "enable_thinking": enable_thinking,
         }
+        if tools:
+            kwargs["tools"] = list(tools)
         try:
             return str(self.tokenizer.apply_chat_template(list(messages), **kwargs))
         except TypeError:
@@ -279,6 +292,40 @@ class DFlashAccelerator:
             raise ValueError(
                 "DFlash currently supports greedy decoding only; set temperature to 0."
             )
+
+    @staticmethod
+    def _require_no_stop_strings(stop_strings: Optional[Sequence[str]]) -> None:
+        if stop_strings:
+            raise ValueError(
+                "DFlash custom stop strings are not supported yet; use the model EOS token."
+            )
+
+    def encode(self, text: str, *, add_special_tokens: bool = False) -> tuple[int, ...]:
+        try:
+            tokens = self.tokenizer.encode(
+                text,
+                add_special_tokens=add_special_tokens,
+            )
+        except TypeError:
+            tokens = self.tokenizer.encode(text)
+        return tuple(int(token) for token in tokens)
+
+    def decode(
+        self,
+        tokens: Iterable[int],
+        *,
+        skip_special_tokens: bool = True,
+    ) -> str:
+        values = [int(token) for token in tokens]
+        try:
+            return str(
+                self.tokenizer.decode(
+                    values,
+                    skip_special_tokens=skip_special_tokens,
+                )
+            )
+        except TypeError:
+            return str(self.tokenizer.decode(values))
 
     def close(self) -> None:
         if self._closed:
