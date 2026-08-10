@@ -75,14 +75,16 @@ and accelerated legs.
 | Target | Verifier | Native | DFlash | Median | Prompt range | Output gate |
 |---|---:|---:|---:|---:|---:|---:|
 | Qwen3.5 4B BF16 | adaptive | 29.36 tok/s | 48.52 tok/s | 1.65x | 1.31-2.43x | 3/3 exact at 128 tokens |
+| Qwen3.5 9B BF16 | adaptive | 16.55 tok/s | 26.44 tok/s | 1.61x | 1.58-2.42x | 2/3 exact; experimental |
 | Qwen3.5 9B 4-bit | adaptive | 54.63 tok/s | 68.32 tok/s | 1.32x | 1.22-1.73x | divergence observed; experimental |
 | Qwen3.5 9B 4-bit | fixed 16 | 51.43 tok/s | 44.14 tok/s | 0.84x | 0.76-1.63x | not promoted |
 
-The 4B row was reproduced with the shippable `dflash-mlx==0.1.8` wheel. The 9B
-adaptive result is useful as a practical quantized control, but its greedy
-output did not always match native MLX. The 4B BF16 path passed the strict sequence
-gate on this suite. Neither result establishes quality or equivalence for unseen
-prompts, another runtime version, or a different quantization.
+Both BF16 rows were reproduced with the shippable `dflash-mlx==0.1.8` wheel. The
+9B BF16 code fixture diverged at generated token 65 despite improving throughput;
+the 9B adaptive 4-bit result is a separate practical quantized control and also
+showed divergence. The 4B BF16 path passed the strict sequence gate on this suite.
+None of these results establishes quality or equivalence for unseen prompts,
+another runtime version, or a different quantization.
 
 ## Boundaries
 
