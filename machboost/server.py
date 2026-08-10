@@ -22,7 +22,13 @@ from . import __version__
 from .accelerator import Accelerator, render_chat_prompt
 from .memory import CacheNamespace, MemorySearch, TeamMemoryStore, exchange_memory
 from .model_store import ModelStore, StoredModel, apply_stored_model
-from .models import catalog_rows, model_targets, preflight_model, resolve_model
+from .models import (
+    catalog_rows,
+    model_repositories,
+    model_targets,
+    preflight_model,
+    resolve_model,
+)
 from .ollama_compat import (
     apply_generate_template,
     normalize_ollama_options,
@@ -838,28 +844,59 @@ class RuntimeManager:
             from huggingface_hub import snapshot_download
         except ImportError as exc:
             raise ImportError("Model downloads require `huggingface-hub` or a MachBoost MLX/HF extra.") from exc
-        if progress is not None:
-            progress(
-                {
-                    "status": "resolving",
-                    "model": model,
-                    "resolved_model": resolution.model,
-                }
-            )
+        repositories = model_repositories(model)
+        downloaded_paths: list[str] = []
+        for index, repository in enumerate(repositories):
+            check_cancelled(cancel_event)
+            component = "target" if index == 0 else "draft"
+            if progress is not None:
+                progress(
+                    {
+                        "status": "resolving",
+                        "model": model,
+                        "resolved_model": repository,
+                        "repository": repository,
+                        "component": component,
+                    }
+                )
 
-        tqdm_class = download_progress_class(progress, cancel_event)
-        downloaded = snapshot_download(
-            repo_id=resolution.model,
-            revision=revision,
-            tqdm_class=tqdm_class,
-        )
-        check_cancelled(cancel_event)
+            def component_progress(
+                event: dict[str, Any],
+                *,
+                repository: str = repository,
+                component: str = component,
+            ) -> None:
+                if progress is not None:
+                    progress(
+                        {
+                            **event,
+                            "repository": repository,
+                            "component": component,
+                        }
+                    )
+
+            tqdm_class = download_progress_class(
+                component_progress if progress is not None else None,
+                cancel_event,
+            )
+            downloaded_paths.append(
+                str(
+                    snapshot_download(
+                        repo_id=repository,
+                        revision=revision if index == 0 else None,
+                        tqdm_class=tqdm_class,
+                    )
+                )
+            )
+            check_cancelled(cancel_event)
         return {
             "status": "success",
             "model": model,
             "resolved_model": resolution.model,
             "backend": resolution.backend,
-            "path": str(downloaded),
+            "path": downloaded_paths[0],
+            "paths": downloaded_paths,
+            "repositories": list(repositories),
         }
 
     def stop(self, model: Optional[str] = None) -> int:
