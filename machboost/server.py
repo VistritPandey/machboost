@@ -254,6 +254,9 @@ class ModelConfig:
     lazy: bool = False
     vision_cache_size: int = 20
     replicas: int = DEFAULT_REPLICAS
+    draft_model: Optional[str] = None
+    draft_quant: Optional[str] = None
+    verify_mode: str = "dflash"
 
 
 @dataclass
@@ -306,6 +309,10 @@ class LoadedModel:
             "boost_enabled": self.config.boost_enabled,
             "scheduler": self.scheduler.snapshot(),
         }
+        if self.config.backend == "dflash":
+            result["draft_model"] = self.config.draft_model
+            result["draft_quant"] = self.config.draft_quant
+            result["verify_mode"] = self.config.verify_mode
         cache_info = getattr(self.accelerator, "cache_info", None)
         if callable(cache_info):
             result["vision_cache"] = cache_info()
@@ -961,6 +968,9 @@ def model_config(
         lazy=bool(options.get("lazy", False)),
         vision_cache_size=max(1, int(options.get("vision_cache_size", 20))),
         replicas=effective_replicas,
+        draft_model=_optional_string(options.get("draft_model")),
+        draft_quant=_optional_string(options.get("draft_quant")),
+        verify_mode=str(options.get("verify_mode", "dflash")),
     )
 
 
@@ -990,6 +1000,16 @@ def load_accelerator(config: ModelConfig) -> Accelerator:
             config.model,
             lazy=config.lazy,
             vision_cache_size=config.vision_cache_size,
+        )
+    if config.backend == "dflash":
+        from .adapters.dflash import DFlashAccelerator
+
+        return DFlashAccelerator.from_pretrained(
+            config.model,
+            draft_model=config.draft_model,
+            draft_quant=config.draft_quant,
+            verify_mode=config.verify_mode,
+            lazy=config.lazy,
         )
     if config.backend == "hf-vlm":
         raise ImportError(
