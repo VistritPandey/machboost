@@ -310,6 +310,41 @@ class CLITests(unittest.TestCase):
         )
         accelerator.close.assert_called_once()
 
+    def test_decode_benchmark_fails_when_output_validation_diverges(self):
+        args = cli.build_parser().parse_args(
+            [
+                "bench-decode",
+                "qwen3.5:4b",
+                "--prompt",
+                "hello",
+                "--validation-tokens",
+                "16",
+            ]
+        )
+        package = types.ModuleType("dflash_mlx")
+        package.__path__ = []
+        benchmark_module = types.ModuleType("dflash_mlx.benchmark")
+        benchmark_module.main = Mock(return_value=None)
+        model_module = types.ModuleType("dflash_mlx.model")
+        model_module.DFlashDraftModelArgs = type("DraftArgs", (), {})
+        validation = {"rows": 1, "exact_matches": 0}
+
+        with (
+            patch.dict(
+                "sys.modules",
+                {
+                    "dflash_mlx": package,
+                    "dflash_mlx.benchmark": benchmark_module,
+                    "dflash_mlx.model": model_module,
+                },
+            ),
+            patch("machboost.cli.validate_decode_outputs", return_value=validation),
+            patch("machboost.adapters.dflash._load_runtime_bundle_compat"),
+        ):
+            code = cli.run_decode_bench(args, error_stream=io.StringIO())
+
+        self.assertEqual(code, 1)
+
     def test_render_chat_prompt_includes_system_and_history(self):
         prompt = cli.render_chat_prompt(
             "Answer with local context.",
