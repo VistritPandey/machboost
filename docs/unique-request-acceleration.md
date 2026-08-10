@@ -1,0 +1,92 @@
+# Unique-request acceleration
+
+MachBoost treats first-request latency as two separate problems:
+
+1. **Prefill** processes the prompt, retrieved repository chunks, and visual inputs.
+2. **Decode** produces output tokens autoregressively.
+
+A method that improves one phase must not be reported as if it improved the other.
+Prefix caches reduce repeated prefill. They do not make a new output sequence decode
+faster. DFlash reduces target decode passes on supported text models. It does not
+remove the first prefill, and it does not currently accelerate vision decoding.
+
+## Verified DFlash decoding
+
+The optional `dflash` backend uses a small block-diffusion draft model to propose a
+block of future tokens in parallel. The target model verifies those proposals and
+only target-approved tokens are emitted. MachBoost keeps the target and draft
+resident behind the same bounded, concurrent API used by its other native backends.
+
+Install the optional runtime and run a supported alias:
+
+```sh
+pip install -e ".[dflash]"
+machboost run qwen3.5:4b --backend dflash --show-stats
+```
+
+Benchmark fresh prompts against ordinary autoregressive generation from the same
+target weights:
+
+```sh
+machboost bench-decode qwen3.5:4b \
+  --prompt-file benchmarks/unique_decode_prompts.jsonl \
+  --runs 3 \
+  --max-tokens 512 \
+  --no-eos \
+  --output results/local/qwen35-4b-decode
+```
+
+`bench-decode` runs every non-empty JSONL row unless `--limit` is supplied. The
+`--no-eos` setting is useful for steady-state throughput comparisons; it is not a
+realistic chat-latency measurement. Run without it when measuring complete answers.
+
+The default adaptive verifier reduces the proposed block when recent acceptance is
+too low. A fixed `--verify-mode dflash` can be faster for highly predictable output,
+but it can regress workloads with lower acceptance. Always calibrate against the
+same target weights and representative prompts before selecting it.
+
+## Boundaries
+
+- DFlash is explicit opt-in and only supports model/draft pairs published for the
+  target architecture. Unsupported models continue to use their native backend.
+- The current integration is greedy-only and rejects custom stop strings. These
+  restrictions avoid presenting an unverified sampling path as equivalent.
+- Target verification means no draft-only token is emitted. It does not guarantee
+  byte equality with a different runtime, prompt template, quantization, or floating
+  point dispatch path.
+- Full-precision DFlash and quantized native generation answer different practical
+  questions. Same-weight speedup measures the decoding algorithm; absolute tokens
+  per second against a quantized runtime measures user-visible performance.
+- Short answers can see little benefit because model load, prefill, and first-token
+  latency dominate. Long generations expose decode throughput more clearly.
+- Additional draft weights increase disk and unified-memory use.
+
+## Phase-aware roadmap
+
+No single mechanism covers all first requests. The intended runtime policy is:
+
+| Request phase | Exact acceleration path | Current state |
+|---|---|---|
+| New long prompt | Hardware-specific prefill kernels | research; not claimed by MachBoost |
+| New text output | Target-verified DFlash decode | implemented for selected Qwen targets |
+| Reused repository or system prefix | Exact prompt-state reuse | implemented |
+| Identical deterministic request | Scoped exact-response reuse | implemented, opt-in |
+| Concurrent team traffic | Continuous admission, fairness, and replicas | implemented; aggregate throughput differs from single-request latency |
+| New visual input | Model-specific token reduction | experimental and approximate |
+
+Two recent directions inform the next experiments. BaseRT reports M5 Metal 4 tensor
+kernels that improve prompt processing by up to 3.9x over MLX while its decode gain
+is smaller. Speculative Speculative Decoding overlaps drafting and verification on
+separate compute resources and reports up to 5x over autoregressive generation in a
+multi-GPU system. Neither result transfers automatically to one Apple GPU. A useful
+MachBoost implementation would need a reproduced same-model benchmark, an explicit
+license boundary, and a no-regression routing gate.
+
+## Related work
+
+- [DFlash: Block Diffusion for Flash Speculative Decoding](https://arxiv.org/abs/2602.06036)
+- [DFlash MLX runtime](https://github.com/bstnxbt/dflash-mlx)
+- [Speculative Speculative Decoding](https://arxiv.org/abs/2603.03251)
+- [BaseRT on M5 neural accelerators](https://arxiv.org/abs/2607.19438)
+- [MLX-LM EAGLE-3 Apple Silicon analysis](https://github.com/ml-explore/mlx-lm/discussions/890)
+
