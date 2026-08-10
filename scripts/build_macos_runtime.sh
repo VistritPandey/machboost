@@ -83,6 +83,7 @@ import platform
 import sys
 
 import machboost
+import dflash_mlx
 import mlx
 import mlx_lm
 import mlx_vlm
@@ -93,6 +94,7 @@ assert platform.python_version() == expected_python
 assert machboost.__version__ == expected_machboost
 print(json.dumps({
     "machboost": machboost.__version__,
+    "dflash_mlx": getattr(dflash_mlx, "__version__", "installed"),
     "python": platform.python_version(),
     "architecture": platform.machine(),
     "mlx": getattr(mlx, "__version__", "installed"),
