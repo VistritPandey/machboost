@@ -33,7 +33,14 @@ class FakeTokenizer:
 
     def apply_chat_template(self, messages, **kwargs):
         self.chat_messages = list(messages)
+        self.chat_kwargs = dict(kwargs)
         return "<chat>"
+
+    def encode(self, text, **kwargs):
+        return [len(text), int(bool(kwargs.get("add_special_tokens")))]
+
+    def decode(self, tokens, **kwargs):
+        return ":".join(str(token) for token in tokens)
 
 
 @dataclass
@@ -109,6 +116,7 @@ class DFlashAdapterTests(unittest.TestCase):
         text, _ = self.accelerator.generate_chat(
             [{"role": "user", "content": "hello"}],
             max_tokens=4,
+            tools=[{"type": "function", "function": {"name": "lookup"}}],
         )
 
         self.assertEqual(text, "Hello world!")
@@ -116,6 +124,10 @@ class DFlashAdapterTests(unittest.TestCase):
         self.assertEqual(
             self.bundle.tokenizer.chat_messages,
             [{"role": "user", "content": "hello"}],
+        )
+        self.assertEqual(
+            self.bundle.tokenizer.chat_kwargs["tools"][0]["function"]["name"],
+            "lookup",
         )
 
     def test_rejects_sampling_instead_of_changing_semantics(self):
@@ -129,6 +141,18 @@ class DFlashAdapterTests(unittest.TestCase):
     def test_rejects_unwired_repository_context(self):
         with self.assertRaisesRegex(ValueError, "not wired yet"):
             self.accelerator.generate("prompt", max_tokens=4, context=["repo"])
+
+    def test_exposes_tokenizer_service_for_context_limits(self):
+        self.assertEqual(self.accelerator.encode("abc"), (3, 0))
+        self.assertEqual(self.accelerator.decode((3, 0)), "3:0")
+
+    def test_rejects_stop_strings_instead_of_ignoring_them(self):
+        with self.assertRaisesRegex(ValueError, "stop strings"):
+            self.accelerator.generate(
+                "prompt",
+                max_tokens=4,
+                stop_strings=["STOP"],
+            )
 
     def test_normalizes_nested_checkpoint_config_and_restores_runtime(self):
         class DraftArgs:
