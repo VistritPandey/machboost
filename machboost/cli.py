@@ -1784,8 +1784,8 @@ def build_parser() -> argparse.ArgumentParser:
     decode_bench.add_argument(
         "--verify-mode",
         choices=["dflash", "adaptive", "ddtree", "off"],
-        default="dflash",
-        help="Target verifier strategy; dflash matches the resident backend default.",
+        default="adaptive",
+        help="Target verifier strategy; adaptive avoids costly full blocks when acceptance drops.",
     )
     decode_bench.add_argument(
         "--no-eos",
@@ -1934,7 +1934,7 @@ def add_native_run_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--verify-mode",
         choices=["dflash", "adaptive", "ddtree", "off"],
-        default="dflash",
+        default="adaptive",
         help="DFlash target verification strategy.",
     )
     parser.add_argument("--candidate-limit", type=int, default=1)
