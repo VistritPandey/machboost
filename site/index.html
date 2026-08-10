@@ -246,10 +246,11 @@ export OPENAI_API_KEY="mbk_employee_key"</code></pre>
         <div class="shell">
           <div class="section-heading section-heading-light">
             <p class="kicker">Measured, not hand-waved</p>
-            <h2>Speed where context repeats.</h2>
+            <h2>Speed where expensive work can be skipped.</h2>
             <p>
-              MachBoost accelerates exact reusable prefixes. It does not claim every
-              first request or every unique prompt becomes faster.
+              MachBoost can reuse exact prefixes or reduce target decode passes on
+              selected verified-decoding models. It does not claim every request,
+              model, or prompt becomes faster.
             </p>
           </div>
 
@@ -266,6 +267,22 @@ export OPENAI_API_KEY="mbk_employee_key"</code></pre>
                 </tr>
               </thead>
               <tbody>
+                <tr>
+                  <td>Fresh unique decode</td>
+                  <td>Qwen3.5 4B BF16</td>
+                  <td>29.36 tok/s</td>
+                  <td>48.52 tok/s</td>
+                  <td class="speedup">1.65×</td>
+                  <td>3/3 exact at 128 tokens</td>
+                </tr>
+                <tr class="control-row">
+                  <td>Fresh unique decode</td>
+                  <td>Qwen3.5 9B BF16</td>
+                  <td>16.55 tok/s</td>
+                  <td>26.44 tok/s</td>
+                  <td class="speedup">1.61×</td>
+                  <td>2/3 exact; experimental</td>
+                </tr>
                 <tr>
                   <td>New adjacent code question</td>
                   <td>Qwen2.5 7B 4-bit</td>
@@ -330,15 +347,24 @@ export OPENAI_API_KEY="mbk_employee_key"</code></pre>
               monorepo, independent standalone threads, alternating order, and the same
               loaded MLX model, weights, prompts, and tokenization within each pair.
               Private paths, prompts, and outputs are not published. Decode time did not
-              improve. Exact replay and semantic memory are separate contracts, not
-              new-question speed claims. The visual figure is the median of six
-              model-level paired medians.
+              improve. The fresh-decode row compares the same BF16 target weights at
+              a fixed 512-token output length using the shippable runtime; prompt
+              medians range from 1.31× to 2.43×, and its three 128-token validation
+              prefixes match. The same-weight 9B BF16 row ranges from 1.58× to
+              2.42×, but its output gate found a mismatch; a faster 9B 4-bit control
+              also diverged. Exact replay and semantic memory are separate contracts.
+              The visual figure is the median of six model-level paired medians.
             </p>
             <div class="artifact-links">
               <a
                 href="https://github.com/VistritPandey/machboost/blob/main/results/team_repository_reuse_qwen25_7b_20260809.json"
               >
                 Team repository audit <i data-lucide="arrow-up-right" aria-hidden="true"></i>
+              </a>
+              <a
+                href="https://github.com/VistritPandey/machboost/blob/main/results/unique_decode_qwen35_20260810.json"
+              >
+                Unique decode matrix <i data-lucide="arrow-up-right" aria-hidden="true"></i>
               </a>
               <a
                 href="https://github.com/VistritPandey/machboost/blob/main/results/vision_cache_qwen_matrix_20260714.json"
