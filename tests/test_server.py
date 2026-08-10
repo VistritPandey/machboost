@@ -399,6 +399,24 @@ class RuntimeManagerTests(unittest.TestCase):
         self.assertEqual(manager.stop("mlx-community/example"), 1)
         self.assertEqual(manager.ps(), [])
 
+    def test_dflash_alias_loads_accelerated_backend_without_request_options(self):
+        loaded = []
+        manager = RuntimeManager(
+            loader=lambda config: loaded.append(config) or FakeAccelerator()
+        )
+
+        manager.chat(
+            "qwen3.5:4b-dflash",
+            [{"role": "user", "content": "Explain a mutex."}],
+        )
+
+        self.assertEqual(len(loaded), 1)
+        self.assertEqual(loaded[0].backend, "dflash")
+        self.assertEqual(
+            loaded[0].model,
+            "mlx-community/Qwen3.5-4B-MLX-bf16",
+        )
+
     def test_finite_keep_alive_evicts_idle_model(self):
         clock = FakeClock()
         manager = RuntimeManager(loader=lambda config: FakeAccelerator(), clock=clock)
