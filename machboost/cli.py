@@ -1422,6 +1422,7 @@ def run_decode_bench(
         from .adapters.dflash import _load_runtime_bundle_compat
 
         resolution = resolve_model(args.model, "dflash")
+        validation_valid = True
         benchmark_args = [
             "--model",
             resolution.model,
@@ -1475,6 +1476,13 @@ def run_decode_bench(
                     f"at {args.validation_tokens} token(s)",
                     file=error_stream,
                 )
+                validation_valid = validation["exact_matches"] == validation["rows"]
+                if not validation_valid:
+                    print(
+                        "output validation failed: accelerated greedy tokens differ from native MLX; "
+                        "treat the throughput result as non-equivalent",
+                        file=error_stream,
+                    )
                 if args.output:
                     output_dir = Path(args.output).expanduser()
                     output_dir.mkdir(parents=True, exist_ok=True)
@@ -1491,7 +1499,7 @@ def run_decode_bench(
                             json.dumps(results, indent=2) + "\n",
                             encoding="utf-8",
                         )
-        return 0
+        return 0 if validation_valid else 1
     except (ImportError, OSError, ValueError) as exc:
         print(f"machboost bench-decode error: {exc}", file=error_stream)
         return 2
