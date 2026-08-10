@@ -256,7 +256,7 @@ class ModelConfig:
     replicas: int = DEFAULT_REPLICAS
     draft_model: Optional[str] = None
     draft_quant: Optional[str] = None
-    verify_mode: str = "dflash"
+    verify_mode: str = "adaptive"
 
 
 @dataclass
@@ -970,7 +970,7 @@ def model_config(
         replicas=effective_replicas,
         draft_model=_optional_string(options.get("draft_model")),
         draft_quant=_optional_string(options.get("draft_quant")),
-        verify_mode=str(options.get("verify_mode", "dflash")),
+        verify_mode=str(options.get("verify_mode", "adaptive")),
     )
 
 
