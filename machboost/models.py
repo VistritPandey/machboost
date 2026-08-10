@@ -364,6 +364,11 @@ def catalog_rows(
         )
     for name in sorted(DFLASH_ALIASES):
         alias = DFLASH_ALIASES[name]
+        validation_status = (
+            "passed_bounded_suite"
+            if name == "qwen3.5:4b-dflash"
+            else "divergence_observed"
+        )
         target_path = cached_repo_path(alias.target)
         draft_path = cached_repo_path(alias.draft)
         cached = target_path is not None and draft_path is not None
@@ -379,6 +384,8 @@ def catalog_rows(
                 "cached_path": str(target_path) if cached else None,
                 "recommended": name == "qwen3.5:4b-dflash",
                 "tested": True,
+                "experimental": name != "qwen3.5:4b-dflash",
+                "validation_status": validation_status,
                 "download_size_gb": alias.download_size_gb,
                 "disk_size_gb": sum(
                     _directory_size_gb(path) or 0.0
