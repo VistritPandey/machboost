@@ -1408,6 +1408,53 @@ def run_context_bench(
     return 0 if artifact["summary"]["valid"] else 1
 
 
+def run_decode_bench(
+    args: argparse.Namespace,
+    *,
+    error_stream=None,
+) -> int:
+    error_stream = error_stream or sys.stderr
+    try:
+        from dflash_mlx.benchmark import main as dflash_benchmark_main
+
+        resolution = resolve_model(args.model, "dflash")
+        benchmark_args = [
+            "--model",
+            resolution.model,
+            "--max-tokens",
+            str(args.max_tokens),
+            "--repeat",
+            str(args.runs),
+            "--cooldown",
+            str(args.cooldown),
+            "--copyspec-mode",
+            "off",
+        ]
+        if args.prompt:
+            benchmark_args.extend(["--prompt", args.prompt])
+        if args.prompt_file:
+            benchmark_args.extend(["--prompt-file", args.prompt_file])
+        if args.draft_model:
+            benchmark_args.extend(["--draft", args.draft_model])
+        if args.draft_quant:
+            benchmark_args.extend(["--draft-quant", args.draft_quant])
+        if args.no_eos:
+            benchmark_args.append("--no-eos")
+        if args.output:
+            benchmark_args.extend(["--out", args.output])
+        try:
+            dflash_benchmark_main(
+                benchmark_args,
+                prog="machboost bench-decode",
+            )
+        except SystemExit as exc:
+            return int(exc.code or 0)
+        return 0
+    except (ImportError, OSError, ValueError) as exc:
+        print(f"machboost bench-decode error: {exc}", file=error_stream)
+        return 2
+
+
 def _context_benchmark_prompt(args: argparse.Namespace) -> str:
     if args.prompt and args.prompt_file:
         raise ValueError("use either --prompt or --prompt-file, not both")
@@ -1684,6 +1731,29 @@ def build_parser() -> argparse.ArgumentParser:
     context_bench.add_argument("--local-files-only", action="store_true")
     context_bench.add_argument("--json", action="store_true")
     context_bench.add_argument("--output", help="Write the JSON artifact to this path.")
+
+    decode_bench = subcommands.add_parser(
+        "bench-decode",
+        help="Benchmark native MLX against target-verified DFlash decoding.",
+    )
+    decode_bench.add_argument("model", help="Supported model alias or repository.")
+    decode_prompt = decode_bench.add_mutually_exclusive_group()
+    decode_prompt.add_argument("--prompt", help="Single unique prompt to benchmark.")
+    decode_prompt.add_argument(
+        "--prompt-file",
+        help="JSONL prompt suite with id, suite, and prompt fields.",
+    )
+    decode_bench.add_argument("--draft-model", help="DFlash draft repository override.")
+    decode_bench.add_argument("--draft-quant", help="Draft quantization such as w4:gs64.")
+    decode_bench.add_argument("--max-tokens", type=int, default=512)
+    decode_bench.add_argument("--runs", type=int, default=3)
+    decode_bench.add_argument("--cooldown", type=float, default=1.0)
+    decode_bench.add_argument(
+        "--no-eos",
+        action="store_true",
+        help="Ignore EOS so every leg measures the requested decode length.",
+    )
+    decode_bench.add_argument("--output", help="DFlash benchmark artifact directory.")
 
     warm = subcommands.add_parser("warm", help="Preload a native model into resident memory.")
     add_native_run_arguments(warm)
@@ -1986,6 +2056,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return run_latency_bench(args)
     if args.command == "bench-context":
         return run_context_bench(args)
+    if args.command == "bench-decode":
+        return run_decode_bench(args)
     if args.command == "serve":
         return run_serve(args)
     if args.command == "warm":
