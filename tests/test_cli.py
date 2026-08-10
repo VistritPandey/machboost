@@ -237,6 +237,79 @@ class CLITests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "line 2"):
                 cli._jsonl_row_count(str(path))
 
+    def test_decode_validation_prompt_loader_honors_limit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "prompts.jsonl"
+            path.write_text(
+                '{"id":"one","prompt":"First"}\n'
+                '{"id":"two","prompt":"Second"}\n',
+                encoding="utf-8",
+            )
+            args = SimpleNamespace(prompt=None, prompt_file=str(path), limit=1)
+
+            rows = cli._decode_validation_prompts(args)
+
+        self.assertEqual(rows, [{"id": "one", "prompt": "First"}])
+
+    def test_decode_output_validation_reports_first_token_difference(self):
+        class Tokenizer:
+            def apply_chat_template(self, messages, **kwargs):
+                return messages[0]["content"]
+
+            def encode(self, text):
+                return [ord(character) for character in text]
+
+        accelerator = SimpleNamespace(
+            model=object(),
+            tokenizer=Tokenizer(),
+            generate=lambda prompt, max_tokens: (
+                "abX",
+                SimpleNamespace(acceptance_ratio=0.75),
+            ),
+            close=Mock(),
+        )
+        mlx = types.ModuleType("mlx")
+        mlx.__path__ = []
+        mlx_core = types.ModuleType("mlx.core")
+        mlx_core.clear_cache = Mock()
+        mlx_lm = types.ModuleType("mlx_lm")
+        mlx_lm.generate = lambda *args, **kwargs: "abc"
+        sample_utils = types.ModuleType("mlx_lm.sample_utils")
+        sample_utils.make_sampler = lambda **kwargs: object()
+
+        with (
+            patch.dict(
+                "sys.modules",
+                {
+                    "mlx": mlx,
+                    "mlx.core": mlx_core,
+                    "mlx_lm": mlx_lm,
+                    "mlx_lm.sample_utils": sample_utils,
+                },
+            ),
+            patch(
+                "machboost.adapters.dflash.DFlashAccelerator.from_pretrained",
+                return_value=accelerator,
+            ),
+        ):
+            result = cli.validate_decode_outputs(
+                "acme/target",
+                [{"id": "fixture", "prompt": "hello"}],
+                draft_model=None,
+                draft_quant=None,
+                verify_mode="adaptive",
+                max_tokens=3,
+            )
+
+        self.assertEqual(result["exact_matches"], 0)
+        self.assertEqual(result["exact_match_rate"], 0.0)
+        self.assertEqual(result["results"][0]["common_prefix_tokens"], 2)
+        self.assertEqual(
+            result["results"][0]["first_difference"],
+            {"index": 2, "native_token": ord("c"), "accelerated_token": ord("X")},
+        )
+        accelerator.close.assert_called_once()
+
     def test_render_chat_prompt_includes_system_and_history(self):
         prompt = cli.render_chat_prompt(
             "Answer with local context.",
