@@ -221,6 +221,7 @@ class CLITests(unittest.TestCase):
         self.assertIn("mlx-community/Qwen3.5-4B-MLX-bf16", forwarded)
         self.assertIn("benchmarks/unique_decode_prompts.jsonl", forwarded)
         self.assertIn("--no-eos", forwarded)
+        self.assertEqual(args.cooldown, 1)
         benchmark.assert_called_once_with(
             forwarded,
             prog="machboost bench-decode",
