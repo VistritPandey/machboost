@@ -179,6 +179,13 @@ RECOMMENDED_MODELS = {
     "qwen3-vl:4b",
 }
 
+DFLASH_TARGETS = {
+    "qwen3:4b": "Qwen/Qwen3-4B",
+    "qwen3:8b": "Qwen/Qwen3-8B",
+    "qwen3.5:4b": "mlx-community/Qwen3.5-4B-MLX-bf16",
+    "qwen3.5:9b": "mlx-community/Qwen3.5-9B-MLX-bf16",
+}
+
 
 def native_mlx_available() -> bool:
     return (
@@ -206,13 +213,15 @@ def resolve_model(model: str, backend: str = "auto") -> ModelResolution:
 
     selected = backend
     if selected == "dflash":
-        if not alias.mlx:
+        dflash_target = DFLASH_TARGETS.get(alias.name)
+        if dflash_target is None:
             raise ValueError(
-                f"model alias {requested!r} is not available for backend 'dflash'"
+                f"model alias {requested!r} is not supported by the DFlash backend; "
+                f"supported aliases: {', '.join(sorted(DFLASH_TARGETS))}"
             )
         return ModelResolution(
             requested=requested,
-            model=alias.mlx,
+            model=dflash_target,
             backend="dflash",
             alias=alias.name,
         )
