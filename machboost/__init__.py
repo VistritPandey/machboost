@@ -25,6 +25,7 @@ from .context_bench import (
     context_fingerprint,
 )
 from .latency import LATENCY_SCHEMA, benchmark_chat_latency
+from .adapters.dflash import DFlashAccelerator, DFlashRunStats
 from .adapters.mlx_vlm import MLXVLMAccelerator, VisionRunStats
 from .models import ModelAlias, ModelResolution, resolve_model
 from .server import RuntimeManager
@@ -50,6 +51,8 @@ __all__ = [
     "ContentAddressedVisionCache",
     "CONTEXT_BENCH_SCHEMA",
     "CorpusDrafter",
+    "DFlashAccelerator",
+    "DFlashRunStats",
     "GateDecision",
     "GatePolicy",
     "LATENCY_SCHEMA",
