@@ -4,7 +4,7 @@ import unittest
 from dataclasses import dataclass
 from types import SimpleNamespace
 
-from machboost.adapters.dflash import DFlashAccelerator
+from machboost.adapters.dflash import DFlashAccelerator, _load_runtime_bundle_compat
 
 
 class FakeDetokenizer:
@@ -129,6 +129,33 @@ class DFlashAdapterTests(unittest.TestCase):
     def test_rejects_unwired_repository_context(self):
         with self.assertRaisesRegex(ValueError, "not wired yet"):
             self.accelerator.generate("prompt", max_tokens=4, context=["repo"])
+
+    def test_normalizes_nested_checkpoint_config_and_restores_runtime(self):
+        class DraftArgs:
+            @classmethod
+            def from_dict(cls, params):
+                return dict(params)
+
+        original = DraftArgs.__dict__["from_dict"]
+
+        def load_runtime_bundle(**kwargs):
+            return DraftArgs.from_dict(
+                {
+                    "dflash_config": {"block_size": 16},
+                    "rope_parameters": {"rope_theta": 10_000_000},
+                    **kwargs,
+                }
+            )
+
+        result = _load_runtime_bundle_compat(
+            load_runtime_bundle,
+            DraftArgs,
+            model_ref="target",
+        )
+
+        self.assertEqual(result["block_size"], 16)
+        self.assertEqual(result["rope_theta"], 10_000_000)
+        self.assertIs(DraftArgs.__dict__["from_dict"], original)
 
 
 if __name__ == "__main__":
