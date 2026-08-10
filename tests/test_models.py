@@ -7,11 +7,13 @@ from pathlib import Path
 from unittest.mock import patch
 
 from machboost.models import (
+    DFLASH_ALIASES,
     MODEL_ALIASES,
     alias_rows,
     cached_repo_path,
     catalog_rows,
     model_targets,
+    model_repositories,
     preflight_model,
     resolve_model,
 )
@@ -58,10 +60,31 @@ class ModelCatalogTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "supported aliases"):
             resolve_model("llama3.2:3b", backend="dflash")
 
+    def test_dflash_alias_selects_accelerated_backend_without_custom_options(self):
+        resolution = resolve_model("qwen3.5:4b-dflash")
+
+        self.assertEqual(resolution.backend, "dflash")
+        self.assertEqual(resolution.model, "mlx-community/Qwen3.5-4B-MLX-bf16")
+        self.assertEqual(resolution.alias, "qwen3.5:4b-dflash")
+
+    def test_dflash_alias_rejects_incompatible_backend_override(self):
+        with self.assertRaisesRegex(ValueError, "requires the DFlash backend"):
+            resolve_model("qwen3.5:4b-dflash", backend="mlx")
+
+    def test_dflash_alias_lists_target_and_draft_repositories(self):
+        self.assertEqual(
+            model_repositories("qwen3.5:9b-dflash"),
+            (
+                "mlx-community/Qwen3.5-9B-MLX-bf16",
+                "z-lab/Qwen3.5-9B-DFlash",
+            ),
+        )
+
     def test_catalog_rows_are_stable_and_sorted(self):
         rows = alias_rows()
 
-        self.assertEqual([row["name"] for row in rows], sorted(MODEL_ALIASES))
+        expected_names = sorted((*MODEL_ALIASES, *DFLASH_ALIASES))
+        self.assertEqual([row["name"] for row in rows], expected_names)
         self.assertTrue(all(row["mlx"] or row["hf"] for row in rows))
 
     def test_desktop_catalog_includes_capabilities_and_resource_guidance(self):
@@ -78,6 +101,30 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertGreater(llama["download_size_gb"], 0)
         self.assertTrue(vision["recommended"])
         self.assertFalse(vision["cached"])
+
+    def test_desktop_catalog_requires_both_dflash_repositories_in_cache(self):
+        target = Path("/tmp/dflash-target")
+        draft = Path("/tmp/dflash-draft")
+
+        def cached(model):
+            if model == "mlx-community/Qwen3.5-4B-MLX-bf16":
+                return target
+            if model == "z-lab/Qwen3.5-4B-DFlash":
+                return draft
+            return None
+
+        with (
+            patch("machboost.models.cached_repo_path", side_effect=cached),
+            patch("machboost.models.backend_available", return_value=True),
+            patch("machboost.models._directory_size_gb", return_value=1.0),
+        ):
+            rows = catalog_rows(include_cached_repositories=False)
+
+        accelerated = next(row for row in rows if row["name"] == "qwen3.5:4b-dflash")
+        self.assertEqual(accelerated["backend"], "dflash")
+        self.assertEqual(accelerated["draft_repository"], "z-lab/Qwen3.5-4B-DFlash")
+        self.assertTrue(accelerated["cached"])
+        self.assertEqual(accelerated["disk_size_gb"], 2.0)
 
     def test_desktop_catalog_discovers_compatible_custom_mlx_cache(self):
         with tempfile.TemporaryDirectory() as directory:
