@@ -222,7 +222,7 @@ class CLITests(unittest.TestCase):
         self.assertIn("benchmarks/unique_decode_prompts.jsonl", forwarded)
         self.assertIn("--no-eos", forwarded)
         self.assertEqual(forwarded[forwarded.index("--limit") + 1], "3")
-        self.assertEqual(forwarded[forwarded.index("--verify-mode") + 1], "dflash")
+        self.assertEqual(forwarded[forwarded.index("--verify-mode") + 1], "adaptive")
         self.assertEqual(args.cooldown, 1)
         benchmark.assert_called_once_with(
             forwarded,
