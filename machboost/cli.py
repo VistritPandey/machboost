@@ -130,6 +130,9 @@ def doctor_data() -> dict:
             "mlx": asdict(package_status("mlx")),
             "mlx_lm": asdict(package_status("mlx_lm", distribution_name="mlx-lm")),
             "mlx_vlm": asdict(package_status("mlx_vlm", distribution_name="mlx-vlm")),
+            "dflash_mlx": asdict(
+                package_status("dflash_mlx", distribution_name="dflash-mlx")
+            ),
         },
     }
 
@@ -225,6 +228,7 @@ def native_backend_status() -> dict:
     mlx = package_status("mlx")
     mlx_lm = package_status("mlx_lm", distribution_name="mlx-lm")
     mlx_vlm = package_status("mlx_vlm", distribution_name="mlx-vlm")
+    dflash_mlx = package_status("dflash_mlx", distribution_name="dflash-mlx")
     return {
         "hf": {
             "available": torch.available and transformers.available,
@@ -245,6 +249,14 @@ def native_backend_status() -> dict:
             "packages": {
                 "mlx": asdict(mlx),
                 "mlx_vlm": asdict(mlx_vlm),
+            },
+        },
+        "dflash": {
+            "available": mlx.available and mlx_lm.available and dflash_mlx.available,
+            "packages": {
+                "mlx": asdict(mlx),
+                "mlx_lm": asdict(mlx_lm),
+                "dflash_mlx": asdict(dflash_mlx),
             },
         },
     }
