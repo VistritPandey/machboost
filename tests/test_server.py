@@ -16,9 +16,12 @@ from machboost.scheduler import RequestAdmissionError
 from machboost.providers import ProviderStore
 from machboost.server import (
     MachBoostHTTPServer,
+    ModelConfig,
     OperationRegistry,
     RequestCancelled,
     RuntimeManager,
+    load_accelerator,
+    model_config,
     parse_keep_alive,
 )
 from machboost.team import TeamStore
@@ -301,6 +304,47 @@ class FakeClock:
 
 
 class RuntimeManagerTests(unittest.TestCase):
+    def test_dflash_model_config_preserves_decoder_selection(self):
+        config = model_config(
+            "qwen3.5:9b",
+            {
+                "backend": "dflash",
+                "draft_model": "z-lab/custom-draft",
+                "draft_quant": "w4:gs64",
+                "verify_mode": "adaptive",
+            },
+        )
+
+        self.assertEqual(config.backend, "dflash")
+        self.assertEqual(config.draft_model, "z-lab/custom-draft")
+        self.assertEqual(config.draft_quant, "w4:gs64")
+        self.assertEqual(config.verify_mode, "adaptive")
+
+    def test_dflash_loader_receives_resident_decoder_options(self):
+        sentinel = object()
+        config = ModelConfig(
+            model="mlx-community/Qwen3.5-9B-MLX-4bit",
+            backend="dflash",
+            draft_model="z-lab/Qwen3.5-9B-DFlash",
+            draft_quant="w4",
+            verify_mode="adaptive",
+            lazy=True,
+        )
+        with patch(
+            "machboost.adapters.dflash.DFlashAccelerator.from_pretrained",
+            return_value=sentinel,
+        ) as load:
+            result = load_accelerator(config)
+
+        self.assertIs(result, sentinel)
+        load.assert_called_once_with(
+            config.model,
+            draft_model=config.draft_model,
+            draft_quant=config.draft_quant,
+            verify_mode=config.verify_mode,
+            lazy=True,
+        )
+
     def test_generation_throughput_excludes_pull_duration(self):
         now = [0.0]
         registry = OperationRegistry(clock=lambda: now[0])
