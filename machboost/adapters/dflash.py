@@ -33,6 +33,7 @@ class DFlashAccelerator:
 
     supports_vision = False
     _generation_lock = threading.RLock()
+    _load_lock = threading.RLock()
 
     def __init__(
         self,
@@ -69,6 +70,7 @@ class DFlashAccelerator:
         try:
             import mlx.core as mx
             from dflash_mlx.engine.events import SummaryEvent, TokenEvent
+            from dflash_mlx.model import DFlashDraftModelArgs
             from dflash_mlx.runtime import get_stop_token_ids, stream_dflash_generate
             from dflash_mlx.runtime.bundle import load_runtime_bundle
             from dflash_mlx.runtime.context import build_offline_runtime_context
@@ -81,13 +83,16 @@ class DFlashAccelerator:
             verify_mode=verify_mode,
             copyspec_mode="off",
         )
-        bundle = load_runtime_bundle(
-            model_ref=model_name,
-            draft_ref=draft_model,
-            draft_quant=draft_quant,
-            verify_config=runtime_context.verify,
-            lazy=lazy,
-        )
+        with cls._load_lock:
+            bundle = _load_runtime_bundle_compat(
+                load_runtime_bundle,
+                DFlashDraftModelArgs,
+                model_ref=model_name,
+                draft_ref=draft_model,
+                draft_quant=draft_quant,
+                verify_config=runtime_context.verify,
+                lazy=lazy,
+            )
         mx.eval(bundle.target_model.parameters(), bundle.draft_model.parameters())
         return cls(
             bundle,
@@ -288,3 +293,29 @@ class DFlashAccelerator:
             mx.clear_cache()
         except (ImportError, RuntimeError):
             pass
+
+
+def _load_runtime_bundle_compat(
+    load_runtime_bundle: Callable[..., Any],
+    draft_args_type: type,
+    **kwargs: Any,
+) -> Any:
+    """Bridge current HF DFlash configs until the published runtime catches up."""
+    descriptor = draft_args_type.__dict__["from_dict"]
+    original = draft_args_type.from_dict
+
+    def from_dict(cls, params):
+        data = dict(params)
+        dflash_config = dict(data.get("dflash_config") or {})
+        rope_parameters = dict(data.get("rope_parameters") or {})
+        if "block_size" not in data and "block_size" in dflash_config:
+            data["block_size"] = dflash_config["block_size"]
+        if "rope_theta" not in data and "rope_theta" in rope_parameters:
+            data["rope_theta"] = rope_parameters["rope_theta"]
+        return original(data)
+
+    draft_args_type.from_dict = classmethod(from_dict)
+    try:
+        return load_runtime_bundle(**kwargs)
+    finally:
+        draft_args_type.from_dict = descriptor
