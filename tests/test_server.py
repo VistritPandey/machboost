@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import sys
 import tempfile
 import threading
 import time
+import types
 import unittest
 from dataclasses import dataclass
 from unittest.mock import patch
@@ -493,7 +495,9 @@ class RuntimeManagerTests(unittest.TestCase):
             return f"/cache/{repo_id.replace('/', '--')}"
 
         manager = RuntimeManager(loader=lambda config: FakeAccelerator())
-        with patch("huggingface_hub.snapshot_download", side_effect=download):
+        fake_hub = types.ModuleType("huggingface_hub")
+        fake_hub.snapshot_download = download
+        with patch.dict(sys.modules, {"huggingface_hub": fake_hub}):
             result = manager.pull(
                 "qwen3.5:4b-dflash",
                 revision="target-revision",
