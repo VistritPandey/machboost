@@ -221,11 +221,20 @@ class CLITests(unittest.TestCase):
         self.assertIn("mlx-community/Qwen3.5-4B-MLX-bf16", forwarded)
         self.assertIn("benchmarks/unique_decode_prompts.jsonl", forwarded)
         self.assertIn("--no-eos", forwarded)
+        self.assertEqual(forwarded[forwarded.index("--limit") + 1], "3")
         self.assertEqual(args.cooldown, 1)
         benchmark.assert_called_once_with(
             forwarded,
             prog="machboost bench-decode",
         )
+
+    def test_decode_prompt_limit_rejects_invalid_jsonl(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "prompts.jsonl"
+            path.write_text('{"prompt":"ok"}\nnot-json\n', encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "line 2"):
+                cli._jsonl_row_count(str(path))
 
     def test_render_chat_prompt_includes_system_and_history(self):
         prompt = cli.render_chat_prompt(
