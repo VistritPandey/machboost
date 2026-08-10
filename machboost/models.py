@@ -205,6 +205,17 @@ def resolve_model(model: str, backend: str = "auto") -> ModelResolution:
         return ModelResolution(requested=requested, model=str(path) if path.exists() else requested, backend=selected)
 
     selected = backend
+    if selected == "dflash":
+        if not alias.mlx:
+            raise ValueError(
+                f"model alias {requested!r} is not available for backend 'dflash'"
+            )
+        return ModelResolution(
+            requested=requested,
+            model=alias.mlx,
+            backend="dflash",
+            alias=alias.name,
+        )
     if alias.capability == "vision":
         if selected == "auto":
             selected = "mlx-vlm" if native_mlx_vlm_available() and alias.mlx else "hf-vlm"
@@ -537,7 +548,11 @@ def preflight_model(
         if not model_type:
             raise ValueError("config.json does not define model_type")
         result["model_type"] = model_type
-        _validate_mlx_architecture(config, resolution.backend)
+        _validate_mlx_architecture(
+            config,
+            resolution.backend,
+            model_ref=resolution.model,
+        )
     except (ImportError, OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
         result["reason"] = str(exc)
         return result
@@ -552,6 +567,8 @@ def backend_available(backend: str) -> bool:
         return native_mlx_available()
     if backend == "mlx-vlm":
         return native_mlx_vlm_available()
+    if backend == "dflash":
+        return native_mlx_available() and importlib.util.find_spec("dflash_mlx") is not None
     if backend == "hf":
         return importlib.util.find_spec("torch") is not None and importlib.util.find_spec("transformers") is not None
     return False
@@ -575,15 +592,28 @@ def cached_repo_path(model: Optional[str]) -> Optional[Path]:
     return snapshot_path.resolve()
 
 
-def _validate_mlx_architecture(config: dict[str, Any], backend: str) -> None:
+def _validate_mlx_architecture(
+    config: dict[str, Any],
+    backend: str,
+    *,
+    model_ref: Optional[str] = None,
+) -> None:
     model_type = str(config["model_type"]).lower()
-    if backend == "mlx":
+    if backend in {"mlx", "dflash"}:
         from mlx_lm.utils import MODEL_REMAPPING
 
         mapped = MODEL_REMAPPING.get(model_type, model_type)
         module = importlib.import_module(f"mlx_lm.models.{mapped}")
         if not hasattr(module, "Model") or not hasattr(module, "ModelArgs"):
             raise ValueError(f"Model type {mapped} is missing MLX model classes")
+        if backend == "dflash":
+            from dflash_mlx.runtime.registry import resolve_model_support_spec
+
+            model_name = str(model_ref or config.get("name_or_path") or "")
+            if resolve_model_support_spec(model_name) is None:
+                raise ValueError(
+                    "model is not in the installed DFlash target registry; pass a supported Qwen or Gemma target"
+                )
         return
     if backend == "mlx-vlm":
         from mlx_vlm.utils import get_model_and_args
