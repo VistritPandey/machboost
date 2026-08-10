@@ -150,6 +150,28 @@ class CLITests(unittest.TestCase):
         with patch("machboost.models.native_mlx_available", return_value=True):
             self.assertEqual(cli.select_native_backend("qwen2.5:3b", "auto"), "mlx")
 
+    def test_native_run_parses_dflash_decoder_options(self):
+        args = cli.build_parser().parse_args(
+            [
+                "run",
+                "qwen3.5:9b",
+                "--backend",
+                "dflash",
+                "--draft-model",
+                "z-lab/custom-draft",
+                "--draft-quant",
+                "w4:gs64",
+                "--verify-mode",
+                "adaptive",
+            ]
+        )
+
+        options = cli.native_server_options(args)
+        self.assertEqual(options["backend"], "dflash")
+        self.assertEqual(options["draft_model"], "z-lab/custom-draft")
+        self.assertEqual(options["draft_quant"], "w4:gs64")
+        self.assertEqual(options["verify_mode"], "adaptive")
+
     def test_render_chat_prompt_includes_system_and_history(self):
         prompt = cli.render_chat_prompt(
             "Answer with local context.",
