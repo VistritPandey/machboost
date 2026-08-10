@@ -4,7 +4,11 @@ import unittest
 from dataclasses import dataclass
 from types import SimpleNamespace
 
-from machboost.adapters.dflash import DFlashAccelerator, _load_runtime_bundle_compat
+from machboost.adapters.dflash import (
+    DFlashAccelerator,
+    _build_runtime_context_compat,
+    _load_runtime_bundle_compat,
+)
 
 
 class FakeDetokenizer:
@@ -195,6 +199,25 @@ class DFlashAdapterTests(unittest.TestCase):
         self.assertEqual(result["block_size"], 16)
         self.assertEqual(result["rope_theta"], 10_000_000)
         self.assertIs(DraftArgs.__dict__["from_dict"], original)
+
+    def test_runtime_context_supports_pypi_and_newer_signatures(self):
+        def published(*, verify_mode=None):
+            return {"verify_mode": verify_mode}
+
+        def newer(*, verify_mode=None, copyspec_mode=None):
+            return {
+                "verify_mode": verify_mode,
+                "copyspec_mode": copyspec_mode,
+            }
+
+        self.assertEqual(
+            _build_runtime_context_compat(published, verify_mode="adaptive"),
+            {"verify_mode": "adaptive"},
+        )
+        self.assertEqual(
+            _build_runtime_context_compat(newer, verify_mode="dflash"),
+            {"verify_mode": "dflash", "copyspec_mode": "off"},
+        )
 
 
 if __name__ == "__main__":
