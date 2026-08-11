@@ -196,6 +196,8 @@ class OllamaHTTPAdapter:
         system: Optional[str] = None,
         format: Any = None,
         think: Any = None,
+        logprobs: Optional[bool] = None,
+        top_logprobs: Optional[int] = None,
     ) -> OllamaGenerateResult:
         merged_options = dict(self.default_options)
         merged_options.update(dict(options or {}))
@@ -218,6 +220,10 @@ class OllamaHTTPAdapter:
             payload["format"] = format
         if think is not None:
             payload["think"] = think
+        if logprobs is not None:
+            payload["logprobs"] = bool(logprobs)
+        if top_logprobs is not None:
+            payload["top_logprobs"] = int(top_logprobs)
 
         data = self._json_request("POST", "/api/generate", payload)
         return OllamaGenerateResult.from_dict(data)
@@ -278,6 +284,8 @@ class OllamaHTTPAdapter:
         tool_choice: Any = None,
         format: Any = None,
         think: Any = None,
+        logprobs: Optional[bool] = None,
+        top_logprobs: Optional[int] = None,
     ) -> Iterable[OllamaChatChunk]:
         merged_options = dict(self.default_options)
         merged_options.update(dict(options or {}))
@@ -300,6 +308,10 @@ class OllamaHTTPAdapter:
             payload["format"] = format
         if think is not None:
             payload["think"] = think
+        if logprobs is not None:
+            payload["logprobs"] = bool(logprobs)
+        if top_logprobs is not None:
+            payload["top_logprobs"] = int(top_logprobs)
 
         for item in self._stream_json_request("POST", "/api/chat", payload):
             yield OllamaChatChunk.from_dict(item)
