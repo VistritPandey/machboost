@@ -1,11 +1,13 @@
 import base64
 import threading
 import unittest
+from unittest.mock import patch
 
-from machboost.adapters.ollama import OllamaChatChunk
+from machboost.adapters.ollama import OllamaChatChunk, OllamaHTTPError
 from machboost.adapters.ollama_mlx import (
     OllamaMLXAccelerator,
     OllamaMLXCancelled,
+    ensure_ollama_service,
     inject_reasoning_strength,
     normalize_reasoning,
 )
@@ -39,6 +41,35 @@ def chunk(*, content="", thinking="", tool_calls=(), done=False, raw=None):
 
 
 class OllamaMLXAcceleratorTests(unittest.TestCase):
+    def test_service_uses_native_macos_ollama_locator(self):
+        class StartupAdapter:
+            endpoint = "http://127.0.0.1:11434"
+
+            def __init__(self):
+                self.calls = 0
+
+            def version(self):
+                self.calls += 1
+                if self.calls == 1:
+                    raise OllamaHTTPError("not running")
+                return {"version": "0.32.7"}
+
+        adapter = StartupAdapter()
+        with (
+            patch(
+                "machboost.adapters.ollama_mlx.ollama_executable",
+                return_value="/Applications/Ollama.app/Contents/Resources/ollama",
+            ),
+            patch("machboost.adapters.ollama_mlx.subprocess.Popen") as launch,
+        ):
+            ensure_ollama_service(adapter)
+
+        self.assertEqual(adapter.calls, 2)
+        self.assertEqual(
+            launch.call_args.args[0],
+            ["/Applications/Ollama.app/Contents/Resources/ollama", "serve"],
+        )
+
     def test_streams_text_and_preserves_reasoning_tools_and_metrics(self):
         call = {
             "id": "call_7",
