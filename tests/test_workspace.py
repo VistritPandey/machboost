@@ -3,6 +3,8 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
+from unittest.mock import patch
 
 from machboost.workspace import WorkspaceError, WorkspaceStore
 
@@ -184,6 +186,49 @@ class WorkspaceStoreTests(unittest.TestCase):
         self.assertIn("auth.py: authenticate_user", auth_prefix)
         self.assertIn("billing.py: capture_payment", auth_prefix)
         self.assertNotEqual(auth.hits[0].path, billing.hits[0].path)
+
+    def test_repository_capsule_is_shared_concurrently_and_invalidated_on_reindex(self) -> None:
+        source = self.repo / "service.py"
+        source.write_text(
+            "def authenticate_user(token):\n    return token\n",
+            encoding="utf-8",
+        )
+        workspace = self.store.register(self.repo)
+        self.store.index(workspace.id)
+
+        with patch.object(
+            self.store,
+            "_build_capsule",
+            wraps=self.store._build_capsule,
+        ) as build_capsule:
+            with ThreadPoolExecutor(max_workers=10) as executor:
+                results = list(
+                    executor.map(
+                        lambda index: self.store.query(
+                            workspace.id,
+                            f"authenticate user request {index}",
+                            max_chars=16_000,
+                        ),
+                        range(10),
+                    )
+                )
+
+            self.assertEqual(build_capsule.call_count, 1)
+            self.assertEqual(len({item.context.split("\n\n## ", 1)[0] for item in results}), 1)
+
+            source.write_text(
+                "def authorize_user(token):\n    return token\n",
+                encoding="utf-8",
+            )
+            self.store.index(workspace.id)
+            refreshed = self.store.query(
+                workspace.id,
+                "authorize user",
+                max_chars=16_000,
+            )
+
+            self.assertEqual(build_capsule.call_count, 2)
+            self.assertIn("authorize_user", refreshed.context)
 
     def test_query_focuses_long_chunks_around_matching_lines(self) -> None:
         lines = [
