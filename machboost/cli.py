@@ -1514,6 +1514,7 @@ def run_latency_bench(
             ollama_model=args.ollama_model,
             ollama_endpoint=args.ollama_endpoint,
             timeout=args.timeout,
+            draft_num_predict=args.draft_num_predict,
         )
     except (MachBoostAPIError, OllamaHTTPError, OSError, ValueError) as exc:
         print(f"machboost bench error: {exc}", file=error_stream)
@@ -2078,6 +2079,12 @@ def build_parser() -> argparse.ArgumentParser:
     bench.add_argument("--runs", type=int, default=3)
     bench.add_argument("--warmups", type=int, default=1)
     bench.add_argument("--max-tokens", type=int, default=32)
+    bench.add_argument(
+        "--draft-num-predict",
+        type=int,
+        default=None,
+        help="Ollama MLX DFlash draft block size; use 0 for a no-speculation control.",
+    )
     bench.add_argument(
         "--backend",
         choices=["auto", "mlx", "hf", "dflash", "ollama-mlx"],
