@@ -126,6 +126,17 @@ final class UITestMachBoostAPI: MachBoostAPIProtocol, @unchecked Sendable {
                         continuation.finish()
                         return
                     }
+                    if
+                        request.model == "muse-glimmer:30b-mlx",
+                        request.messages.last?.content == "Use Muse tools"
+                    {
+                        continuation.yield(
+                            self.museReasoningEvent(requestID: request.requestID)
+                        )
+                        continuation.yield(
+                            self.museToolEvent(requestID: request.requestID)
+                        )
+                    }
                     continuation.yield(
                         self.chatEvent(
                             requestID: request.requestID,
@@ -195,13 +206,15 @@ final class UITestMachBoostAPI: MachBoostAPIProtocol, @unchecked Sendable {
     private func model(
         name: String,
         displayName: String,
-        repository: String,
+        repository: String?,
         backend: String = "mlx",
         capabilities: [String],
         cached: Bool,
         recommended: Bool,
         size: Double,
-        memory: Double
+        memory: Double,
+        contextLength: Int? = nil,
+        sourceRepository: String? = nil
     ) -> CatalogModel {
         CatalogModel(
             name: name,
@@ -216,6 +229,8 @@ final class UITestMachBoostAPI: MachBoostAPIProtocol, @unchecked Sendable {
             downloadSizeGB: size,
             diskSizeGB: cached ? size : nil,
             minimumMemoryGB: memory,
+            contextLength: contextLength,
+            sourceRepository: sourceRepository,
             support: "ready",
             supportReason: "UI automation fixture"
         )
@@ -269,6 +284,19 @@ final class UITestMachBoostAPI: MachBoostAPIProtocol, @unchecked Sendable {
                 recommended: false,
                 size: 0.8,
                 memory: 4
+            ),
+            model(
+                name: "muse-glimmer:30b-mlx",
+                displayName: "Muse Glimmer 30B MLX",
+                repository: nil,
+                backend: "ollama-mlx",
+                capabilities: ["chat", "completion", "vision", "reasoning", "tools"],
+                cached: !startsEmpty || downloadedModels.contains("muse-glimmer:30b-mlx"),
+                recommended: true,
+                size: 21,
+                memory: 32,
+                contextLength: 131_072,
+                sourceRepository: "meta-models/Muse-Glimmer-30B"
             ),
         ]
     }
@@ -344,6 +372,49 @@ final class UITestMachBoostAPI: MachBoostAPIProtocol, @unchecked Sendable {
             message: .init(role: "assistant", content: ""),
             done: true,
             doneReason: "cancelled",
+            totalDuration: nil,
+            evalDuration: nil,
+            evalCount: nil,
+            machboost: nil,
+            error: nil
+        )
+    }
+
+    private func museReasoningEvent(requestID: String) -> ChatEvent {
+        ChatEvent(
+            requestID: requestID,
+            message: .init(
+                role: "assistant",
+                content: "",
+                thinking: "I should inspect the repository before answering."
+            ),
+            done: false,
+            doneReason: nil,
+            totalDuration: nil,
+            evalDuration: nil,
+            evalCount: nil,
+            machboost: nil,
+            error: nil
+        )
+    }
+
+    private func museToolEvent(requestID: String) -> ChatEvent {
+        ChatEvent(
+            requestID: requestID,
+            message: .init(
+                role: "assistant",
+                content: "",
+                toolCalls: [
+                    .init(
+                        function: .init(
+                            name: "search_repository",
+                            arguments: .object(["query": .string("request cancellation")])
+                        )
+                    )
+                ]
+            ),
+            done: false,
+            doneReason: nil,
             totalDuration: nil,
             evalDuration: nil,
             evalCount: nil,
