@@ -69,7 +69,7 @@ def benchmark_chat_latency(
         },
         "engines": {},
         "notes": [
-            "Unique system-message nonces prevent exact repeated-prompt cache hits.",
+            "Unique engine-specific system-message nonces prevent repeated and cross-path exact prompt-cache hits.",
             "Two-engine runs alternate which engine executes first in each round.",
             "Without draft context, MachBoost delegates text generation to the native backend.",
         ],
@@ -203,7 +203,10 @@ def benchmark_interleaved_chat(
     machboost_rows = []
     ollama_rows = []
     for index, nonce in enumerate(nonces):
-        messages = benchmark_messages(system, prompt, nonce)
+        messages = {
+            "machboost": benchmark_messages(system, prompt, f"{nonce}-machboost"),
+            "ollama": benchmark_messages(system, prompt, f"{nonce}-ollama"),
+        }
         run = index - warmups + 1
         engines = ("machboost", "ollama") if index % 2 == 0 else ("ollama", "machboost")
         for current in engines:
@@ -211,7 +214,7 @@ def benchmark_interleaved_chat(
                 row = measure_machboost_chat(
                     client,
                     model,
-                    messages,
+                    messages[current],
                     run=run,
                     options=options,
                     keep_alive=keep_alive,
@@ -222,7 +225,7 @@ def benchmark_interleaved_chat(
             else:
                 row = measure_ollama_chat(
                     adapter,
-                    messages,
+                    messages[current],
                     run=run,
                     max_tokens=max_tokens,
                     keep_alive=keep_alive,
