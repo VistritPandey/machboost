@@ -26,6 +26,7 @@ from .models import (
     catalog_rows,
     model_repositories,
     model_targets,
+    ollama_model_manifest,
     preflight_model,
     resolve_model,
 )
@@ -329,7 +330,20 @@ class LoadedModel:
             worker_cache_info = getattr(accelerator, "cache_info", None)
             if callable(worker_cache_info):
                 worker["vision_cache"] = worker_cache_info()
-        result["capabilities"] = ["vision", "chat"] if self.config.backend.endswith("-vlm") else ["chat", "completion"]
+        if self.config.backend == "ollama-mlx":
+            result["capabilities"] = [
+                "chat",
+                "completion",
+                "vision",
+                "reasoning",
+                "tools",
+            ]
+        else:
+            result["capabilities"] = (
+                ["vision", "chat"]
+                if self.config.backend.endswith("-vlm")
+                else ["chat", "completion"]
+            )
         return result
 
 
@@ -346,12 +360,15 @@ class GenerationResult:
     eval_duration_s: float = 0.0
     time_to_first_token_s: Optional[float] = None
     scheduler: Optional[dict[str, Any]] = None
+    thinking: str = ""
+    tool_calls: tuple[dict[str, Any], ...] = ()
+    done_reason: str = "stop"
 
     def ollama_metrics(self) -> dict[str, Any]:
         generated = int(self.stats.get("generated_tokens", 0))
         return {
             "done": True,
-            "done_reason": "stop",
+            "done_reason": self.done_reason,
             "total_duration": int(self.total_duration_s * 1_000_000_000),
             "load_duration": int(self.load_duration_s * 1_000_000_000),
             "prompt_eval_count": self.prompt_eval_count,
@@ -511,6 +528,7 @@ class RuntimeManager:
         keep_alive: Any = None,
         context: Optional[Iterable[str] | str] = None,
         emit: Optional[Callable[[str], None]] = None,
+        emit_thinking: Optional[Callable[[str], None]] = None,
         on_admitted: Optional[Callable[[], None]] = None,
         cancel_event: Optional[threading.Event] = None,
     ) -> GenerationResult:
@@ -529,6 +547,14 @@ class RuntimeManager:
                 first_emit_at = self.clock()
             if emit is not None:
                 emit(text)
+
+        def timed_emit_thinking(text: str) -> None:
+            nonlocal first_emit_at
+            check_cancelled(cancel_event)
+            if text and first_emit_at is None:
+                first_emit_at = self.clock()
+            if emit_thinking is not None:
+                emit_thinking(text)
 
         affinity_key = request_affinity_key(
             options,
@@ -556,7 +582,34 @@ class RuntimeManager:
                     runtime_messages, format_instruction
                 )
             truncated_context_tokens = 0
-            if entry.config.backend.endswith("-vlm"):
+            if entry.config.backend == "ollama-mlx":
+                from .adapters.ollama_mlx import OllamaMLXCancelled
+
+                try:
+                    text, stats = accelerator.generate_chat(
+                        runtime_messages,
+                        max_tokens=max_tokens,
+                        context=context,
+                        on_text=timed_emit
+                        if emit is not None or cancel_event is not None
+                        else None,
+                        on_thinking=timed_emit_thinking
+                        if emit_thinking is not None or cancel_event is not None
+                        else None,
+                        temperature=float(options.get("temperature", 0.0)),
+                        enable_thinking=options.get("_think", False),
+                        generation_options=ollama_mlx_generation_options(options),
+                        stop_strings=options.get("stop"),
+                        tools=options.get("_tools"),
+                        format=options.get("_format"),
+                        reasoning_strength=_optional_string(
+                            options.get("_reasoning_strength")
+                        ),
+                        cancel_event=cancel_event,
+                    )
+                except OllamaMLXCancelled as exc:
+                    raise RequestCancelled(str(exc)) from exc
+            elif entry.config.backend.endswith("-vlm"):
                 if options.get("_tools"):
                     runtime_messages = inject_tool_instructions(
                         runtime_messages,
@@ -648,6 +701,13 @@ class RuntimeManager:
             eval_duration_s=eval_duration,
             time_to_first_token_s=ttft,
             scheduler=scheduler_result(lease, entry.config.replicas),
+            thinking=str(stats.get("thinking") or ""),
+            tool_calls=tuple(
+                dict(call)
+                for call in (stats.get("tool_calls") or ())
+                if isinstance(call, dict)
+            ),
+            done_reason=str(stats.get("done_reason") or "stop"),
         )
 
     def generate(
@@ -659,6 +719,7 @@ class RuntimeManager:
         keep_alive: Any = None,
         context: Optional[Iterable[str] | str] = None,
         emit: Optional[Callable[[str], None]] = None,
+        emit_thinking: Optional[Callable[[str], None]] = None,
         images: Optional[Sequence[str]] = None,
         on_admitted: Optional[Callable[[], None]] = None,
         cancel_event: Optional[threading.Event] = None,
@@ -679,6 +740,14 @@ class RuntimeManager:
             if emit is not None:
                 emit(text)
 
+        def timed_emit_thinking(text: str) -> None:
+            nonlocal first_emit_at
+            check_cancelled(cancel_event)
+            if text and first_emit_at is None:
+                first_emit_at = self.clock()
+            if emit_thinking is not None:
+                emit_thinking(text)
+
         affinity_key = request_affinity_key(options, image_sources=images)
         with entry.scheduler.slot(
             affinity_key=affinity_key,
@@ -698,7 +767,33 @@ class RuntimeManager:
             if format_instruction:
                 runtime_prompt = f"{format_instruction}\n\n{runtime_prompt}"
             truncated_context_tokens = 0
-            if entry.config.backend.endswith("-vlm"):
+            if entry.config.backend == "ollama-mlx":
+                from .adapters.ollama_mlx import OllamaMLXCancelled
+
+                try:
+                    text, stats = accelerator.generate(
+                        runtime_prompt,
+                        max_tokens=max_tokens,
+                        context=context,
+                        on_text=timed_emit
+                        if emit is not None or cancel_event is not None
+                        else None,
+                        on_thinking=timed_emit_thinking
+                        if emit_thinking is not None or cancel_event is not None
+                        else None,
+                        images=images,
+                        temperature=float(options.get("temperature", 0.0)),
+                        enable_thinking=options.get("_think", False),
+                        generation_options=ollama_mlx_generation_options(options),
+                        format=options.get("_format"),
+                        reasoning_strength=_optional_string(
+                            options.get("_reasoning_strength")
+                        ),
+                        cancel_event=cancel_event,
+                    )
+                except OllamaMLXCancelled as exc:
+                    raise RequestCancelled(str(exc)) from exc
+            elif entry.config.backend.endswith("-vlm"):
                 text, stats = accelerator.generate(
                     runtime_prompt,
                     max_tokens=max_tokens,
@@ -776,6 +871,13 @@ class RuntimeManager:
             eval_duration_s=eval_duration,
             time_to_first_token_s=ttft,
             scheduler=scheduler_result(lease, entry.config.replicas),
+            thinking=str(stats.get("thinking") or ""),
+            tool_calls=tuple(
+                dict(call)
+                for call in (stats.get("tool_calls") or ())
+                if isinstance(call, dict)
+            ),
+            done_reason=str(stats.get("done_reason") or "stop"),
         )
 
     def embed(
@@ -840,6 +942,47 @@ class RuntimeManager:
         if path.exists():
             return {"status": "success", "model": model, "path": str(path.resolve())}
         resolution = resolve_model(model)
+        if resolution.backend == "ollama-mlx":
+            from .adapters.ollama import OllamaHTTPAdapter
+            from .adapters.ollama_mlx import ensure_ollama_service
+
+            adapter = OllamaHTTPAdapter(
+                resolution.model,
+                timeout=3_600.0,
+                keep_alive="forever",
+            )
+            ensure_ollama_service(adapter)
+            stream = adapter.pull(stream=True)
+            try:
+                for status in stream:
+                    check_cancelled(cancel_event)
+                    if progress is not None:
+                        progress(
+                            {
+                                "status": status.status,
+                                "model": model,
+                                "resolved_model": resolution.model,
+                                "repository": resolution.model,
+                                "digest": status.digest or None,
+                                "completed": status.completed or None,
+                                "total": status.total or None,
+                            }
+                        )
+            finally:
+                close = getattr(stream, "close", None)
+                if callable(close):
+                    close()
+            check_cancelled(cancel_event)
+            manifest = ollama_model_manifest(resolution.model)
+            return {
+                "status": "success",
+                "model": model,
+                "resolved_model": resolution.model,
+                "backend": resolution.backend,
+                "path": str(manifest) if manifest is not None else None,
+                "paths": [str(manifest)] if manifest is not None else [],
+                "repositories": [resolution.model],
+            }
         try:
             from huggingface_hub import snapshot_download
         except ImportError as exc:
@@ -1047,6 +1190,15 @@ def load_accelerator(config: ModelConfig) -> Accelerator:
             draft_quant=config.draft_quant,
             verify_mode=config.verify_mode,
             lazy=config.lazy,
+        )
+    if config.backend == "ollama-mlx":
+        from .adapters.ollama_mlx import OllamaMLXAccelerator
+
+        return OllamaMLXAccelerator.from_pretrained(
+            config.model,
+            context_paths=config.context_paths or None,
+            max_context_chars=config.max_context_chars,
+            keep_alive="forever",
         )
     if config.backend == "hf-vlm":
         raise ImportError(
@@ -2234,8 +2386,10 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                 user_text=user_query,
                 assistant_text=result.text,
             )
-            content, tool_calls = extract_tool_calls(result.text)
+            content, tool_calls = result_content_and_tool_calls(result)
             message: dict[str, Any] = {"role": "assistant", "content": content}
+            if result.thinking:
+                message["thinking"] = result.thinking
             if tool_calls:
                 message["tool_calls"] = ollama_tool_calls(tool_calls)
             body = {
@@ -2275,6 +2429,21 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                 }
             )
 
+        def emit_thinking(text: str) -> None:
+            self.write_json_line(
+                {
+                    "request_id": request_id,
+                    "model": model,
+                    "created_at": utc_timestamp(),
+                    "message": {
+                        "role": "assistant",
+                        "content": "",
+                        "thinking": text,
+                    },
+                    "done": False,
+                }
+            )
+
         try:
             result = self.run_traced_operation(
                 request_id,
@@ -2287,6 +2456,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                     keep_alive=payload.get("keep_alive"),
                     context=context,
                     emit=None if options.get("_tools") else emit,
+                    emit_thinking=emit_thinking,
                     on_admitted=on_admitted,
                     cancel_event=cancel_event,
                 ),
@@ -2313,7 +2483,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                 {"request_id": request_id, "error": str(exc), "done": True}
             )
             return
-        content, tool_calls = extract_tool_calls(result.text)
+        content, tool_calls = result_content_and_tool_calls(result)
         self.remember_exchange(
             memory_context,
             workspace,
@@ -2489,6 +2659,8 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                     result, workspace=workspace, memory=memory_context
                 ),
             }
+            if result.thinking:
+                body["thinking"] = result.thinking
             self.exact_cache_put(
                 memory_context,
                 model=model,
@@ -2517,6 +2689,18 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                 }
             )
 
+        def emit_thinking(text: str) -> None:
+            self.write_json_line(
+                {
+                    "request_id": request_id,
+                    "model": model,
+                    "created_at": utc_timestamp(),
+                    "response": "",
+                    "thinking": text,
+                    "done": False,
+                }
+            )
+
         try:
             result = self.run_traced_operation(
                 request_id,
@@ -2529,6 +2713,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                     keep_alive=payload.get("keep_alive"),
                     context=context,
                     emit=emit,
+                    emit_thinking=emit_thinking,
                     images=normalize_image_list(payload.get("images")),
                     on_admitted=on_admitted,
                     cancel_event=cancel_event,
@@ -2667,11 +2852,13 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                 user_text=user_query,
                 assistant_text=result.text,
             )
-            content, tool_calls = extract_tool_calls(result.text)
+            content, tool_calls = result_content_and_tool_calls(result)
             message: dict[str, Any] = {
                 "role": "assistant",
                 "content": content if content else None,
             }
+            if result.thinking:
+                message["reasoning_content"] = result.thinking
             if tool_calls:
                 message["tool_calls"] = tool_calls
             body = {
@@ -2781,6 +2968,23 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                 }
             )
 
+        def emit_thinking(text: str) -> None:
+            self.write_sse(
+                {
+                    "id": request_id,
+                    "object": "chat.completion.chunk",
+                    "created": int(time.time()),
+                    "model": model,
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {"reasoning_content": text},
+                            "finish_reason": None,
+                        }
+                    ],
+                }
+            )
+
         try:
             result = self.run_traced_operation(
                 request_id,
@@ -2792,6 +2996,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                     options=options,
                     context=context,
                     emit=None if options.get("_tools") else emit,
+                    emit_thinking=emit_thinking,
                     on_admitted=on_admitted,
                     cancel_event=cancel_event,
                 ),
@@ -2836,7 +3041,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
             self.wfile.write(b"data: [DONE]\n\n")
             self.wfile.flush()
             return
-        content, tool_calls = extract_tool_calls(result.text)
+        content, tool_calls = result_content_and_tool_calls(result)
         self.remember_exchange(
             memory_context,
             workspace,
@@ -3733,6 +3938,24 @@ def text_generation_options(options: dict[str, Any]) -> dict[str, Any]:
     return {key: options[key] for key in keys if key in options}
 
 
+def ollama_mlx_generation_options(options: dict[str, Any]) -> dict[str, Any]:
+    keys = (
+        "num_ctx",
+        "num_keep",
+        "seed",
+        "temperature",
+        "top_k",
+        "top_p",
+        "min_p",
+        "repeat_last_n",
+        "repeat_penalty",
+        "presence_penalty",
+        "frequency_penalty",
+        "draft_num_predict",
+    )
+    return {key: options[key] for key in keys if key in options}
+
+
 def openai_options(payload: dict[str, Any]) -> dict[str, Any]:
     options = dict(payload.get("machboost_options") or {})
     if "max_tokens" in payload:
@@ -3751,6 +3974,13 @@ def openai_options(payload: dict[str, Any]) -> dict[str, Any]:
         options["_tools"] = normalize_tools(payload["tools"])
         options["_tool_choice"] = payload.get("tool_choice", "auto")
         options["_parallel_tool_calls"] = bool(payload.get("parallel_tool_calls", True))
+    reasoning = payload.get("reasoning")
+    reasoning_effort = payload.get("reasoning_effort")
+    if isinstance(reasoning, dict):
+        reasoning_effort = reasoning.get("effort", reasoning_effort)
+    if reasoning_effort is not None:
+        options["_think"] = True
+        options["_reasoning_strength"] = str(reasoning_effort)
     return options
 
 
@@ -3870,6 +4100,30 @@ def extract_tool_calls(text: str) -> tuple[str, list[dict[str, Any]]]:
     ):
         content = ""
     return content, calls
+
+
+def result_content_and_tool_calls(
+    result: GenerationResult,
+) -> tuple[str, list[dict[str, Any]]]:
+    if not result.tool_calls:
+        return extract_tool_calls(result.text)
+    calls: list[dict[str, Any]] = []
+    for raw_call in result.tool_calls:
+        function = dict(raw_call.get("function") or {})
+        name = str(function.get("name") or "").strip()
+        if not name:
+            continue
+        arguments = function.get("arguments") or {}
+        if not isinstance(arguments, str):
+            arguments = json.dumps(arguments, separators=(",", ":"), ensure_ascii=True)
+        calls.append(
+            {
+                "id": str(raw_call.get("id") or f"call_{uuid.uuid4().hex[:24]}"),
+                "type": "function",
+                "function": {"name": name, "arguments": arguments},
+            }
+        )
+    return result.text, calls
 
 
 def ollama_tool_calls(calls: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
