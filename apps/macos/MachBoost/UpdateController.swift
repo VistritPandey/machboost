@@ -4,9 +4,22 @@ import Sparkle
 
 @MainActor
 final class UpdateController: ObservableObject {
+    typealias LatestReleaseFetcher = @Sendable (URL) async throws -> String?
+
     private let updaterController: SPUStandardUpdaterController?
     private let releasesURL: URL
+    private let latestReleaseURL: URL
     private let openRelease: (URL) -> Void
+    private let defaults: UserDefaults
+    private let currentVersion: String
+    private let fetchLatestRelease: LatestReleaseFetcher
+
+    @Published private(set) var latestCommunityVersion: String?
+    @Published private(set) var communityCheckCompleted = false
+    @Published private(set) var communityCheckFailed = false
+
+    private static let automaticCommunityChecksKey =
+        "MachBoostAutomaticallyChecksCommunityReleases"
 
     init(
         startingUpdater: Bool = true,
@@ -14,28 +27,48 @@ final class UpdateController: ObservableObject {
         releasesURL: URL = URL(
             string: "https://github.com/VistritPandey/machboost/releases/latest"
         )!,
-        openRelease: @escaping (URL) -> Void = { _ = NSWorkspace.shared.open($0) }
+        latestReleaseURL: URL = URL(
+            string: "https://api.github.com/repos/VistritPandey/machboost/releases/latest"
+        )!,
+        openRelease: @escaping (URL) -> Void = { _ = NSWorkspace.shared.open($0) },
+        defaults: UserDefaults = .standard,
+        currentVersion: String = Bundle.main.object(
+            forInfoDictionaryKey: "CFBundleShortVersionString"
+        ) as? String ?? "0.0.0",
+        fetchLatestRelease: LatestReleaseFetcher? = nil
     ) {
         self.releasesURL = releasesURL
+        self.latestReleaseURL = latestReleaseURL
         self.openRelease = openRelease
+        self.defaults = defaults
+        self.currentVersion = currentVersion
+        self.fetchLatestRelease = fetchLatestRelease ?? Self.fetchReleaseTag
         let environment = ProcessInfo.processInfo.environment
         let resolvedPublicKey = publicKey
             ?? Bundle.main.object(forInfoDictionaryKey: "SUPublicEDKey") as? String
             ?? ""
-        guard
+        if
             environment["MACHBOOST_TESTING"] != "1",
             environment["MACHBOOST_UI_TESTING"] != "1",
             Self.isValidSparklePublicKey(resolvedPublicKey)
-        else {
+        {
+            updaterController = SPUStandardUpdaterController(
+                startingUpdater: startingUpdater,
+                updaterDelegate: nil,
+                userDriverDelegate: nil
+            )
+        } else {
             updaterController = nil
-            return
         }
 
-        updaterController = SPUStandardUpdaterController(
-            startingUpdater: startingUpdater,
-            updaterDelegate: nil,
-            userDriverDelegate: nil
-        )
+        if startingUpdater,
+           updaterController == nil,
+           environment["MACHBOOST_TESTING"] != "1",
+           environment["MACHBOOST_UI_TESTING"] != "1",
+           automaticallyChecksForUpdates
+        {
+            Task { await checkCommunityRelease() }
+        }
     }
 
     var isAvailable: Bool {
@@ -43,17 +76,29 @@ final class UpdateController: ObservableObject {
     }
 
     var supportsAutomaticUpdates: Bool {
-        updaterController != nil
+        true
     }
 
     var actionTitle: String {
-        supportsAutomaticUpdates ? "Check for updates" : "View latest release"
+        updaterController != nil ? "Check for updates" : "View latest release"
     }
 
     var deliveryDescription: String {
-        supportsAutomaticUpdates
-            ? "Signed updates install through Sparkle"
-            : "Community builds update through GitHub Releases"
+        if updaterController != nil {
+            return "Signed updates install through Sparkle"
+        }
+        if let latestCommunityVersion,
+           Self.isVersion(latestCommunityVersion, newerThan: currentVersion)
+        {
+            return "\(latestCommunityVersion) is available on GitHub; installation is manual"
+        }
+        if communityCheckFailed {
+            return "Could not check GitHub Releases; installation remains manual"
+        }
+        if communityCheckCompleted {
+            return "Up to date; community installation remains manual"
+        }
+        return "Checks GitHub Releases; community installation is manual"
     }
 
     func checkForUpdates() {
@@ -65,8 +110,36 @@ final class UpdateController: ObservableObject {
     }
 
     var automaticallyChecksForUpdates: Bool {
-        get { updaterController?.updater.automaticallyChecksForUpdates ?? false }
-        set { updaterController?.updater.automaticallyChecksForUpdates = newValue }
+        get {
+            if let updaterController {
+                return updaterController.updater.automaticallyChecksForUpdates
+            }
+            guard defaults.object(forKey: Self.automaticCommunityChecksKey) != nil else {
+                return true
+            }
+            return defaults.bool(forKey: Self.automaticCommunityChecksKey)
+        }
+        set {
+            if let updaterController {
+                updaterController.updater.automaticallyChecksForUpdates = newValue
+                return
+            }
+            defaults.set(newValue, forKey: Self.automaticCommunityChecksKey)
+            if newValue {
+                Task { await checkCommunityRelease() }
+            }
+        }
+    }
+
+    func checkCommunityRelease() async {
+        guard updaterController == nil else { return }
+        do {
+            latestCommunityVersion = try await fetchLatestRelease(latestReleaseURL)
+            communityCheckFailed = false
+        } catch {
+            communityCheckFailed = true
+        }
+        communityCheckCompleted = true
     }
 
     private static func isValidSparklePublicKey(_ value: String) -> Bool {
@@ -79,5 +152,31 @@ final class UpdateController: ObservableObject {
             return false
         }
         return decoded.count == 32
+    }
+
+    private static func isVersion(_ candidate: String, newerThan current: String) -> Bool {
+        let candidate = candidate.trimmingCharacters(in: CharacterSet(charactersIn: "vV"))
+        let current = current.trimmingCharacters(in: CharacterSet(charactersIn: "vV"))
+        return candidate.compare(current, options: .numeric) == .orderedDescending
+    }
+
+    private static func fetchReleaseTag(from url: URL) async throws -> String? {
+        var request = URLRequest(url: url)
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        request.setValue("MachBoost-macOS", forHTTPHeaderField: "User-Agent")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode)
+        else {
+            throw URLError(.badServerResponse)
+        }
+        return try JSONDecoder().decode(Release.self, from: data).tagName
+    }
+
+    private struct Release: Decodable {
+        let tagName: String
+
+        enum CodingKeys: String, CodingKey {
+            case tagName = "tag_name"
+        }
     }
 }
