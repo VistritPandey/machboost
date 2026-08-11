@@ -266,6 +266,7 @@ class WorkspaceStore:
         self.home = Path(home).expanduser() if home else default_workspace_home()
         self.home.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
+        self._capsule_cache: dict[tuple[str, str, int], str] = {}
 
     def register(self, path: os.PathLike[str] | str, *, name: Optional[str] = None) -> Workspace:
         root = Path(path).expanduser().resolve()
@@ -291,6 +292,7 @@ class WorkspaceStore:
             self._workspace_dir(workspace_id).mkdir(parents=True, exist_ok=True)
             self._write_metadata(workspace)
             self._initialize_database(workspace_id)
+            self._invalidate_capsules(workspace_id)
             return workspace
 
     def list(self) -> list[Workspace]:
@@ -344,6 +346,7 @@ class WorkspaceStore:
             if not target.exists():
                 return False
             shutil.rmtree(target)
+            self._invalidate_capsules(workspace_id)
             return True
 
     def index(
@@ -442,6 +445,7 @@ class WorkspaceStore:
                 ),
             )
             self._write_metadata(updated)
+            self._invalidate_capsules(workspace_id)
             return IndexReport(
                 workspace=updated,
                 scanned_files=len(discovered),
@@ -566,7 +570,20 @@ class WorkspaceStore:
         )
 
     def capsule(self, workspace_id: str, *, max_chars: int = 32_000) -> str:
-        workspace = self.get(workspace_id)
+        max_chars = int(max_chars)
+        with self._lock:
+            workspace = self.get(workspace_id)
+            key = (workspace_id, workspace.revision or "unversioned", max_chars)
+            cached = self._capsule_cache.get(key)
+            if cached is not None:
+                return cached
+            capsule = self._build_capsule(workspace, max_chars=max_chars)
+            if len(self._capsule_cache) >= 64:
+                self._capsule_cache.pop(next(iter(self._capsule_cache)))
+            self._capsule_cache[key] = capsule
+            return capsule
+
+    def _build_capsule(self, workspace: Workspace, *, max_chars: int) -> str:
         language_summary = ", ".join(
             f"{name} ({count})" for name, count in workspace.languages[:8]
         )
@@ -585,7 +602,7 @@ class WorkspaceStore:
             return header[:max_chars]
 
         symbols_by_path: dict[str, list[str]] = {}
-        with closing(sqlite3.connect(self._database_path(workspace_id))) as connection:
+        with closing(sqlite3.connect(self._database_path(workspace.id))) as connection:
             file_paths = [
                 str(row[0])
                 for row in connection.execute("SELECT path FROM files ORDER BY path")
@@ -615,6 +632,11 @@ class WorkspaceStore:
             lines.append(line)
             used += len(line)
         return header + "\n\n# Repository map\n" + "".join(lines).rstrip()
+
+    def _invalidate_capsules(self, workspace_id: str) -> None:
+        for key in tuple(self._capsule_cache):
+            if key[0] == workspace_id:
+                self._capsule_cache.pop(key, None)
 
     def _initialize_database(self, workspace_id: str) -> None:
         self._workspace_dir(workspace_id).mkdir(parents=True, exist_ok=True)
