@@ -66,10 +66,19 @@ def benchmark_chat_latency(
                 if backend == "ollama-mlx" and engine == "both"
                 else "backend_comparison"
             ),
+            "output_comparison": (
+                "not_comparable_engine_specific_nonces"
+                if backend == "ollama-mlx" and engine == "both"
+                else "same_prompt"
+            ),
         },
         "engines": {},
         "notes": [
-            "Unique engine-specific system-message nonces prevent repeated and cross-path exact prompt-cache hits.",
+            (
+                "Unique engine-specific system-message nonces prevent repeated and cross-path exact prompt-cache hits. Outputs are not compared because the requests differ."
+                if backend == "ollama-mlx" and engine == "both"
+                else "Unique system-message nonces prevent exact repeated-prompt cache hits."
+            ),
             "Two-engine runs alternate which engine executes first in each round.",
             "Without draft context, MachBoost delegates text generation to the native backend.",
         ],
@@ -159,8 +168,12 @@ def benchmark_chat_latency(
                 ollama_summary["median_client_ttft_seconds"],
                 mach_summary["median_client_ttft_seconds"],
             ),
-            "median_output_equal": normalized_outputs(machboost["rows"])
-            == normalized_outputs(ollama["rows"]),
+            "median_output_equal": (
+                None
+                if backend == "ollama-mlx"
+                else normalized_outputs(machboost["rows"])
+                == normalized_outputs(ollama["rows"])
+            ),
             "machboost_gateway_overhead_percent": (
                 100.0
                 * (
@@ -203,10 +216,14 @@ def benchmark_interleaved_chat(
     machboost_rows = []
     ollama_rows = []
     for index, nonce in enumerate(nonces):
-        messages = {
-            "machboost": benchmark_messages(system, prompt, f"{nonce}-machboost"),
-            "ollama": benchmark_messages(system, prompt, f"{nonce}-ollama"),
-        }
+        if backend == "ollama-mlx":
+            messages = {
+                "machboost": benchmark_messages(system, prompt, f"{nonce}-machboost"),
+                "ollama": benchmark_messages(system, prompt, f"{nonce}-ollama"),
+            }
+        else:
+            shared_messages = benchmark_messages(system, prompt, nonce)
+            messages = {"machboost": shared_messages, "ollama": shared_messages}
         run = index - warmups + 1
         engines = ("machboost", "ollama") if index % 2 == 0 else ("ollama", "machboost")
         for current in engines:
