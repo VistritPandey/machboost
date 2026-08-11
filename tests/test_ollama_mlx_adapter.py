@@ -157,6 +157,19 @@ class OllamaMLXAcceleratorTests(unittest.TestCase):
         self.assertIn("PORT = 8080", messages[0]["content"])
         self.assertEqual(messages[-1]["content"], "Which port?")
 
+    def test_no_speculation_control_is_reported(self):
+        adapter = FakeAdapter([chunk(done=True, raw={"done": True})])
+        accelerator = OllamaMLXAccelerator(adapter)
+
+        _, stats = accelerator.generate_chat(
+            [{"role": "user", "content": "Control"}],
+            max_tokens=8,
+            generation_options={"draft_num_predict": 0},
+        )
+
+        self.assertFalse(stats.native_speculative_decoding)
+        self.assertEqual(adapter.calls[0][1]["options"]["draft_num_predict"], 0)
+
     def test_cancellation_interrupts_reasoning_stream(self):
         adapter = FakeAdapter([chunk(thinking="hidden")])
         accelerator = OllamaMLXAccelerator(adapter)
