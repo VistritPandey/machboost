@@ -131,6 +131,7 @@ class OllamaMLXAccelerator:
         options = dict(generation_options or {})
         options["num_predict"] = int(max_tokens)
         options.setdefault("temperature", float(temperature))
+        native_speculative_decoding = int(options.get("draft_num_predict", 15)) > 0
         if stop_strings:
             options["stop"] = list(stop_strings)
 
@@ -195,6 +196,7 @@ class OllamaMLXAccelerator:
             tool_calls=tuple(tool_calls),
             done_reason=str(final.get("done_reason") or "stop"),
             image_count=image_count,
+            native_speculative_decoding=native_speculative_decoding,
         )
         return "".join(text_chunks), stats
 
