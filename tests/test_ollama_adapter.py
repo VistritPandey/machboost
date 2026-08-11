@@ -109,6 +109,36 @@ class OllamaAdapterTest(unittest.TestCase):
         self.assertEqual(payload["options"]["num_predict"], 12)
         self.assertEqual(payload["options"]["num_ctx"], 1024)
 
+    def test_indefinite_keep_alive_uses_ollama_negative_duration(self):
+        generate_opener = RecordingOpener(
+            {"model": "muse-glimmer:30b-mlx", "response": "", "done": True}
+        )
+        adapter = OllamaHTTPAdapter(
+            "muse-glimmer:30b-mlx",
+            keep_alive="forever",
+            opener=generate_opener,
+        )
+
+        adapter.generate("load")
+
+        payload = json.loads(generate_opener.requests[0].data.decode("utf-8"))
+        self.assertEqual(payload["keep_alive"], -1)
+
+        chat_opener = RecordingOpener(
+            [{"model": "muse-glimmer:30b-mlx", "message": {}, "done": True}]
+        )
+        adapter = OllamaHTTPAdapter("muse-glimmer:30b-mlx", opener=chat_opener)
+
+        list(
+            adapter.chat(
+                [{"role": "user", "content": "hello"}],
+                keep_alive="infinite",
+            )
+        )
+
+        payload = json.loads(chat_opener.requests[0].data.decode("utf-8"))
+        self.assertEqual(payload["keep_alive"], -1)
+
     def test_tags_uses_get(self):
         opener = RecordingOpener({"models": [{"name": "qwen2.5:3b"}]})
         adapter = OllamaHTTPAdapter("qwen2.5:3b", endpoint="http://localhost:11434", opener=opener)
