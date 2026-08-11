@@ -57,15 +57,27 @@ def benchmark_chat_latency(
             "execution_order": (
                 "alternating_by_round" if engine == "both" else "single_engine"
             ),
+            "comparison_kind": (
+                "same_engine_gateway_overhead"
+                if backend == "ollama-mlx" and engine == "both"
+                else "backend_comparison"
+            ),
         },
         "engines": {},
         "notes": [
             "Unique system-message nonces prevent exact repeated-prompt cache hits.",
             "Two-engine runs alternate which engine executes first in each round.",
             "Without draft context, MachBoost delegates text generation to the native backend.",
-            "Ollama and MLX conversions may use different quantization formats and model files.",
         ],
     }
+    if backend == "ollama-mlx":
+        artifact["notes"].append(
+            "Both paths use the same installed Ollama MLX model; the comparison measures MachBoost gateway overhead."
+        )
+    else:
+        artifact["notes"].append(
+            "Ollama and MLX conversions may use different quantization formats and model files."
+        )
 
     if engine == "both":
         if machboost_client is None:
@@ -142,6 +154,18 @@ def benchmark_chat_latency(
             ),
             "median_output_equal": normalized_outputs(machboost["rows"])
             == normalized_outputs(ollama["rows"]),
+            "machboost_gateway_overhead_percent": (
+                100.0
+                * (
+                    safe_ratio(
+                        mach_summary["median_wall_seconds"],
+                        ollama_summary["median_wall_seconds"],
+                    )
+                    - 1.0
+                )
+                if backend == "ollama-mlx"
+                else None
+            ),
         }
     return artifact
 
@@ -314,6 +338,7 @@ def generation_options(max_tokens: int, backend: str) -> dict[str, Any]:
         "backend": backend,
         "num_predict": max_tokens,
         "temperature": 0.0,
+        "_think": False,
     }
 
 
@@ -401,6 +426,7 @@ def measure_ollama_chat(
         options={"num_predict": max_tokens, "temperature": 0.0},
         keep_alive=keep_alive,
         stream=True,
+        think=False,
     ):
         if chunk.content:
             if first_text_at is None:
