@@ -170,26 +170,57 @@ final class MachBoostTests: XCTestCase {
     @MainActor
     func testCommunityUpdaterRejectsPlaceholderKeyAndOpensReleases() {
         let releasesURL = URL(string: "https://example.com/releases/latest")!
+        let defaultsName = "MachBoostTests.community-updates.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: defaultsName)!
+        defer { defaults.removePersistentDomain(forName: defaultsName) }
         var openedURL: URL?
         let updates = UpdateController(
-            startingUpdater: true,
+            startingUpdater: false,
             publicKey: "$(SPARKLE_PUBLIC_ED_KEY)",
             releasesURL: releasesURL,
-            openRelease: { openedURL = $0 }
+            openRelease: { openedURL = $0 },
+            defaults: defaults
         )
 
         XCTAssertTrue(updates.isAvailable)
-        XCTAssertFalse(updates.supportsAutomaticUpdates)
-        XCTAssertFalse(updates.automaticallyChecksForUpdates)
+        XCTAssertTrue(updates.supportsAutomaticUpdates)
+        XCTAssertTrue(updates.automaticallyChecksForUpdates)
         XCTAssertEqual(updates.actionTitle, "View latest release")
         XCTAssertEqual(
             updates.deliveryDescription,
-            "Community builds update through GitHub Releases"
+            "Checks GitHub Releases; community installation is manual"
         )
+
+        updates.automaticallyChecksForUpdates = false
+        XCTAssertFalse(updates.automaticallyChecksForUpdates)
 
         updates.checkForUpdates()
 
         XCTAssertEqual(openedURL, releasesURL)
+    }
+
+    @MainActor
+    func testCommunityUpdaterSurfacesNewGitHubRelease() async {
+        let defaultsName = "MachBoostTests.community-release.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: defaultsName)!
+        defer { defaults.removePersistentDomain(forName: defaultsName) }
+        let updates = UpdateController(
+            startingUpdater: false,
+            publicKey: "$(SPARKLE_PUBLIC_ED_KEY)",
+            defaults: defaults,
+            currentVersion: "0.11.0",
+            fetchLatestRelease: { _ in "v0.12.0" }
+        )
+
+        await updates.checkCommunityRelease()
+
+        XCTAssertTrue(updates.communityCheckCompleted)
+        XCTAssertFalse(updates.communityCheckFailed)
+        XCTAssertEqual(updates.latestCommunityVersion, "v0.12.0")
+        XCTAssertEqual(
+            updates.deliveryDescription,
+            "v0.12.0 is available on GitHub; installation is manual"
+        )
     }
 
     @MainActor
