@@ -2300,6 +2300,9 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
         user_query = latest_user_text(messages)
         options = normalize_ollama_options(payload)
         runtime_model, options, _ = self.resolve_local_model(model, options)
+        merge_candidate_context = should_merge_candidate_context(
+            runtime_model, options
+        )
         if payload.get("tools") and payload.get("tool_choice") != "none":
             options["_tools"] = normalize_tools(payload["tools"])
             options["_tool_choice"] = payload.get("tool_choice", "auto")
@@ -2341,7 +2344,8 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
         )
         if workspace is not None:
             messages = inject_workspace_messages(messages, workspace)
-            context = merge_draft_context(context, workspace)
+            if merge_candidate_context:
+                context = merge_draft_context(context, workspace)
             options.setdefault("affinity_key", f"workspace:{workspace.workspace.id}")
             options.setdefault("workspace_prefix_cache", True)
             options.setdefault(
@@ -2350,7 +2354,8 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
         memory_context = self.prepare_memory(payload, workspace, query=user_query)
         if memory_context is not None:
             messages = inject_memory_messages(messages, memory_context)
-            context = merge_memory_draft_context(context, memory_context)
+            if merge_candidate_context:
+                context = merge_memory_draft_context(context, memory_context)
             options["_cache_namespace"] = memory_context.cache_namespace.key
         request_id = request_identifier(payload, "chat")
         if not bool(payload.get("stream", True)):
@@ -2566,6 +2571,9 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
         user_query = prompt
         options = normalize_ollama_options(payload)
         runtime_model, options, _ = self.resolve_local_model(model, options)
+        merge_candidate_context = should_merge_candidate_context(
+            runtime_model, options
+        )
         options["_tenant_key"] = self.principal.id
         if not prompt and not normalize_image_list(payload.get("images")):
             keep_alive = payload.get("keep_alive")
@@ -2604,7 +2612,8 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
         )
         if workspace is not None:
             prompt = inject_workspace_prompt(prompt, workspace)
-            context = merge_draft_context(context, workspace)
+            if merge_candidate_context:
+                context = merge_draft_context(context, workspace)
             options.setdefault("affinity_key", f"workspace:{workspace.workspace.id}")
             options.setdefault("workspace_prefix_cache", True)
             options.setdefault(
@@ -2613,7 +2622,8 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
         memory_context = self.prepare_memory(payload, workspace, query=user_query)
         if memory_context is not None:
             prompt = inject_memory_prompt(prompt, memory_context)
-            context = merge_memory_draft_context(context, memory_context)
+            if merge_candidate_context:
+                context = merge_memory_draft_context(context, memory_context)
             options["_cache_namespace"] = memory_context.cache_namespace.key
         request_id = request_identifier(payload, "generate")
         if not bool(payload.get("stream", True)):
@@ -2765,6 +2775,9 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
         user_query = latest_user_text(messages)
         options = openai_options(payload)
         runtime_model, options, _ = self.resolve_local_model(model, options)
+        merge_candidate_context = should_merge_candidate_context(
+            runtime_model, options
+        )
         options["_tenant_key"] = self.principal.id
         workspace = workspace_query_for_request(
             self.workspaces,
@@ -2774,7 +2787,8 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
         context = payload.get("context")
         if workspace is not None:
             messages = inject_workspace_messages(messages, workspace)
-            context = merge_draft_context(context, workspace)
+            if merge_candidate_context:
+                context = merge_draft_context(context, workspace)
             options.setdefault("affinity_key", f"workspace:{workspace.workspace.id}")
             options.setdefault("workspace_prefix_cache", True)
             options.setdefault(
@@ -2783,7 +2797,8 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
         memory_context = self.prepare_memory(payload, workspace, query=user_query)
         if memory_context is not None:
             messages = inject_memory_messages(messages, memory_context)
-            context = merge_memory_draft_context(context, memory_context)
+            if merge_candidate_context:
+                context = merge_memory_draft_context(context, memory_context)
             options["_cache_namespace"] = memory_context.cache_namespace.key
         request_id = request_identifier(payload, "chatcmpl")
         if not bool(payload.get("stream", False)):
@@ -3093,6 +3108,9 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
         user_query = prompt
         options = openai_options(payload)
         runtime_model, options, _ = self.resolve_local_model(model, options)
+        merge_candidate_context = should_merge_candidate_context(
+            runtime_model, options
+        )
         options["_tenant_key"] = self.principal.id
         workspace = workspace_query_for_request(
             self.workspaces,
@@ -3102,7 +3120,8 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
         context = payload.get("context")
         if workspace is not None:
             prompt = inject_workspace_prompt(prompt, workspace)
-            context = merge_draft_context(context, workspace)
+            if merge_candidate_context:
+                context = merge_draft_context(context, workspace)
             options.setdefault("affinity_key", f"workspace:{workspace.workspace.id}")
             options.setdefault("workspace_prefix_cache", True)
             options.setdefault(
@@ -3111,7 +3130,8 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
         memory_context = self.prepare_memory(payload, workspace, query=user_query)
         if memory_context is not None:
             prompt = inject_memory_prompt(prompt, memory_context)
-            context = merge_memory_draft_context(context, memory_context)
+            if merge_candidate_context:
+                context = merge_memory_draft_context(context, memory_context)
             options["_cache_namespace"] = memory_context.cache_namespace.key
         request_id = request_identifier(payload, "cmpl")
         if not bool(payload.get("stream", False)):
@@ -3841,6 +3861,11 @@ def merge_memory_draft_context(
     if memory.search is not None:
         values.extend(record.content for record in memory.search.records)
     return values
+
+
+def should_merge_candidate_context(model: str, options: dict[str, Any]) -> bool:
+    backend = str(options.get("backend") or "auto")
+    return resolve_model(model, backend).backend != "ollama-mlx"
 
 
 def machboost_context_result(
