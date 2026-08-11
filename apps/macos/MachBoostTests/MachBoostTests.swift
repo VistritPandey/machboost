@@ -1,4 +1,5 @@
 import Foundation
+import MachBoostDaemonClient
 import SwiftData
 import XCTest
 @testable import MachBoost
@@ -62,6 +63,81 @@ final class MachBoostTests: XCTestCase {
         XCTAssertEqual(object["workspace_id"] as? String, "workspace-123")
         XCTAssertEqual(options["num_predict"] as? Int, 64)
         XCTAssertEqual(options["affinity_key"] as? String, "thread-1")
+    }
+
+    func testMuseCatalogAndRequestExposeNativeCapabilities() throws {
+        let data = Data(
+            """
+            {
+              "schema":"machboost.catalog.v1",
+              "models":[{
+                "name":"muse-glimmer:30b-mlx",
+                "display_name":"Muse Glimmer 30B MLX",
+                "repository":null,
+                "source_repository":"meta-models/Muse-Glimmer-30B",
+                "backend":"ollama-mlx",
+                "capabilities":["chat","completion","vision","reasoning","tools"],
+                "cached":true,
+                "cached_path":"/tmp/manifest",
+                "recommended":true,
+                "tested":true,
+                "download_size_gb":21.0,
+                "disk_size_gb":21.0,
+                "minimum_memory_gb":32.0,
+                "context_length":131072,
+                "support":"ready",
+                "support_reason":"compatible"
+              }]
+            }
+            """.utf8
+        )
+
+        let model = try XCTUnwrap(
+            JSONDecoder().decode(CatalogResponse.self, from: data).models.first
+        )
+
+        XCTAssertTrue(model.supportsVision)
+        XCTAssertTrue(model.supportsReasoning)
+        XCTAssertTrue(model.supportsTools)
+        XCTAssertEqual(model.contextLength, 131_072)
+        XCTAssertEqual(model.sourceRepository, "meta-models/Muse-Glimmer-30B")
+    }
+
+    func testMuseChatRequestEncodesReasoningAndNativeTools() throws {
+        let tool = MachBoostDaemonClient.APIToolDefinition(
+            function: .init(
+                name: "search_repository",
+                description: "Search the active repository.",
+                parameters: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "query": .object(["type": .string("string")])
+                    ]),
+                    "required": .array([.string("query")]),
+                ])
+            )
+        )
+        let request = ChatRequest(
+            requestID: "muse-chat-1",
+            model: "muse-glimmer:30b-mlx",
+            messages: [.init(role: "user", content: "Find cancellation.")],
+            context: [],
+            options: .init(maxTokens: 256, temperature: 1, affinityKey: "repo-1"),
+            workspaceID: "repo-1",
+            reasoningStrength: "high",
+            tools: [tool]
+        )
+
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? [String: Any]
+        )
+        let tools = try XCTUnwrap(object["tools"] as? [[String: Any]])
+        let firstTool = try XCTUnwrap(tools.first)
+        let function = try XCTUnwrap(firstTool["function"] as? [String: Any])
+
+        XCTAssertEqual(object["think"] as? String, "high")
+        XCTAssertEqual(function["name"] as? String, "search_repository")
+        XCTAssertEqual(firstTool["type"] as? String, "function")
     }
 
     func testWorkspaceSchemaDecodesRepositoryMetadata() throws {
@@ -501,6 +577,46 @@ final class MachBoostTests: XCTestCase {
         XCTAssertEqual(events.map(\.requestID), ["chat-stream-7", "chat-stream-7"])
         XCTAssertEqual(events.compactMap(\.message?.content).joined(), "Hi there")
         XCTAssertTrue(events.last?.done ?? false)
+    }
+
+    func testNDJSONChatStreamPreservesMuseReasoningAndToolCalls() async throws {
+        let session = mockSession { request in
+            self.response(
+                for: request,
+                contentType: "application/x-ndjson",
+                body: """
+                {"request_id":"muse-stream-1","message":{"role":"assistant","content":"","thinking":"I should search."},"done":false}
+                {"request_id":"muse-stream-1","message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"search_repository","arguments":{"query":"cancellation"}}}]},"done":false}
+                {"request_id":"muse-stream-1","message":{"role":"assistant","content":"Found it."},"done":true,"done_reason":"stop"}
+
+                """
+            )
+        }
+        let api = MachBoostAPI(
+            endpoint: URL(string: "http://127.0.0.1:11435")!,
+            session: session
+        )
+        let request = ChatRequest(
+            requestID: "muse-stream-1",
+            model: "muse-glimmer:30b-mlx",
+            messages: [.init(role: "user", content: "Find cancellation.")],
+            context: [],
+            options: .init(maxTokens: 64, temperature: 1, affinityKey: nil),
+            reasoningStrength: "medium"
+        )
+        var events: [ChatEvent] = []
+
+        for try await event in api.streamChat(request) {
+            events.append(event)
+        }
+
+        XCTAssertEqual(events[0].message?.thinking, "I should search.")
+        XCTAssertEqual(events[1].message?.toolCalls?.first?.function.name, "search_repository")
+        XCTAssertEqual(
+            events[1].message?.toolCalls?.first?.function.arguments,
+            .object(["query": .string("cancellation")])
+        )
+        XCTAssertEqual(events[2].message?.content, "Found it.")
     }
 
     @MainActor
