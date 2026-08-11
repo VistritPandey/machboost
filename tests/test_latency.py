@@ -64,12 +64,24 @@ class FakeOllamaAdapter:
         self.messages = []
         self.options = []
         self.think_values = []
+        self.logprob_values = []
         self.trace = trace
 
-    def chat(self, messages, *, options, keep_alive, stream, think=None):
+    def chat(
+        self,
+        messages,
+        *,
+        options,
+        keep_alive,
+        stream,
+        think=None,
+        logprobs=None,
+        top_logprobs=None,
+    ):
         self.messages.append(messages)
         self.options.append(options)
         self.think_values.append(think)
+        self.logprob_values.append((logprobs, top_logprobs))
         if self.trace is not None:
             self.trace.append("ollama")
         yield SimpleNamespace(content="hello", done=False, raw={})
@@ -194,6 +206,32 @@ class ChatLatencyTests(unittest.TestCase):
                 runs=0,
                 engine="ollama",
             )
+
+    def test_muse_no_speculation_control_uses_logprobs_parking(self) -> None:
+        machboost = FakeMachBoostClient()
+        ollama = FakeOllamaAdapter()
+
+        artifact = benchmark_chat_latency(
+            "muse-glimmer:30b-mlx",
+            prompt="Control",
+            system="",
+            runs=1,
+            warmups=0,
+            max_tokens=8,
+            backend="ollama-mlx",
+            machboost_client=machboost,
+            ollama_adapter=ollama,
+            draft_num_predict=0,
+            clock=StepClock(),
+        )
+
+        self.assertEqual(
+            artifact["config"]["draft_control_method"],
+            "ollama_logprobs_parking",
+        )
+        self.assertIn("logprobs", " ".join(artifact["notes"]))
+        self.assertEqual(ollama.logprob_values, [(True, 0)])
+        self.assertEqual(machboost.options[0]["draft_num_predict"], 0)
 
 
 if __name__ == "__main__":
