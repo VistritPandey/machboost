@@ -1945,11 +1945,13 @@ def print_latency_benchmark(artifact: dict, *, stream=None) -> None:
             )
     comparison = artifact.get("comparison")
     if comparison:
+        output_equal = comparison.get("median_output_equal")
+        output_label = "n/a" if output_equal is None else "yes" if output_equal else "no"
         print(
             "comparison: "
             f"MachBoost wall={comparison['machboost_total_speedup_vs_ollama']:.3f}x "
             f"TTFT={comparison['machboost_ttft_speedup_vs_ollama']:.3f}x "
-            f"output_equal={'yes' if comparison['median_output_equal'] else 'no'} "
+            f"output_equal={output_label} "
             "relative to Ollama",
             file=stream,
         )
