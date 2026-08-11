@@ -239,6 +239,80 @@ class FakeVisionAccelerator:
         }
 
 
+@dataclass
+class FakeMuseStats(FakeStats):
+    thinking: str = "Checking the evidence."
+    tool_calls: tuple[dict, ...] = ()
+    done_reason: str = "stop"
+    native_speculative_decoding: bool = True
+
+
+class FakeMuseAccelerator:
+    def __init__(self) -> None:
+        self.service = self
+        self.chat_calls = []
+        self.generate_calls = []
+
+    def generate_chat(
+        self,
+        messages,
+        *,
+        max_tokens,
+        context=None,
+        on_text=None,
+        on_thinking=None,
+        temperature=0.0,
+        enable_thinking=False,
+        generation_options=None,
+        stop_strings=None,
+        tools=None,
+        format=None,
+        reasoning_strength=None,
+        cancel_event=None,
+    ):
+        self.chat_calls.append(
+            {
+                "messages": messages,
+                "max_tokens": max_tokens,
+                "context": context,
+                "temperature": temperature,
+                "enable_thinking": enable_thinking,
+                "generation_options": generation_options,
+                "tools": tools,
+                "format": format,
+                "reasoning_strength": reasoning_strength,
+            }
+        )
+        if on_thinking is not None:
+            on_thinking("Checking the evidence.")
+        if tools:
+            call = {
+                "id": "call_muse_1",
+                "function": {
+                    "index": 0,
+                    "name": "lookup_score",
+                    "arguments": {"team": "Argentina"},
+                },
+            }
+            return "", FakeMuseStats(generated_tokens=7, tool_calls=(call,))
+        if on_text is not None:
+            on_text("Muse answer")
+        return "Muse answer", FakeMuseStats(generated_tokens=3)
+
+    def generate(self, prompt, **kwargs):
+        self.generate_calls.append((prompt, kwargs))
+        message = {"role": "user", "content": prompt}
+        if kwargs.get("images"):
+            message["images"] = kwargs["images"]
+        return self.generate_chat(
+            [message],
+            **{key: value for key, value in kwargs.items() if key != "images"},
+        )
+
+    def close(self):
+        pass
+
+
 class FailingAccelerator(FakeAccelerator):
     def generate(self, prompt, *, max_tokens, context=None, on_text=None):
         raise RuntimeError("intentional streaming failure")
@@ -306,6 +380,93 @@ class FakeClock:
 
 
 class RuntimeManagerTests(unittest.TestCase):
+    def test_muse_glimmer_uses_ollama_mlx_backend_and_loader(self):
+        config = model_config("muse-glimmer:30b", {})
+        sentinel = object()
+        with patch(
+            "machboost.adapters.ollama_mlx.OllamaMLXAccelerator.from_pretrained",
+            return_value=sentinel,
+        ) as load:
+            result = load_accelerator(config)
+
+        self.assertEqual(config.backend, "ollama-mlx")
+        self.assertIs(result, sentinel)
+        load.assert_called_once_with(
+            "muse-glimmer:30b-mlx",
+            context_paths=None,
+            max_context_chars=200_000,
+            keep_alive="forever",
+        )
+
+    def test_muse_glimmer_runtime_preserves_native_reasoning_and_tools(self):
+        manager = RuntimeManager(loader=lambda config: FakeMuseAccelerator())
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "lookup_score",
+                    "parameters": {"type": "object"},
+                },
+            }
+        ]
+        reasoning = []
+
+        result = manager.chat(
+            "muse-glimmer:30b-mlx",
+            [{"role": "user", "content": "Who won?", "images": ["image"]}],
+            options={
+                "num_predict": 64,
+                "num_ctx": 32_768,
+                "_think": True,
+                "_reasoning_strength": "high",
+                "_tools": tools,
+            },
+            emit_thinking=reasoning.append,
+        )
+
+        self.assertEqual(result.backend, "ollama-mlx")
+        self.assertEqual(result.thinking, "Checking the evidence.")
+        self.assertEqual(result.tool_calls[0]["function"]["name"], "lookup_score")
+        self.assertEqual(reasoning, ["Checking the evidence."])
+        entry = manager.ps()[0]
+        self.assertIn("reasoning", entry["capabilities"])
+        self.assertIn("tools", entry["capabilities"])
+
+    def test_pull_muse_glimmer_uses_ollama_lifecycle(self):
+        events = []
+
+        class PullStatus:
+            def __init__(self, status, completed=0, total=0):
+                self.status = status
+                self.digest = "sha256:model"
+                self.completed = completed
+                self.total = total
+
+        class Adapter:
+            def __init__(self, *args, **kwargs):
+                self.args = args
+                self.kwargs = kwargs
+
+            def pull(self, *, stream):
+                self.assert_stream = stream
+                yield PullStatus("pulling model", 5, 10)
+                yield PullStatus("success", 10, 10)
+
+        manager = RuntimeManager(loader=lambda config: FakeMuseAccelerator())
+        with (
+            patch("machboost.adapters.ollama.OllamaHTTPAdapter", Adapter),
+            patch("machboost.adapters.ollama_mlx.ensure_ollama_service"),
+            patch(
+                "machboost.server.ollama_model_manifest",
+                return_value=Path("/cache/muse-manifest"),
+            ),
+        ):
+            result = manager.pull("muse-glimmer:30b-mlx", progress=events.append)
+
+        self.assertEqual(result["backend"], "ollama-mlx")
+        self.assertEqual(result["resolved_model"], "muse-glimmer:30b-mlx")
+        self.assertEqual(events[0]["completed"], 5)
+        self.assertEqual(events[-1]["status"], "success")
     def test_dflash_model_config_defaults_to_adaptive_verification(self):
         config = model_config("qwen3.5:9b", {"backend": "dflash"})
 
@@ -687,6 +848,8 @@ class HTTPServerTests(unittest.TestCase):
             accelerator = FailingAccelerator()
         elif config.model.endswith("tool-calling"):
             accelerator = ToolCallingAccelerator()
+        elif config.backend == "ollama-mlx":
+            accelerator = FakeMuseAccelerator()
         else:
             accelerator = FakeVisionAccelerator() if config.backend.endswith("-vlm") else FakeAccelerator()
         self.loaded.append((config, accelerator))
@@ -1448,6 +1611,111 @@ class HTTPServerTests(unittest.TestCase):
         model = json.loads(ps_body)["models"][0]
         self.assertEqual(model["capabilities"], ["vision", "chat"])
         self.assertEqual(model["vision_cache"]["hits"], 1)
+
+    def test_muse_glimmer_ollama_chat_preserves_reasoning_vision_and_tools(self):
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "lookup_score",
+                    "description": "Look up a match score",
+                    "parameters": {"type": "object"},
+                },
+            }
+        ]
+        _, _, body = self.request(
+            "/api/chat",
+            {
+                "model": "muse-glimmer:30b-mlx",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "Who won?",
+                        "images": ["aW1hZ2U="],
+                    }
+                ],
+                "tools": tools,
+                "think": "high",
+                "stream": False,
+                "options": {"num_ctx": 32_768, "num_predict": 64},
+            },
+        )
+
+        response = json.loads(body)
+        message = response["message"]
+        self.assertEqual(message["thinking"], "Checking the evidence.")
+        self.assertEqual(message["tool_calls"][0]["function"]["name"], "lookup_score")
+        self.assertEqual(
+            message["tool_calls"][0]["function"]["arguments"],
+            {"team": "Argentina"},
+        )
+        config, accelerator = self.loaded[0]
+        self.assertEqual(config.backend, "ollama-mlx")
+        call = accelerator.chat_calls[0]
+        self.assertEqual(call["messages"][0]["images"], ["aW1hZ2U="])
+        self.assertEqual(call["enable_thinking"], "high")
+        self.assertEqual(call["generation_options"]["num_ctx"], 32_768)
+
+    def test_muse_glimmer_streams_reasoning_separately(self):
+        _, _, body = self.request(
+            "/api/chat",
+            {
+                "model": "muse-glimmer:30b-mlx",
+                "messages": [{"role": "user", "content": "Explain briefly."}],
+                "think": "low",
+                "stream": True,
+            },
+        )
+
+        events = [json.loads(line) for line in body.splitlines()]
+        reasoning = [
+            event["message"]["thinking"]
+            for event in events
+            if event.get("message", {}).get("thinking")
+        ]
+        visible = [
+            event["message"]["content"]
+            for event in events
+            if event.get("message", {}).get("content")
+        ]
+        self.assertEqual(reasoning, ["Checking the evidence."])
+        self.assertEqual(visible, ["Muse answer"])
+        self.assertTrue(events[-1]["done"])
+
+    def test_muse_glimmer_openai_chat_maps_reasoning_effort_and_tool_calls(self):
+        _, _, body = self.request(
+            "/v1/chat/completions",
+            {
+                "model": "muse-glimmer:30b-mlx",
+                "messages": [{"role": "user", "content": "Use the score tool."}],
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "lookup_score",
+                            "parameters": {"type": "object"},
+                        },
+                    }
+                ],
+                "reasoning_effort": "xhigh",
+            },
+        )
+
+        response = json.loads(body)
+        choice = response["choices"][0]
+        self.assertEqual(choice["finish_reason"], "tool_calls")
+        self.assertEqual(
+            choice["message"]["reasoning_content"],
+            "Checking the evidence.",
+        )
+        self.assertEqual(
+            json.loads(choice["message"]["tool_calls"][0]["function"]["arguments"]),
+            {"team": "Argentina"},
+        )
+        self.assertEqual(
+            self.loaded[0][1].chat_calls[0]["reasoning_strength"],
+            "xhigh",
+        )
 
     def test_openai_multimodal_content_parts_are_preserved(self):
         payload = {
