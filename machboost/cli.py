@@ -1955,6 +1955,11 @@ def print_latency_benchmark(artifact: dict, *, stream=None) -> None:
             "relative to Ollama",
             file=stream,
         )
+    if config.get("draft_control_method") == "ollama_logprobs_parking":
+        print(
+            "control: Ollama logprobs park native MLX speculation; logprob materialization overhead is included",
+            file=stream,
+        )
     print("note: plain chat uses the native backend when no draft context is supplied", file=stream)
 
 
@@ -2086,7 +2091,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--draft-num-predict",
         type=int,
         default=None,
-        help="Ollama MLX DFlash draft block size; use 0 for a no-speculation control.",
+        help=(
+            "Ollama MLX DFlash draft block size; 0 uses a logprobs-based "
+            "no-speculation diagnostic that includes logprob overhead."
+        ),
     )
     bench.add_argument(
         "--backend",
