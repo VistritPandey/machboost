@@ -1317,10 +1317,11 @@ def print_resident_stats(row: dict, elapsed_s: float, *, stream=None) -> None:
     print(f"eval rate:            {rate:.2f} tokens/s", file=stream)
     backend = str(metrics.get("backend") or stats.get("backend") or "unknown")
     if backend == "ollama-mlx":
+        speculative = "on" if stats.get("native_speculative_decoding", True) else "off"
         print(
             "machboost: "
             f"backend={backend} "
-            "native_speculative=on "
+            f"native_speculative={speculative} "
             f"tool_calls={len(stats.get('tool_calls') or ())}"
             f"{cache_state}",
             file=stream,
