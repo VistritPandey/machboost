@@ -24,7 +24,10 @@ class FakeMachBoostClient:
         return {
             "load_duration_seconds": 1.25,
             "warmup_duration_seconds": 0.5 if warmup else 0.0,
-            "instance": {"model": "mlx-community/example", "backend": "mlx"},
+            "instance": {
+                "model": "mlx-community/example",
+                "backend": options.get("backend", "mlx"),
+            },
         }
 
     def chat(self, model, messages, *, options, keep_alive, stream):
@@ -57,10 +60,12 @@ class FakeOllamaAdapter:
 
     def __init__(self, trace=None) -> None:
         self.messages = []
+        self.think_values = []
         self.trace = trace
 
-    def chat(self, messages, *, options, keep_alive, stream):
+    def chat(self, messages, *, options, keep_alive, stream, think=None):
         self.messages.append(messages)
+        self.think_values.append(think)
         if self.trace is not None:
             self.trace.append("ollama")
         yield SimpleNamespace(content="hello", done=False, raw={})
@@ -128,6 +133,30 @@ class ChatLatencyTests(unittest.TestCase):
             artifact["config"]["execution_order"],
             "alternating_by_round",
         )
+        self.assertEqual(ollama.think_values, [False, False, False])
+
+    def test_labels_same_ollama_mlx_engine_as_gateway_overhead(self) -> None:
+        artifact = benchmark_chat_latency(
+            "muse-glimmer:30b-mlx",
+            prompt="Write a short response.",
+            system="Be concise.",
+            runs=1,
+            warmups=0,
+            max_tokens=16,
+            backend="ollama-mlx",
+            machboost_client=FakeMachBoostClient(),
+            ollama_adapter=FakeOllamaAdapter(),
+            clock=StepClock(),
+        )
+
+        self.assertEqual(
+            artifact["config"]["comparison_kind"],
+            "same_engine_gateway_overhead",
+        )
+        self.assertIsNotNone(
+            artifact["comparison"]["machboost_gateway_overhead_percent"]
+        )
+        self.assertIn("same installed Ollama MLX model", " ".join(artifact["notes"]))
 
     def test_rejects_empty_measurement_set(self) -> None:
         with self.assertRaisesRegex(ValueError, "runs must be at least 1"):
