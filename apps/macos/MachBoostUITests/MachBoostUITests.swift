@@ -253,9 +253,12 @@ final class MachBoostUITests: XCTestCase {
         let controls = app.descendants(matching: .any)
         XCTAssertTrue(controls["launch-at-login"].waitForExistence(timeout: 3))
         XCTAssertTrue(controls["automatic-updates"].exists)
+        XCTAssertEqual(controls["automatic-updates"].value as? String, "1")
         XCTAssertTrue(app.buttons["View latest release"].exists)
         XCTAssertTrue(
-            app.staticTexts["Community builds update through GitHub Releases"].exists
+            app.staticTexts[
+                "Checks GitHub Releases; community installation is manual"
+            ].exists
         )
         XCTAssertTrue(app.staticTexts["Telemetry"].exists)
         XCTAssertTrue(app.staticTexts["Disabled"].exists)
