@@ -33,6 +33,30 @@ Chat history and imported attachment copies stay under MachBoost Application
 Support. Model weights stay in the normal Hugging Face cache. The app has no
 account, cloud sync, telemetry upload, or automatic model-weight download.
 
+## Muse Glimmer 30B MLX
+
+MachBoost 0.11 adds a tested catalog entry for Meta's
+`muse-glimmer:30b-mlx`. This model combines text, image input, reasoning, and
+native function-tool output behind the same resident MachBoost endpoint. The
+app can display reasoning separately from the final Markdown response and
+renders returned tool calls as structured data. Tool execution remains the
+responsibility of the connected coding agent or API client.
+
+Unlike the app's ordinary MLX and MLX-VLM catalog entries, Muse Glimmer uses
+Ollama's native MLX runner. A current Ollama installation is therefore required
+for this model. MachBoost locates both command-line installations and
+`/Applications/Ollama.app`; it does not bundle or modify Ollama. The Models view
+checks that dependency before enabling the download, shows the approximately
+21 GB artifact size, and asks for confirmation. Apple Silicon with at least
+32 GB of unified memory is the conservative supported configuration.
+
+After installation, Muse Glimmer can be used in the app's chat window or by
+OpenAI- and Ollama-compatible clients connected to the app server. Images stay
+attached within the current conversation until removed. Reasoning strength is
+selected per request; the supported levels are low, medium, high, and maximum.
+The model advertises a 131,072-token context window, but practical capacity also
+depends on available unified memory and concurrent workload.
+
 ## Local Development
 
 Install Xcode 16 or newer and XcodeGen 2.46.0, then accept the Xcode license:
@@ -201,8 +225,8 @@ Build an ad-hoc signed DMG for local packaging and runtime tests without Apple
 credentials:
 
 ```sh
-./scripts/release_macos.sh 0.10.0-local --local
-open dist/macos/MachBoost-0.10.0-local-arm64.dmg
+./scripts/release_macos.sh 0.11.0-local --local
+open dist/macos/MachBoost-0.11.0-local-arm64.dmg
 ```
 
 Local mode builds the locked runtime, archives the arm64 app, embeds and signs
@@ -221,14 +245,14 @@ export MACHBOOST_DEVELOPER_ID='Developer ID Application: ...'
 export MACHBOOST_NOTARY_PROFILE=...
 export SPARKLE_PUBLIC_ED_KEY=...
 export SPARKLE_PRIVATE_KEY=/secure/path/to/sparkle-private-key
-./scripts/release_macos.sh 0.1.0
-./scripts/publish_macos_release.sh 0.1.0 ./release-notes/0.1.0.md
+./scripts/release_macos.sh 0.11.0
+./scripts/publish_macos_release.sh 0.11.0 ./release-notes/0.11.0.md
 ```
 
 The release script builds the embedded runtime, archives the arm64 app, signs
 nested Mach-O files and the app, creates and notarizes a DMG, staples the
 ticket, runs Gatekeeper verification, writes a SHA-256 checksum, and produces a
-signed Sparkle appcast. The publisher requires an existing `v0.1.0` tag, an
+signed Sparkle appcast. The publisher requires an existing `v0.11.0` tag, an
 authenticated GitHub CLI session, and an explicit release-notes file. It refuses
 to overwrite an existing release and uploads the DMG, checksum, and appcast to
 the matching GitHub release.
