@@ -108,6 +108,7 @@ class OllamaMLXAccelerator:
         max_tokens: int,
         context: Optional[Iterable[str] | str] = None,
         on_text: Optional[Callable[[str], None]] = None,
+        on_thinking: Optional[Callable[[str], None]] = None,
         temperature: float = 0.0,
         enable_thinking: bool | str = False,
         generation_options: Optional[dict[str, Any]] = None,
@@ -161,6 +162,8 @@ class OllamaMLXAccelerator:
                         on_text(chunk.content)
                 if chunk.thinking:
                     thinking_chunks.append(chunk.thinking)
+                    if on_thinking is not None:
+                        on_thinking(chunk.thinking)
                 if chunk.tool_calls:
                     tool_calls.extend(dict(item) for item in chunk.tool_calls)
                 if chunk.done:
@@ -202,6 +205,7 @@ class OllamaMLXAccelerator:
         max_tokens: int,
         context: Optional[Iterable[str] | str] = None,
         on_text: Optional[Callable[[str], None]] = None,
+        on_thinking: Optional[Callable[[str], None]] = None,
         images: Optional[Sequence[str]] = None,
         temperature: float = 0.0,
         enable_thinking: bool | str = False,
@@ -217,6 +221,7 @@ class OllamaMLXAccelerator:
             max_tokens=max_tokens,
             context=context,
             on_text=on_text,
+            on_thinking=on_thinking,
             temperature=temperature,
             enable_thinking=enable_thinking,
             generation_options=generation_options,
