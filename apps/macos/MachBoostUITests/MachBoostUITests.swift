@@ -113,7 +113,9 @@ final class MachBoostUITests: XCTestCase {
 
         send("Use Muse tools", in: app)
 
-        XCTAssertTrue(app.buttons["Reasoning"].waitForExistence(timeout: 8))
+        XCTAssertTrue(
+            app.disclosureTriangles["message-reasoning"].waitForExistence(timeout: 8)
+        )
         XCTAssertTrue(app.staticTexts["search_repository"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["Fixture response."].waitForExistence(timeout: 3))
     }
@@ -141,14 +143,14 @@ final class MachBoostUITests: XCTestCase {
         focus(composer)
         composer.typeText("Stop this fixture response")
         app.buttons["Send message"].click()
-        let stop = app.buttons["Stop generation"]
+        let stop = app.buttons["stop-generation"]
         XCTAssertTrue(stop.waitForExistence(timeout: 2))
+        app.activate()
         let stopReady = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "hittable == true"),
             object: stop
         )
-        XCTAssertEqual(XCTWaiter.wait(for: [stopReady], timeout: 2), .completed)
-        app.activate()
+        XCTAssertEqual(XCTWaiter.wait(for: [stopReady], timeout: 5), .completed)
         stop.click()
 
         XCTAssertTrue(app.staticTexts["Stopped"].waitForExistence(timeout: 5))
