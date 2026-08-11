@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import base64
 import binascii
-import shutil
 import subprocess
 import time
 from dataclasses import asdict, dataclass
@@ -11,6 +10,7 @@ from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
 from urllib import request
 
 from ..accelerator import read_context_paths, resolve_context
+from ..models import ollama_executable
 from ..vision import DEFAULT_MAX_IMAGE_BYTES, decode_data_url
 from .ollama import OllamaHTTPAdapter, OllamaHTTPError
 
@@ -313,7 +313,7 @@ def ensure_ollama_service(
         return
     except OllamaHTTPError:
         pass
-    executable = shutil.which("ollama")
+    executable = ollama_executable()
     if executable is None:
         raise ImportError("Muse Glimmer requires Ollama on Apple Silicon")
     subprocess.Popen(
