@@ -51,6 +51,16 @@ class OllamaOptionTests(unittest.TestCase):
             with self.subTest(payload=payload), self.assertRaises(ValueError):
                 normalize_ollama_options(payload)
 
+    def test_null_options_are_treated_as_omitted(self):
+        result = normalize_ollama_options(
+            {
+                "num_ctx": None,
+                "options": {"num_predict": 128, "top_k": None},
+            }
+        )
+
+        self.assertEqual(result, {"num_predict": 128})
+
 
 class ContextWindowTests(unittest.TestCase):
     def setUp(self):
