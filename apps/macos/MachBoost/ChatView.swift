@@ -20,6 +20,8 @@ struct ChatView: View {
     @FocusState private var composerIsFocused: Bool
     @AppStorage("machboost.chat.maxTokens") private var maxTokens = 512
     @AppStorage("machboost.chat.temperature") private var temperature = 0.2
+    @AppStorage("machboost.chat.reasoningStrength") private var reasoningStrength = "medium"
+    @AppStorage("machboost.chat.showReasoning") private var showReasoning = true
 
     var body: some View {
         VStack(spacing: 0) {
@@ -68,6 +70,7 @@ struct ChatView: View {
                 Text(model.backend.uppercased())
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(.secondary)
+                capabilityIcons(for: model)
             }
 
             workspaceMenu
@@ -184,6 +187,20 @@ struct ChatView: View {
                 )
                 Slider(value: $temperature, in: 0...1, step: 0.05)
             }
+            if selectedModel?.supportsReasoning == true {
+                Picker("Reasoning", selection: $reasoningStrength) {
+                    Text("Off").tag("off")
+                    Text("Low").tag("low")
+                    Text("Medium").tag("medium")
+                    Text("High").tag("high")
+                    Text("Max").tag("xhigh")
+                }
+                .pickerStyle(.segmented)
+                Toggle("Show reasoning", isOn: $showReasoning)
+            }
+            if let contextLength = selectedModel?.contextLength {
+                LabeledContent("Context window", value: contextLength.formatted())
+            }
         }
         .formStyle(.grouped)
         .frame(width: 300)
@@ -207,6 +224,7 @@ struct ChatView: View {
                         ForEach(messages, id: \.id) { message in
                             MessageRow(
                                 message: message,
+                                showsReasoning: showReasoning,
                                 onEdit: { edit(message) },
                                 onRegenerate: regenerateAction(
                                     for: message,
@@ -236,7 +254,13 @@ struct ChatView: View {
                     proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
                 }
             }
-            .task(id: messages.last?.content) {
+            .task(
+                id: [
+                    messages.last?.content ?? "",
+                    messages.last?.reasoningContent ?? "",
+                    messages.last?.toolCallsJSON ?? "",
+                ].joined(separator: "|")
+            ) {
                 try? await Task.sleep(for: .milliseconds(100))
                 guard !Task.isCancelled else { return }
                 proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
@@ -361,6 +385,10 @@ struct ChatView: View {
 
     private var isGenerating: Bool { activeRequestID != nil }
 
+    private var selectedModel: CatalogModel? {
+        appState.model(named: conversation.model)
+    }
+
     private var selectedWorkspace: WorkspaceSummary? {
         appState.workspace(id: conversation.workspaceID)
     }
@@ -462,9 +490,14 @@ struct ChatView: View {
                 affinityKey: conversation.workspaceID.map { "workspace:\($0)" }
                     ?? conversation.id.uuidString
             ),
-            workspaceID: conversation.workspaceID
+            workspaceID: conversation.workspaceID,
+            reasoningStrength: selectedModel?.supportsReasoning == true
+                && reasoningStrength != "off"
+                ? reasoningStrength
+                : nil
         )
         generationTask = Task { @MainActor in
+            var streamedToolCalls: [APIToolCall] = []
             do {
                 for try await event in appState.api.streamChat(request) {
                     if let error = event.error {
@@ -472,6 +505,15 @@ struct ChatView: View {
                     }
                     if let content = event.message?.content, !content.isEmpty {
                         assistant.content += content
+                    }
+                    if let thinking = event.message?.thinking, !thinking.isEmpty {
+                        assistant.reasoningContent = (assistant.reasoningContent ?? "") + thinking
+                    }
+                    if let calls = event.message?.toolCalls, !calls.isEmpty {
+                        streamedToolCalls.append(contentsOf: calls)
+                        if let data = try? JSONEncoder().encode(streamedToolCalls) {
+                            assistant.toolCallsJSON = String(decoding: data, as: UTF8.self)
+                        }
                     }
                     if event.done {
                         apply(event: event, to: assistant)
@@ -575,10 +617,31 @@ struct ChatView: View {
         modelContext.delete(attachment)
         try? modelContext.save()
     }
+
+    @ViewBuilder
+    private func capabilityIcons(for model: CatalogModel) -> some View {
+        HStack(spacing: 7) {
+            if model.supportsVision {
+                Image(systemName: "eye")
+                    .help("Vision")
+            }
+            if model.supportsReasoning {
+                Image(systemName: "brain")
+                    .help("Reasoning")
+            }
+            if model.supportsTools {
+                Image(systemName: "wrench.and.screwdriver")
+                    .help("Tool calling")
+            }
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+    }
 }
 
 private struct MessageRow: View {
     @Bindable var message: ChatMessage
+    let showsReasoning: Bool
     let onEdit: () -> Void
     let onRegenerate: (() -> Void)?
 
@@ -595,11 +658,32 @@ private struct MessageRow: View {
                     Spacer()
                     messageActions
                 }
-                if message.content.isEmpty {
+                if
+                    message.content.isEmpty,
+                    message.reasoningContent?.isEmpty != false,
+                    message.toolCallsJSON?.isEmpty != false
+                {
                     ProgressView()
                         .controlSize(.small)
                 } else {
-                    MessageContentView(content: message.content)
+                    if
+                        showsReasoning,
+                        let reasoning = message.reasoningContent,
+                        !reasoning.isEmpty
+                    {
+                        DisclosureGroup("Reasoning") {
+                            MessageContentView(content: reasoning)
+                                .padding(.top, 6)
+                                .foregroundStyle(.secondary)
+                        }
+                        .font(.callout)
+                    }
+                    if !message.content.isEmpty {
+                        MessageContentView(content: message.content)
+                    }
+                    if !toolCalls.isEmpty {
+                        toolCallList
+                    }
                 }
                 if message.role == .assistant, hasStats {
                     stats
@@ -682,6 +766,51 @@ private struct MessageRow: View {
         }
         .font(.caption)
         .foregroundStyle(.secondary)
+    }
+
+    private var toolCalls: [APIToolCall] {
+        guard
+            let json = message.toolCallsJSON,
+            let data = json.data(using: .utf8)
+        else {
+            return []
+        }
+        return (try? JSONDecoder().decode([APIToolCall].self, from: data)) ?? []
+    }
+
+    private var toolCallList: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(Array(toolCalls.enumerated()), id: \.offset) { _, call in
+                VStack(alignment: .leading, spacing: 4) {
+                    Label(call.function.name, systemImage: "wrench.and.screwdriver")
+                        .font(.caption.weight(.semibold))
+                    if let arguments = call.function.arguments {
+                        Text(prettyJSON(arguments))
+                            .font(.caption.monospaced())
+                            .textSelection(.enabled)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color(nsColor: .controlBackgroundColor))
+                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            }
+        }
+    }
+
+    private func prettyJSON(_ value: JSONValue) -> String {
+        guard
+            let data = try? JSONEncoder().encode(value),
+            let object = try? JSONSerialization.jsonObject(with: data),
+            let pretty = try? JSONSerialization.data(
+                withJSONObject: object,
+                options: [.prettyPrinted, .sortedKeys]
+            )
+        else {
+            return ""
+        }
+        return String(decoding: pretty, as: UTF8.self)
     }
 
     private func copyMessage() {
