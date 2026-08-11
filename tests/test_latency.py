@@ -118,6 +118,9 @@ class ChatLatencyTests(unittest.TestCase):
         )
 
         self.assertEqual(artifact["schema_version"], LATENCY_SCHEMA)
+        self.assertTrue(artifact["environment"]["platform"])
+        self.assertTrue(artifact["environment"]["machine"])
+        self.assertTrue(artifact["environment"]["python"])
         self.assertEqual(artifact["engines"]["machboost"]["summary"]["runs"], 2)
         self.assertEqual(artifact["engines"]["ollama"]["summary"]["runs"], 2)
         self.assertEqual(
