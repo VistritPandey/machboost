@@ -28,6 +28,7 @@ def benchmark_chat_latency(
     ollama_model: Optional[str] = None,
     ollama_endpoint: Optional[str] = None,
     timeout: float = 300.0,
+    draft_num_predict: Optional[int] = None,
     clock: Callable[[], float] = time.perf_counter,
 ) -> dict[str, Any]:
     if runs < 1:
@@ -38,6 +39,8 @@ def benchmark_chat_latency(
         raise ValueError("max_tokens must be at least 1")
     if engine not in {"machboost", "ollama", "both"}:
         raise ValueError(f"unsupported benchmark engine: {engine}")
+    if draft_num_predict is not None and draft_num_predict < 0:
+        raise ValueError("draft_num_predict cannot be negative")
 
     nonces = [f"machboost-latency-{index + 1}" for index in range(warmups + runs)]
     artifact: dict[str, Any] = {
@@ -53,6 +56,7 @@ def benchmark_chat_latency(
             "max_tokens": max_tokens,
             "backend": backend,
             "keep_alive": keep_alive,
+            "draft_num_predict": draft_num_predict,
             "unique_prompt_nonce": True,
             "execution_order": (
                 "alternating_by_round" if engine == "both" else "single_engine"
@@ -100,6 +104,7 @@ def benchmark_chat_latency(
                 max_tokens=max_tokens,
                 backend=backend,
                 keep_alive=keep_alive,
+                draft_num_predict=draft_num_predict,
                 clock=clock,
             )
         )
@@ -117,6 +122,7 @@ def benchmark_chat_latency(
             max_tokens=max_tokens,
             backend=backend,
             keep_alive=keep_alive,
+            draft_num_predict=draft_num_predict,
             clock=clock,
         )
 
@@ -135,6 +141,7 @@ def benchmark_chat_latency(
             warmups=warmups,
             max_tokens=max_tokens,
             keep_alive=keep_alive,
+            draft_num_predict=draft_num_predict,
             clock=clock,
         )
 
@@ -182,9 +189,10 @@ def benchmark_interleaved_chat(
     max_tokens: int,
     backend: str,
     keep_alive: str,
+    draft_num_predict: Optional[int],
     clock: Callable[[], float] = time.perf_counter,
 ) -> dict[str, dict[str, Any]]:
-    options = generation_options(max_tokens, backend)
+    options = generation_options(max_tokens, backend, draft_num_predict)
     machboost = preload_machboost(
         client,
         model,
@@ -218,6 +226,7 @@ def benchmark_interleaved_chat(
                     run=run,
                     max_tokens=max_tokens,
                     keep_alive=keep_alive,
+                    draft_num_predict=draft_num_predict,
                     clock=clock,
                 )
                 if index >= warmups:
@@ -250,9 +259,10 @@ def benchmark_machboost_chat(
     max_tokens: int,
     backend: str,
     keep_alive: str,
+    draft_num_predict: Optional[int],
     clock: Callable[[], float] = time.perf_counter,
 ) -> dict[str, Any]:
-    options = generation_options(max_tokens, backend)
+    options = generation_options(max_tokens, backend, draft_num_predict)
     result = preload_machboost(
         client,
         model,
@@ -298,6 +308,7 @@ def benchmark_ollama_chat(
     warmups: int,
     max_tokens: int,
     keep_alive: str,
+    draft_num_predict: Optional[int],
     clock: Callable[[], float] = time.perf_counter,
 ) -> dict[str, Any]:
     rows = []
@@ -310,6 +321,7 @@ def benchmark_ollama_chat(
                     run=index - warmups + 1,
                     max_tokens=max_tokens,
                     keep_alive=keep_alive,
+                    draft_num_predict=draft_num_predict,
                     clock=clock,
                 )
             )
@@ -320,6 +332,7 @@ def benchmark_ollama_chat(
                 run=0,
                 max_tokens=max_tokens,
                 keep_alive=keep_alive,
+                draft_num_predict=draft_num_predict,
                 clock=clock,
             )
     return {
@@ -333,13 +346,20 @@ def benchmark_ollama_chat(
     }
 
 
-def generation_options(max_tokens: int, backend: str) -> dict[str, Any]:
-    return {
+def generation_options(
+    max_tokens: int,
+    backend: str,
+    draft_num_predict: Optional[int] = None,
+) -> dict[str, Any]:
+    options = {
         "backend": backend,
         "num_predict": max_tokens,
         "temperature": 0.0,
         "_think": False,
     }
+    if draft_num_predict is not None:
+        options["draft_num_predict"] = int(draft_num_predict)
+    return options
 
 
 def preload_machboost(
@@ -415,15 +435,19 @@ def measure_ollama_chat(
     run: int,
     max_tokens: int,
     keep_alive: str,
+    draft_num_predict: Optional[int],
     clock: Callable[[], float],
 ) -> dict[str, Any]:
     started = clock()
     first_text_at = None
     output = []
     final: Mapping[str, Any] = {}
+    options: dict[str, Any] = {"num_predict": max_tokens, "temperature": 0.0}
+    if draft_num_predict is not None:
+        options["draft_num_predict"] = int(draft_num_predict)
     for chunk in adapter.chat(
         messages,
-        options={"num_predict": max_tokens, "temperature": 0.0},
+        options=options,
         keep_alive=keep_alive,
         stream=True,
         think=False,
