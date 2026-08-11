@@ -56,6 +56,8 @@ public final class ChatMessage {
     @Attribute(.unique) public var id: UUID
     public var roleValue: String
     public var content: String
+    public var reasoningContent: String?
+    public var toolCallsJSON: String?
     public var createdAt: Date
     public var durationSeconds: Double?
     public var timeToFirstTokenSeconds: Double?
@@ -68,12 +70,16 @@ public final class ChatMessage {
         id: UUID = UUID(),
         role: MessageRole,
         content: String,
+        reasoningContent: String? = nil,
+        toolCallsJSON: String? = nil,
         createdAt: Date = .now,
         conversation: Conversation? = nil
     ) {
         self.id = id
         self.roleValue = role.rawValue
         self.content = content
+        self.reasoningContent = reasoningContent
+        self.toolCallsJSON = toolCallsJSON
         self.createdAt = createdAt
         self.wasCancelled = false
         self.conversation = conversation
