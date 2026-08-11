@@ -43,6 +43,27 @@ class CLITests(unittest.TestCase):
         self.assertIn("not a wall-clock benchmark", rendered)
         self.assertNotIn("estimated speedup:", rendered)
 
+    def test_resident_stats_show_disabled_native_speculation(self):
+        output = io.StringIO()
+
+        cli.print_resident_stats(
+            {
+                "eval_count": 8,
+                "eval_duration": 1_000_000_000,
+                "machboost": {
+                    "backend": "ollama-mlx",
+                    "stats": {
+                        "backend": "ollama-mlx",
+                        "native_speculative_decoding": False,
+                    },
+                },
+            },
+            1.0,
+            stream=output,
+        )
+
+        self.assertIn("native_speculative=off", output.getvalue())
+
     def test_main_version_prints_version(self):
         output = io.StringIO()
 
