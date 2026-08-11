@@ -226,6 +226,32 @@ final class MachBoostTests: XCTestCase {
     }
 
     @MainActor
+    func testConversationPersistsMuseReasoningAndToolCalls() throws {
+        let configuration = ModelConfiguration(isStoredInMemoryOnly: true)
+        let container = try ModelContainer(
+            for: Conversation.self,
+            ChatMessage.self,
+            ChatAttachment.self,
+            configurations: configuration
+        )
+        let conversation = Conversation(model: "muse-glimmer:30b-mlx")
+        let message = ChatMessage(
+            role: .assistant,
+            content: "Checking now.",
+            reasoningContent: "I should search the repository.",
+            toolCallsJSON: "[{\"function\":{\"name\":\"search_repository\"}}]",
+            conversation: conversation
+        )
+        conversation.messages.append(message)
+        container.mainContext.insert(conversation)
+        try container.mainContext.save()
+
+        let stored = try XCTUnwrap(conversation.orderedMessages.first)
+        XCTAssertEqual(stored.reasoningContent, "I should search the repository.")
+        XCTAssertTrue(stored.toolCallsJSON?.contains("search_repository") ?? false)
+    }
+
+    @MainActor
     func testConversationPersistsSelectedWorkspace() throws {
         let configuration = ModelConfiguration(isStoredInMemoryOnly: true)
         let container = try ModelContainer(
