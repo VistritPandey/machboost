@@ -27,6 +27,7 @@
 
 \begin{abstract}
 MachBoost is a local inference package for conditional acceleration. Its text paths draft from explicit context, reuse model state for an unchanged repository prefix, or use a target-verified block-diffusion drafter for selected fresh prompts. Visual requests can reuse state derived from unchanged image bytes or, experimentally, shorten a new image's visual sequence after Qwen3-VL completes early cross-modal fusion. A team gateway adds revision-aware private and shared memory, deterministic exact-request reuse, and budgeted external-provider fallback; these serving features are kept separate in the evaluation. Controlled repository-prefix experiments on an Apple M5 Pro report 2.97$\times$ and 3.23$\times$ median speedups across five changing questions on Qwen2.5 3B and 7B. A later audit uses an 8,754-file private production repository, a 7B model, and independent standalone threads. Reusing 75--77\% of prompt tokens reduces median prefill by 3.75--3.84$\times$ and end-to-end time by 1.31--1.43$\times$ across six paired new-question runs. Decode time is unchanged, and all six pairs are byte-identical under greedy generation. On fresh 512-token outputs, Qwen3.5 4B BF16 block-diffusion decoding raises median throughput from 29.36 to 48.52 tokens/s across three prompt families, a 1.65$\times$ median; prompt medians range from 1.31$\times$ to 2.43$\times$, and all three 128-token validation prefixes match native greedy output. The same-weight 9B BF16 row reaches 1.61$\times$ but matches only two of three validation prefixes. A practical 9B 4-bit control reaches 1.32$\times$ and also diverges. Separate context-drafting experiments on an Apple M1 Max are less consistent: a favorable 3B Qwen code fixture reaches 1.96$\times$, while a broader Llama 3.2 3B audit records a 1.008$\times$ aggregate median and exact token equality in 20 of 21 pairs. Across six Qwen vision models, repeated-image paired medians range from 5.14$\times$ to 17.44$\times$. A ten-image Qwen3-VL 8B TextVQA pilot with all caches disabled reaches a 1.67$\times$ aggregate speedup after retaining a median 35.12\% of visual hidden states. Native and compressed paths each answer eight questions correctly, although normalized outputs agree on seven. The measurements support distinct, workload-dependent contracts rather than universal faster inference.
+An additional Muse Glimmer 30B MLX case study preserves the model's native DFlash, reasoning, vision, and tool-call interfaces through the gateway. It records 21.61 tokens/s through MachBoost versus 22.50 tokens/s directly, or 4.11\% median wall-time overhead; DFlash is 1.25$\times$ faster than a conservative logprobs-based control through the gateway, without an output-equivalence claim.
 \end{abstract}
 
 \section{Introduction}
@@ -90,6 +91,14 @@ drafters, then allocating verification depth with a profiled cost model
 \cite{liu2026angelspec}. MachBoost does not train a new drafter. It integrates a
 published DFlash pair into a local server and measures where adaptive block
 selection survives Apple Silicon's runtime costs.
+
+Meta's Muse Glimmer 30B model combines a block-diffusion language model with a
+vision encoder and structured reasoning and tool-call interfaces
+\cite{meta2026museglimmer}. Its published DFlash measurements use runtime-level
+ExecuTorch and llama.cpp integrations. Ollama distributes a separate MLX
+artifact for Apple Silicon \cite{ollama2026museglimmer}. MachBoost treats that
+artifact as an external model-native accelerator: the contribution evaluated
+here is protocol preservation and gateway overhead, not the decoder design.
 
 The same distinction appears outside text generation. Diffusion workloads can reuse intermediate transformations across denoising steps; EasyCache reports 2.1--3.3$\times$ for several video models \cite{zhou2025easycache}. That mechanism does not transfer directly to autoregressive text decoding. It does, however, support a broader product design in which one package selects a backend-specific accelerator rather than pretending that a single algorithm fits text, image, audio, and video models.
 
@@ -302,6 +311,14 @@ draft; the server keeps both resident behind the existing bounded queue. This is
 an explicit model selection. MachBoost does not silently substitute it for the
 smaller 4-bit \texttt{qwen3.5:4b} alias.
 
+Version 0.11 adds \texttt{muse-glimmer:30b-mlx} as an Ollama MLX bridge. The
+adapter validates the host runtime and model manifest, keeps the runner
+resident, and forwards images, reasoning strength, structured tools,
+cancellation, context length, and streaming statistics. It also translates
+MachBoost's indefinite lifetime to Ollama's supported negative duration. The
+model remains an external 21 GB artifact; MachBoost neither redistributes its
+weights nor replaces its inference runner.
+
 The current server also owns the repository index and exposes workspace
 registration, reindex, search, listing, and deletion routes. Chat and generation
 requests can provide a workspace identifier through either the
@@ -324,7 +341,11 @@ the database.
 
 The 0.3 series adds vision-model aliases, image arguments in the CLI and Python client, Ollama-style image payloads, and OpenAI-style image content parts. The current alias set includes Qwen2.5-VL 3B, Qwen3-VL 2B/4B/8B, and Qwen3.5 0.8B/4B/9B. MLX objects are created and used on one dedicated worker thread because MLX arrays and streams are thread-affine. The worker owns model load, image preparation, cache lookup, generation, and cache release. Version 0.4 adds the opt-in \texttt{vision\_tokens} mode and retention telemetry. Version 0.5 adds automatic and calibrated policies, random and shape/depth ablations, and temporal video-frame inputs. Post-fusion compression remains restricted to Qwen3-VL because the wrapper depends on that family's layer and deep-stack interfaces.
 
-The Ollama HTTP adapter remains a wrapper: Ollama's public generation API does not expose the target token IDs, logits, mutable KV cache, and block-verification hook this implementation needs. Native integration would require a runner-level change rather than an HTTP option.
+For general Ollama models, the HTTP adapter remains a wrapper: the public
+generation API does not expose the target token IDs, logits, mutable KV cache,
+and block-verification hook required by MachBoost's context verifier. The Muse
+bridge therefore preserves Ollama's existing model-native DFlash rather than
+injecting MachBoost's verifier into that runtime.
 
 \section{Evaluation}
 \subsection{Machine and Model}
@@ -345,6 +366,13 @@ a practical quantized control. The draft weights are the corresponding
 \path{z-lab} DFlash repositories. Model load is excluded. Throughput tests force
 512 generated tokens to expose steady-state decode; a separate 128-token greedy
 gate compares native and accelerated token sequences.
+
+The Muse Glimmer case study uses the same M5 Pro with 48 GB unified memory,
+macOS 26.6.1, Python 3.13.3, Ollama 0.32.9, and the 21 GB
+\path{muse-glimmer:30b-mlx} artifact. Ollama reports the artifact as NVFP4 and
+32.3B parameters; the model card reports 29.6B parameters including the vision
+encoder. These differing metadata conventions are retained in the result
+artifact rather than reconciled.
 
 The benchmark requests 64 greedy tokens for three fixture families: literal Python continuation, retrieval-grounded answering, and open-ended writing. Each family is repeated five times with a fresh nonce under both default and re-entry profiles. Baseline and accelerated order alternate. Wall time includes prompt processing. The baseline calls \texttt{mlx-lm}'s native streaming generator; it is not MachBoost's \texttt{next\_token} loop. The artifacts \path{results/mlx_native_default_qwen25_3b_20260713.json} and \path{results/mlx_native_reentry_qwen25_3b_20260713.json} contain prompts, token previews, raw times, package versions, hardware data, and each run's order.
 
@@ -501,6 +529,51 @@ absolute tokens/s. It answers a same-weight question: how much target decode wor
 the block drafter removes. The 9B 4-bit row answers a deployment question and
 shows a smaller gain. Neither table entry includes model loading, and a short
 answer can remain dominated by prefill and first-token latency.
+
+\subsection{External Muse Glimmer DFlash Case Study}
+This experiment asks a narrower deployment question: does the MachBoost gateway
+preserve an already accelerated model runtime without material overhead? Five
+measured 256-token requests follow two warmups. Direct Ollama and gateway legs
+alternate by round and use engine-specific nonces so the second leg cannot
+inherit an exact prompt-cache entry from the first. Both legs use the same
+Ollama process, model artifact, request settings, and resident model.
+
+Ollama's public MLX API has no DFlash-off request switch. The diagnostic control
+requests token logprobs, which parks native speculation but also pays to
+materialize logprobs. It is therefore a conservative control, not a pure serial
+baseline and not comparable to Meta's ExecuTorch measurements.
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{lrrrr}
+\toprule
+Mode & Direct & Gateway & Overhead & Gateway factor \\
+\midrule
+Logprobs control & 17.28 & 17.29 & 0.02\% & -- \\
+Native DFlash & 22.50 & 21.61 & 4.11\% & 1.25$\times$ \\
+\bottomrule
+\end{tabular}
+\caption{Muse Glimmer 30B MLX median decode throughput in tokens/s on the M5
+Pro. Gateway overhead uses median wall time. The factor compares gateway
+DFlash throughput with the gateway diagnostic control.}
+\label{tab:muse}
+\end{table}
+
+DFlash reduces gateway median wall time from 15.061 to 11.883 seconds
+(1.27$\times$) and time to first token from 3.819 to 2.222 seconds
+(1.72$\times$). Direct Ollama reaches 1.30$\times$ higher decode throughput
+than its control. Four simultaneous gateway clients all complete, but a single
+resident worker serializes decode; observed completion times rise from 5.21 to
+18.94 seconds. This validates bounded concurrent admission, not continuous
+batching.
+
+Reasoning, image input, native function-tool output, cancellation, and the
+interactive CLI pass feature smokes. Temperature-zero output is not byte
+deterministic in this runtime: only 2 of 10 same-prompt control/DFlash pairs are
+byte-identical. The sampled answers are semantically similar, but this run has
+no formal task-quality evaluation. The complete artifact is
+\path{results/muse_glimmer_30b_mlx_20260811.json}.
 
 \subsection{Native-Baseline Results}
 \begin{table}[H]
@@ -712,6 +785,13 @@ does not identify the responsible kernel or prove semantic equivalence. Sampling
 tool calls, long context, concurrent batching, energy, and model families outside
 the published DFlash registry remain untested.
 
+The Muse study is also one machine, model, prompt family, and quantization. Its
+control includes logprob overhead, its native DFlash belongs to the external
+model runtime, and its 2/10 byte-exact rate prevents an equivalence claim. The
+reasoning, vision, and tool checks establish interface behavior only. The
+four-client result measures queue correctness under serialized decode; it does
+not establish aggregate-throughput scaling or replica behavior.
+
 The repository-prefix evidence now covers one 183-file controlled snapshot and
 one 8,754-file private production snapshot, six new-question pairs in the
 private audit, two Qwen2.5 model sizes overall, greedy generation, and one M5
@@ -742,7 +822,15 @@ The first-view evidence is smaller: ten OCR-heavy TextVQA rows, one quantized Qw
 
 The video adapter selects image frames; it is not a video-language architecture. Its RGB difference can retain scene cuts but miss short actions, camera motion, semantically important small regions, or repeated scenes with different relevance to the question. It has no real-video quality benchmark and no evidence against PruneVid or EchoPrune. Audio has no MachBoost adapter.
 
-Only greedy decoding is evaluated. Even then, cold and warm kernels can use different reduction shapes; the Qwen3.5 0.8B punctuation drift and the Llama structured-JSON tail mismatch are concrete examples of literal non-invariance. The latter artifact does not retain enough information to establish whether cache trajectory, a near-tied logit, or another implementation detail caused the difference. This does not establish equivalence for sampling or beam search. Ollama is also not accelerated through its public HTTP API.
+Only greedy decoding is evaluated for MachBoost's native verifiers. Even then,
+cold and warm kernels can use different reduction shapes; the Qwen3.5 0.8B
+punctuation drift and the Llama structured-JSON tail mismatch are concrete
+examples of literal non-invariance. The latter artifact does not retain enough
+information to establish whether cache trajectory, a near-tied logit, or
+another implementation detail caused the difference. This does not establish
+equivalence for sampling or beam search. General Ollama models receive serving
+compatibility rather than MachBoost-native acceleration; Muse is distinct
+because its Ollama runner already contains model-native DFlash.
 
 Finally, this work introduces neither prompt lookup, prompt caching, nor visual-token pruning. The contribution is a set of local integrations, prompt layouts, safety boundaries, and paired artifacts: context drafting, repository retrieval with exact-prefix reuse, architecture-aware cache handling, and post-deepstack Qwen3-VL compression. A stronger research claim needs broader comparisons with LLMA, Prompt Lookup Decoding, PLD+, MLX-VLM's current server, production prefix-cache systems, and established VLM pruning baselines.
 
@@ -775,6 +863,11 @@ The immediate visual work is external validity. After resolving or isolating the
 
 \section{Conclusion}
 MachBoost now has five measured conditional paths, one unvalidated temporal adapter, and a namespaced team-memory serving path. In the private-repository audit, six independent-thread new-question pairs reuse 75--77\% of prompt tokens. Prefill is 3.75--3.84$\times$ faster, while unchanged decode limits end-to-end speedup to 1.31--1.43$\times$. All paired outputs are byte-identical under greedy generation, but small rubric scores show that equality is not the same as answer quality. Exact replay reaches 28.56$\times$ only for identical deterministic requests. Semantic memory retrieves prior team context but costs 414 extra prompt tokens and 0.239 seconds in its three-run probe. For fresh output, adaptive DFlash raises Qwen3.5 4B BF16 median decode throughput by 1.65$\times$, with prompt-family medians from 1.31$\times$ to 2.43$\times$ and three of three 128-token validation prefixes exact. The same-weight 9B BF16 control reaches 1.61$\times$ but matches only two of three prefixes; a practical 9B 4-bit control reaches 1.32$\times$ and also diverges. Context drafting remains less settled: a favorable Qwen code fixture reaches 1.96$\times$, while a broader Llama 3.2 3B suite is exact in 20 of 21 pairs and has a 1.008$\times$ aggregate median. Across six visual models, short repeated questions over one unchanged image produce model-level paired medians from 5.14$\times$ to 17.44$\times$. For a new image, post-fusion Qwen3-VL compression reaches 1.67$\times$ aggregate speedup on a ten-row TextVQA pilot while both modes score 8/10; this path is approximate and normalized outputs agree on 70\%. The evidence supports a local serving layer that selects among narrow mechanisms and refuses failed equivalence gates. It does not support a universal faster-inference claim.
+The external Muse Glimmer bridge adds a different contract: its model-native
+DFlash reaches 21.61 tokens/s through MachBoost, 1.25$\times$ the conservative
+gateway control, while adding 4.11\% median wall-time overhead to direct Ollama.
+This demonstrates capability-preserving integration, not a new decoder or
+output equivalence.
 
 \bibliographystyle{plain}
 \small
