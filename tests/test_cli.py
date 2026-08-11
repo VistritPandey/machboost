@@ -746,9 +746,11 @@ class CLITests(unittest.TestCase):
         self.assertIn("output_equal=yes", output.getvalue())
 
         artifact["comparison"]["median_output_equal"] = None
+        artifact["config"]["draft_control_method"] = "ollama_logprobs_parking"
         output = io.StringIO()
         cli.print_latency_benchmark(artifact, stream=output)
         self.assertIn("output_equal=n/a", output.getvalue())
+        self.assertIn("logprobs park native MLX speculation", output.getvalue())
 
     def test_context_bench_uses_one_model_and_reports_valid_speedup(self):
         output = io.StringIO()
