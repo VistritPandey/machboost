@@ -1003,6 +1003,51 @@ class HTTPServerTests(unittest.TestCase):
             f"workspace:{workspace.id}:{indexed_workspace.revision}",
         )
 
+    def test_muse_workspace_keeps_evidence_in_messages_without_duplicate_context(self):
+        repository = Path(self.temporary.name) / "muse-repository"
+        repository.mkdir()
+        (repository / "permissions.py").write_text(
+            "def can_view_report(user):\n"
+            "    return user.has_permission('reports:view')\n",
+            encoding="utf-8",
+        )
+        workspace = self.workspace_store.register(repository)
+        self.workspace_store.index(workspace.id)
+
+        _, _, body = self.request(
+            "/api/chat",
+            {
+                "model": "muse-glimmer:30b-mlx",
+                "workspace_id": workspace.id,
+                "context": ["Caller-provided release policy."],
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "Where is report access checked?",
+                    }
+                ],
+                "stream": False,
+            },
+        )
+
+        response = json.loads(body)
+        accelerator = self.loaded[0][1]
+        call = accelerator.chat_calls[0]
+        evidence = next(
+            message["content"]
+            for message in call["messages"]
+            if message["role"] == "system"
+            and "repository evidence" in message["content"]
+        )
+        self.assertIn("permissions.py:1-2", evidence)
+        self.assertIn("can_view_report", evidence)
+        self.assertEqual(call["context"], ["Caller-provided release policy."])
+        self.assertEqual(response["machboost"]["backend"], "ollama-mlx")
+        self.assertEqual(
+            response["machboost"]["workspace"]["citations"][0]["path"],
+            "permissions.py",
+        )
+
     def test_streaming_workspace_response_retains_runtime_metrics(self):
         repository = Path(self.temporary.name) / "repository"
         repository.mkdir()
