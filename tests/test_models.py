@@ -11,16 +11,39 @@ from machboost.models import (
     MODEL_ALIASES,
     OLLAMA_MLX_ALIASES,
     alias_rows,
+    backend_available,
     cached_repo_path,
     catalog_rows,
     model_targets,
     model_repositories,
+    ollama_executable,
     preflight_model,
     resolve_model,
 )
 
 
 class ModelCatalogTests(unittest.TestCase):
+    def test_ollama_executable_honors_native_app_override(self):
+        with tempfile.TemporaryDirectory() as directory:
+            executable = Path(directory, "ollama")
+            executable.write_text("#!/bin/sh\n", encoding="utf-8")
+            executable.chmod(0o755)
+            with (
+                patch.dict("os.environ", {"OLLAMA_BINARY": str(executable)}),
+                patch("machboost.models.shutil.which", return_value=None),
+            ):
+                located = ollama_executable()
+
+        self.assertEqual(located, str(executable.resolve()))
+
+    def test_ollama_mlx_backend_uses_runtime_locator(self):
+        with (
+            patch("machboost.models.platform.system", return_value="Darwin"),
+            patch("machboost.models.platform.machine", return_value="arm64"),
+            patch("machboost.models.ollama_executable", return_value="/Applications/Ollama.app/ollama"),
+        ):
+            self.assertTrue(backend_available("ollama-mlx"))
+
     def test_short_alias_prefers_mlx_when_available(self):
         with patch("machboost.models.native_mlx_available", return_value=True):
             resolution = resolve_model("qwen2.5:3b")
