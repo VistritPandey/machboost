@@ -168,7 +168,10 @@ class OllamaMLXAcceleratorTests(unittest.TestCase):
         )
 
         self.assertFalse(stats.native_speculative_decoding)
-        self.assertEqual(adapter.calls[0][1]["options"]["draft_num_predict"], 0)
+        kwargs = adapter.calls[0][1]
+        self.assertEqual(kwargs["options"]["draft_num_predict"], 0)
+        self.assertTrue(kwargs["logprobs"])
+        self.assertEqual(kwargs["top_logprobs"], 0)
 
     def test_cancellation_interrupts_reasoning_stream(self):
         adapter = FakeAdapter([chunk(thinking="hidden")])
