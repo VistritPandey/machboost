@@ -67,6 +67,7 @@ class OllamaMLXAcceleratorTests(unittest.TestCase):
         )
         accelerator = OllamaMLXAccelerator(adapter)
         emitted = []
+        reasoning = []
         tools = [
             {
                 "type": "function",
@@ -87,6 +88,7 @@ class OllamaMLXAcceleratorTests(unittest.TestCase):
             ],
             max_tokens=128,
             on_text=emitted.append,
+            on_thinking=reasoning.append,
             temperature=1.0,
             enable_thinking="high",
             tools=tools,
@@ -94,6 +96,7 @@ class OllamaMLXAcceleratorTests(unittest.TestCase):
 
         self.assertEqual(text, "Argentina won.")
         self.assertEqual(emitted, ["Argentina ", "won."])
+        self.assertEqual(reasoning, ["Inspecting image."])
         self.assertEqual(stats.thinking, "Inspecting image.")
         self.assertEqual(stats.tool_calls, (call,))
         self.assertEqual(stats.prompt_tokens_per_second, 50.0)
