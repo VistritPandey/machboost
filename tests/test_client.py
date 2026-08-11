@@ -190,6 +190,61 @@ class ClientTests(unittest.TestCase):
 
         self.assertEqual(post.call_args.args[1]["request_id"], "desktop-message-42")
 
+    def test_client_forwards_muse_reasoning_tools_and_format(self):
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Read current weather.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"city": {"type": "string"}},
+                        "required": ["city"],
+                    },
+                },
+            }
+        ]
+        output_schema = {
+            "type": "object",
+            "properties": {"summary": {"type": "string"}},
+            "required": ["summary"],
+        }
+        with patch.object(self.client, "post", return_value={"done": True}) as post:
+            self.client.chat(
+                "muse-glimmer:30b-mlx",
+                [{"role": "user", "content": "Check Chicago."}],
+                tools=tools,
+                tool_choice="auto",
+                format=output_schema,
+                think="high",
+                request_id="muse-request-1",
+                stream=False,
+            )
+
+        payload = post.call_args.args[1]
+        self.assertEqual(payload["tools"], tools)
+        self.assertEqual(payload["tool_choice"], "auto")
+        self.assertEqual(payload["format"], output_schema)
+        self.assertEqual(payload["think"], "high")
+        self.assertEqual(payload["request_id"], "muse-request-1")
+
+    def test_generate_forwards_muse_reasoning_and_structured_output(self):
+        with patch.object(self.client, "post", return_value={"done": True}) as post:
+            self.client.generate(
+                "muse-glimmer:30b-mlx",
+                "Describe the image.",
+                images=["fixture.png"],
+                format="json",
+                think="medium",
+                stream=False,
+            )
+
+        payload = post.call_args.args[1]
+        self.assertEqual(payload["images"], ["fixture.png"])
+        self.assertEqual(payload["format"], "json")
+        self.assertEqual(payload["think"], "medium")
+
     def test_client_adds_bearer_token_to_every_request(self):
         client = MachBoostClient(self.client.endpoint, api_token="secret-token")
 
