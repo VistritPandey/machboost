@@ -652,6 +652,8 @@ final class MachBoostTests: XCTestCase {
             ChatMessage(
                 role: .assistant,
                 content: "Ready.",
+                reasoningContent: "The release checks passed.",
+                toolCallsJSON: "[{\"function\":{\"name\":\"run_checks\"}}]",
                 createdAt: Date(timeIntervalSince1970: 2),
                 conversation: conversation
             ),
@@ -670,6 +672,10 @@ final class MachBoostTests: XCTestCase {
             try XCTUnwrap(markdown.range(of: "## User")?.lowerBound),
             try XCTUnwrap(markdown.range(of: "## Assistant")?.lowerBound)
         )
+        XCTAssertTrue(markdown.contains("<summary>Reasoning</summary>"))
+        XCTAssertTrue(markdown.contains("The release checks passed."))
+        XCTAssertTrue(markdown.contains("### Tool calls"))
+        XCTAssertTrue(markdown.contains("run_checks"))
         XCTAssertTrue(markdown.contains("Model: `qwen2.5:3b`"))
     }
 
