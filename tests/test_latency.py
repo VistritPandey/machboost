@@ -125,7 +125,7 @@ class ChatLatencyTests(unittest.TestCase):
         for machboost_messages, ollama_messages in zip(
             machboost.messages, ollama.messages
         ):
-            self.assertNotEqual(
+            self.assertEqual(
                 machboost_messages[0]["content"], ollama_messages[0]["content"]
             )
             self.assertEqual(
@@ -176,6 +176,14 @@ class ChatLatencyTests(unittest.TestCase):
         self.assertEqual(artifact["config"]["draft_num_predict"], 15)
         self.assertEqual(machboost.options[0]["draft_num_predict"], 15)
         self.assertEqual(ollama.options[0]["draft_num_predict"], 15)
+        self.assertIsNone(artifact["comparison"]["median_output_equal"])
+        self.assertEqual(
+            artifact["config"]["output_comparison"],
+            "not_comparable_engine_specific_nonces",
+        )
+        self.assertNotEqual(
+            machboost.messages[0][0]["content"], ollama.messages[0][0]["content"]
+        )
 
     def test_rejects_empty_measurement_set(self) -> None:
         with self.assertRaisesRegex(ValueError, "runs must be at least 1"):
