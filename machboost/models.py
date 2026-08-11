@@ -6,6 +6,7 @@ import importlib.util
 import json
 import os
 import platform
+import shutil
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Optional
@@ -37,6 +38,18 @@ class DFlashAlias:
     draft: str
     download_size_gb: float
     minimum_memory_gb: float
+
+
+@dataclass(frozen=True)
+class OllamaMLXAlias:
+    name: str
+    model: str
+    display_name: str
+    source_repository: str
+    capabilities: tuple[str, ...]
+    download_size_gb: float
+    minimum_memory_gb: float
+    context_length: int
 
 
 MODEL_ALIASES = {
@@ -215,6 +228,22 @@ DFLASH_ALIASES = {
     )
 }
 
+MUSE_GLIMMER = OllamaMLXAlias(
+    name="muse-glimmer:30b-mlx",
+    model="muse-glimmer:30b-mlx",
+    display_name="Muse Glimmer 30B MLX",
+    source_repository="meta-models/Muse-Glimmer-30B",
+    capabilities=("chat", "completion", "vision", "reasoning", "tools"),
+    download_size_gb=21.0,
+    minimum_memory_gb=32.0,
+    context_length=131_072,
+)
+
+OLLAMA_MLX_ALIASES = {
+    "muse-glimmer:30b": MUSE_GLIMMER,
+    MUSE_GLIMMER.name: MUSE_GLIMMER,
+}
+
 
 def native_mlx_available() -> bool:
     return (
@@ -235,6 +264,18 @@ def resolve_model(model: str, backend: str = "auto") -> ModelResolution:
         raise ValueError("model name cannot be empty")
 
     path = Path(requested).expanduser()
+    ollama_mlx_alias = OLLAMA_MLX_ALIASES.get(requested.lower())
+    if ollama_mlx_alias is not None:
+        if backend not in {"auto", "ollama-mlx"}:
+            raise ValueError(
+                f"model alias {requested!r} requires Ollama's MLX backend, not {backend!r}"
+            )
+        return ModelResolution(
+            requested=requested,
+            model=ollama_mlx_alias.model,
+            backend="ollama-mlx",
+            alias=ollama_mlx_alias.name,
+        )
     dflash_alias = DFLASH_ALIASES.get(requested.lower())
     if dflash_alias is not None:
         if backend not in {"auto", "dflash"}:
@@ -316,6 +357,17 @@ def alias_rows() -> list[dict]:
         }
         for alias in DFLASH_ALIASES.values()
     )
+    rows.extend(
+        {
+            "name": alias.name,
+            "mlx": alias.model,
+            "hf": alias.source_repository,
+            "capability": "vision",
+            "backend": "ollama-mlx",
+            "capabilities": list(alias.capabilities),
+        }
+        for alias in {item.name: item for item in OLLAMA_MLX_ALIASES.values()}.values()
+    )
     return sorted(rows, key=lambda row: str(row["name"]))
 
 
@@ -360,6 +412,35 @@ def catalog_rows(
                 "minimum_memory_gb": minimum_memory_gb,
                 "support": "ready" if backend_available(backend) else "missing_runtime",
                 "support_reason": None,
+            }
+        )
+    for alias in {item.name: item for item in OLLAMA_MLX_ALIASES.values()}.values():
+        manifest_path = ollama_model_manifest(alias.model)
+        runtime_available = backend_available("ollama-mlx")
+        rows.append(
+            {
+                "name": alias.name,
+                "display_name": alias.display_name,
+                "repository": alias.model,
+                "source_repository": alias.source_repository,
+                "backend": "ollama-mlx",
+                "capabilities": list(alias.capabilities),
+                "cached": manifest_path is not None,
+                "cached_path": str(manifest_path) if manifest_path is not None else None,
+                "recommended": True,
+                "tested": True,
+                "experimental": False,
+                "validation_status": "local_smoke_passed",
+                "download_size_gb": alias.download_size_gb,
+                "disk_size_gb": _ollama_manifest_size_gb(manifest_path),
+                "minimum_memory_gb": alias.minimum_memory_gb,
+                "context_length": alias.context_length,
+                "support": "ready" if runtime_available else "missing_runtime",
+                "support_reason": (
+                    None
+                    if runtime_available
+                    else "Muse Glimmer requires current Ollama on Apple Silicon"
+                ),
             }
         )
     for name in sorted(DFLASH_ALIASES):
@@ -601,11 +682,7 @@ def preflight_model(
         "model": resolution.model,
         "backend": resolution.backend,
         "alias": resolution.alias,
-        "capabilities": (
-            ["chat", "vision"]
-            if resolution.backend.endswith("-vlm")
-            else ["chat", "completion"]
-        ),
+        "capabilities": _resolution_capabilities(resolution),
         "runtime_available": backend_available(resolution.backend),
         "cached": False,
         "cached_path": None,
@@ -613,6 +690,22 @@ def preflight_model(
         "supported": False,
         "reason": None,
     }
+    if resolution.backend == "ollama-mlx":
+        manifest_path = ollama_model_manifest(resolution.model)
+        result.update(
+            {
+                "cached": manifest_path is not None,
+                "cached_path": str(manifest_path) if manifest_path is not None else None,
+                "model_type": "muse_glimmer",
+                "supported": result["runtime_available"],
+                "reason": (
+                    "compatible with Ollama's Apple Silicon MLX engine"
+                    if result["runtime_available"]
+                    else "Muse Glimmer requires current Ollama on Apple Silicon"
+                ),
+            }
+        )
+        return result
     path = Path(resolution.model).expanduser()
     config_path: Optional[Path] = None
     if path.exists():
@@ -664,6 +757,12 @@ def preflight_model(
 
 
 def backend_available(backend: str) -> bool:
+    if backend == "ollama-mlx":
+        return (
+            platform.system() == "Darwin"
+            and platform.machine() == "arm64"
+            and ollama_executable() is not None
+        )
     if backend == "mlx":
         return native_mlx_available()
     if backend == "mlx-vlm":
@@ -673,6 +772,58 @@ def backend_available(backend: str) -> bool:
     if backend == "hf":
         return importlib.util.find_spec("torch") is not None and importlib.util.find_spec("transformers") is not None
     return False
+
+
+def ollama_executable() -> Optional[str]:
+    """Locate Ollama from shells, app bundles, and common macOS installs."""
+    candidates = [
+        os.environ.get("OLLAMA_BINARY"),
+        shutil.which("ollama"),
+        "/Applications/Ollama.app/Contents/Resources/ollama",
+        str(Path.home() / "Applications/Ollama.app/Contents/Resources/ollama"),
+        "/opt/homebrew/bin/ollama",
+        "/usr/local/bin/ollama",
+    ]
+    for candidate in candidates:
+        if not candidate:
+            continue
+        path = Path(candidate).expanduser()
+        if path.is_file() and os.access(path, os.X_OK):
+            return str(path.resolve())
+    return None
+
+
+def ollama_model_manifest(model: str) -> Optional[Path]:
+    normalized = model.strip().lower()
+    name, separator, tag = normalized.partition(":")
+    if not separator:
+        tag = "latest"
+    if not name or "/" in name or not tag or "/" in tag:
+        return None
+    root = Path(os.environ.get("OLLAMA_MODELS", "~/.ollama/models")).expanduser()
+    path = root / "manifests" / "registry.ollama.ai" / "library" / name / tag
+    return path.resolve() if path.is_file() else None
+
+
+def _ollama_manifest_size_gb(path: Optional[Path]) -> Optional[float]:
+    if path is None:
+        return None
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+        layers = manifest.get("layers") or []
+        size = sum(int(layer.get("size") or 0) for layer in layers if isinstance(layer, dict))
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return None
+    return size / 1_000_000_000
+
+
+def _resolution_capabilities(resolution: ModelResolution) -> list[str]:
+    alias = OLLAMA_MLX_ALIASES.get((resolution.alias or resolution.requested).lower())
+    if alias is not None:
+        return list(alias.capabilities)
+    if resolution.backend.endswith("-vlm"):
+        return ["chat", "vision"]
+    return ["chat", "completion"]
 
 
 def cached_repo_path(model: Optional[str]) -> Optional[Path]:
@@ -732,6 +883,9 @@ def _display_name(alias: str) -> str:
 
 def model_targets(model: str) -> set[str]:
     requested = model.strip()
+    ollama_mlx_alias = OLLAMA_MLX_ALIASES.get(requested.lower())
+    if ollama_mlx_alias is not None:
+        return {ollama_mlx_alias.model}
     dflash_alias = DFLASH_ALIASES.get(requested.lower())
     if dflash_alias is not None:
         return {dflash_alias.target}
@@ -744,6 +898,11 @@ def model_targets(model: str) -> set[str]:
 def model_repositories(model: str, backend: str = "auto") -> tuple[str, ...]:
     """Return every repository required to load a model selection."""
     requested = model.strip()
+    ollama_mlx_alias = OLLAMA_MLX_ALIASES.get(requested.lower())
+    if ollama_mlx_alias is not None:
+        if backend not in {"auto", "ollama-mlx"}:
+            resolve_model(requested, backend)
+        return (ollama_mlx_alias.model,)
     dflash_alias = DFLASH_ALIASES.get(requested.lower())
     if dflash_alias is not None:
         if backend not in {"auto", "dflash"}:

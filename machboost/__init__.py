@@ -1,4 +1,4 @@
-__version__ = "0.10.0"
+__version__ = "0.11.0"
 
 from .accelerator import Accelerator, AcceleratorResult, CalibrationResult
 from .bench import (
@@ -27,6 +27,11 @@ from .context_bench import (
 from .latency import LATENCY_SCHEMA, benchmark_chat_latency
 from .adapters.dflash import DFlashAccelerator, DFlashRunStats
 from .adapters.mlx_vlm import MLXVLMAccelerator, VisionRunStats
+from .adapters.ollama_mlx import (
+    OllamaMLXAccelerator,
+    OllamaMLXCancelled,
+    OllamaMLXRunStats,
+)
 from .models import ModelAlias, ModelResolution, resolve_model
 from .server import RuntimeManager
 from .video import TemporalVideoSampler, VideoFrame, VideoSelection
@@ -62,6 +67,9 @@ __all__ = [
     "MLXVLMAccelerator",
     "ModelAlias",
     "ModelResolution",
+    "OllamaMLXAccelerator",
+    "OllamaMLXCancelled",
+    "OllamaMLXRunStats",
     "RunStats",
     "SearchHit",
     "RuntimeManager",

@@ -15,6 +15,44 @@ The artifacts measure different mechanisms and should not be combined into one h
 
 Results below are single-machine experiments unless stated otherwise. Ratios of medians and medians of paired ratios are different statistics and are labeled separately.
 
+## Muse Glimmer 30B MLX, August 11 2026
+
+Artifact: `muse_glimmer_30b_mlx_20260811.json`
+
+Hardware: Apple M5 Pro, 48 GB unified memory
+
+Runtime: MachBoost 0.11.0, Ollama 0.32.9, and the 21 GB
+`muse-glimmer:30b-mlx` NVFP4 artifact
+
+Five measured 256-token rounds follow two warmups and alternate direct Ollama
+with the MachBoost gateway. Each path receives a distinct same-length nonce so
+the second path cannot inherit an exact prompt cache entry from the first. Both
+paths use the same loaded Ollama MLX model. Outputs are therefore not compared
+between direct and gateway requests.
+
+| Mode | Direct Ollama | MachBoost | Gateway overhead | MachBoost wall |
+|---|---:|---:|---:|---:|
+| Native DFlash | 22.50 tok/s | 21.61 tok/s | 4.11% | 11.883s |
+| No-spec diagnostic | 17.28 tok/s | 17.29 tok/s | 0.02% | 15.061s |
+
+On the MachBoost path, DFlash reached `1.250x` the diagnostic control's decode
+throughput, `1.267x` its wall-time performance, and `1.718x` its time to first
+text. Direct Ollama reached `1.302x`, `1.319x`, and `1.714x`, respectively.
+
+The control is not a pure no-speculation baseline. Ollama's current public MLX
+request API does not expose a direct DFlash-off switch; requesting token
+logprobs parks speculation but also materializes one logprob per output token.
+Meta's published Apple measurements used a runtime-level ExecuTorch control and
+must not be compared directly with this ratio. Only 2/10 same-prompt output
+pairs were byte-identical, and the runtime was not byte deterministic within
+either mode, so no exact-token or general quality-equivalence claim is made.
+
+The same hardware pass also verified separate reasoning output, an
+OpenAI-compatible native function call, image input, cancellation, interactive
+CLI streaming, and four simultaneous clients. One model worker admitted one
+request and queued three; all completed, but decode remained serialized. This
+is concurrent serving with bounded backpressure, not continuous batching.
+
 ## Fresh Qwen3.5 Decode Audit, August 10 2026
 
 Artifact: `unique_decode_qwen35_20260810.json`

@@ -18,17 +18,22 @@ class StepClock:
 class FakeMachBoostClient:
     def __init__(self, trace=None) -> None:
         self.messages = []
+        self.options = []
         self.trace = trace
 
     def load(self, model, *, options, keep_alive, warmup=False):
         return {
             "load_duration_seconds": 1.25,
             "warmup_duration_seconds": 0.5 if warmup else 0.0,
-            "instance": {"model": "mlx-community/example", "backend": "mlx"},
+            "instance": {
+                "model": "mlx-community/example",
+                "backend": options.get("backend", "mlx"),
+            },
         }
 
     def chat(self, model, messages, *, options, keep_alive, stream):
         self.messages.append(messages)
+        self.options.append(options)
         if self.trace is not None:
             self.trace.append("machboost")
         return iter(
@@ -57,10 +62,26 @@ class FakeOllamaAdapter:
 
     def __init__(self, trace=None) -> None:
         self.messages = []
+        self.options = []
+        self.think_values = []
+        self.logprob_values = []
         self.trace = trace
 
-    def chat(self, messages, *, options, keep_alive, stream):
+    def chat(
+        self,
+        messages,
+        *,
+        options,
+        keep_alive,
+        stream,
+        think=None,
+        logprobs=None,
+        top_logprobs=None,
+    ):
         self.messages.append(messages)
+        self.options.append(options)
+        self.think_values.append(think)
+        self.logprob_values.append((logprobs, top_logprobs))
         if self.trace is not None:
             self.trace.append("ollama")
         yield SimpleNamespace(content="hello", done=False, raw={})
@@ -97,6 +118,9 @@ class ChatLatencyTests(unittest.TestCase):
         )
 
         self.assertEqual(artifact["schema_version"], LATENCY_SCHEMA)
+        self.assertTrue(artifact["environment"]["platform"])
+        self.assertTrue(artifact["environment"]["machine"])
+        self.assertTrue(artifact["environment"]["python"])
         self.assertEqual(artifact["engines"]["machboost"]["summary"]["runs"], 2)
         self.assertEqual(artifact["engines"]["ollama"]["summary"]["runs"], 2)
         self.assertEqual(
@@ -113,6 +137,15 @@ class ChatLatencyTests(unittest.TestCase):
         )
         self.assertTrue(artifact["comparison"]["median_output_equal"])
         self.assertEqual(len({row[0]["content"] for row in machboost.messages}), 3)
+        for machboost_messages, ollama_messages in zip(
+            machboost.messages, ollama.messages
+        ):
+            self.assertEqual(
+                machboost_messages[0]["content"], ollama_messages[0]["content"]
+            )
+            self.assertEqual(
+                machboost_messages[1]["content"], ollama_messages[1]["content"]
+            )
         self.assertEqual(
             trace,
             [
@@ -128,6 +161,44 @@ class ChatLatencyTests(unittest.TestCase):
             artifact["config"]["execution_order"],
             "alternating_by_round",
         )
+        self.assertEqual(ollama.think_values, [False, False, False])
+
+    def test_labels_same_ollama_mlx_engine_as_gateway_overhead(self) -> None:
+        machboost = FakeMachBoostClient()
+        ollama = FakeOllamaAdapter()
+        artifact = benchmark_chat_latency(
+            "muse-glimmer:30b-mlx",
+            prompt="Write a short response.",
+            system="Be concise.",
+            runs=1,
+            warmups=0,
+            max_tokens=16,
+            backend="ollama-mlx",
+            machboost_client=machboost,
+            ollama_adapter=ollama,
+            draft_num_predict=15,
+            clock=StepClock(),
+        )
+
+        self.assertEqual(
+            artifact["config"]["comparison_kind"],
+            "same_engine_gateway_overhead",
+        )
+        self.assertIsNotNone(
+            artifact["comparison"]["machboost_gateway_overhead_percent"]
+        )
+        self.assertIn("same installed Ollama MLX model", " ".join(artifact["notes"]))
+        self.assertEqual(artifact["config"]["draft_num_predict"], 15)
+        self.assertEqual(machboost.options[0]["draft_num_predict"], 15)
+        self.assertEqual(ollama.options[0]["draft_num_predict"], 15)
+        self.assertIsNone(artifact["comparison"]["median_output_equal"])
+        self.assertEqual(
+            artifact["config"]["output_comparison"],
+            "not_comparable_engine_specific_nonces",
+        )
+        self.assertNotEqual(
+            machboost.messages[0][0]["content"], ollama.messages[0][0]["content"]
+        )
 
     def test_rejects_empty_measurement_set(self) -> None:
         with self.assertRaisesRegex(ValueError, "runs must be at least 1"):
@@ -138,6 +209,32 @@ class ChatLatencyTests(unittest.TestCase):
                 runs=0,
                 engine="ollama",
             )
+
+    def test_muse_no_speculation_control_uses_logprobs_parking(self) -> None:
+        machboost = FakeMachBoostClient()
+        ollama = FakeOllamaAdapter()
+
+        artifact = benchmark_chat_latency(
+            "muse-glimmer:30b-mlx",
+            prompt="Control",
+            system="",
+            runs=1,
+            warmups=0,
+            max_tokens=8,
+            backend="ollama-mlx",
+            machboost_client=machboost,
+            ollama_adapter=ollama,
+            draft_num_predict=0,
+            clock=StepClock(),
+        )
+
+        self.assertEqual(
+            artifact["config"]["draft_control_method"],
+            "ollama_logprobs_parking",
+        )
+        self.assertIn("logprobs", " ".join(artifact["notes"]))
+        self.assertEqual(ollama.logprob_values, [(True, 0)])
+        self.assertEqual(machboost.options[0]["draft_num_predict"], 0)
 
 
 if __name__ == "__main__":

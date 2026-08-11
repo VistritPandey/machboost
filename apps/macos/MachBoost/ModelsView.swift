@@ -138,11 +138,16 @@ struct ModelsView: View {
     }
 
     private func downloadMessage(for model: CatalogModel) -> String {
-        var pieces = ["Download \(model.displayName) from Hugging Face?"]
+        let source = model.backend == "ollama-mlx" ? "Ollama" : "Hugging Face"
+        var pieces = ["Download \(model.displayName) through \(source)?"]
         if let size = model.downloadSizeGB {
             pieces.append("Estimated download: \(size.formatted(.number.precision(.fractionLength(1)))) GB.")
         }
-        pieces.append("Weights stay in your local Hugging Face cache.")
+        pieces.append(
+            model.backend == "ollama-mlx"
+                ? "Weights stay in your local Ollama model cache."
+                : "Weights stay in your local Hugging Face cache."
+        )
         return pieces.joined(separator: " ")
     }
 }
@@ -159,9 +164,13 @@ private struct ModelRow: View {
 
     var body: some View {
         HStack(spacing: 14) {
-            Image(systemName: model.supportsVision ? "eye.fill" : "text.bubble.fill")
+            Image(
+                systemName: model.supportsReasoning
+                    ? "brain.fill"
+                    : model.supportsVision ? "eye.fill" : "text.bubble.fill"
+            )
                 .font(.title3)
-                .foregroundStyle(model.supportsVision ? Color.indigo : Color.teal)
+                .foregroundStyle(model.supportsReasoning ? Color.green : model.supportsVision ? Color.indigo : Color.teal)
                 .frame(width: 28)
 
             VStack(alignment: .leading, spacing: 4) {
@@ -193,6 +202,9 @@ private struct ModelRow: View {
                     if let memory = model.minimumMemoryGB {
                         Text("\(Int(memory)) GB memory")
                     }
+                    if let contextLength = model.contextLength {
+                        Text("\(contextLength.formatted()) context")
+                    }
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -202,6 +214,12 @@ private struct ModelRow: View {
                         .font(.caption)
                         .foregroundStyle(.orange)
                         .lineLimit(2)
+                }
+                if let sourceRepository = model.sourceRepository {
+                    Text(sourceRepository)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
                 }
 
                 if let download {
@@ -227,7 +245,7 @@ private struct ModelRow: View {
                 }
                 .accessibilityLabel("Unload \(model.displayName)")
                 .help("Unload model")
-            } else if !model.cached {
+            } else if !model.cached, model.support == "ready" {
                 Button(action: onDownload) {
                     Image(systemName: "arrow.down.circle")
                 }

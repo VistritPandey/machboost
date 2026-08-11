@@ -301,6 +301,8 @@ public struct CatalogModel: Codable, Identifiable, Hashable, Sendable {
     public let downloadSizeGB: Double?
     public let diskSizeGB: Double?
     public let minimumMemoryGB: Double?
+    public let contextLength: Int?
+    public let sourceRepository: String?
     public let support: String
     public let supportReason: String?
 
@@ -317,6 +319,8 @@ public struct CatalogModel: Codable, Identifiable, Hashable, Sendable {
         downloadSizeGB: Double?,
         diskSizeGB: Double?,
         minimumMemoryGB: Double?,
+        contextLength: Int? = nil,
+        sourceRepository: String? = nil,
         support: String,
         supportReason: String?
     ) {
@@ -332,12 +336,18 @@ public struct CatalogModel: Codable, Identifiable, Hashable, Sendable {
         self.downloadSizeGB = downloadSizeGB
         self.diskSizeGB = diskSizeGB
         self.minimumMemoryGB = minimumMemoryGB
+        self.contextLength = contextLength
+        self.sourceRepository = sourceRepository
         self.support = support
         self.supportReason = supportReason
     }
 
     public var id: String { name }
     public var supportsVision: Bool { capabilities.contains("vision") }
+    public var supportsReasoning: Bool { capabilities.contains("reasoning") }
+    public var supportsTools: Bool { capabilities.contains("tools") }
+    public var supportsChat: Bool { capabilities.contains("chat") }
+    public var supportsCompletion: Bool { capabilities.contains("completion") }
 
     enum CodingKeys: String, CodingKey {
         case name
@@ -352,6 +362,8 @@ public struct CatalogModel: Codable, Identifiable, Hashable, Sendable {
         case downloadSizeGB = "download_size_gb"
         case diskSizeGB = "disk_size_gb"
         case minimumMemoryGB = "minimum_memory_gb"
+        case contextLength = "context_length"
+        case sourceRepository = "source_repository"
         case support
         case supportReason = "support_reason"
     }
@@ -361,11 +373,115 @@ public struct APIChatMessage: Encodable, Sendable {
     public let role: String
     public let content: String
     public let images: [String]?
+    public let toolCalls: [APIToolCall]?
+    public let toolName: String?
 
-    public init(role: String, content: String, images: [String]?) {
+    public init(
+        role: String,
+        content: String,
+        images: [String]? = nil,
+        toolCalls: [APIToolCall]? = nil,
+        toolName: String? = nil
+    ) {
         self.role = role
         self.content = content
         self.images = images
+        self.toolCalls = toolCalls
+        self.toolName = toolName
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case role
+        case content
+        case images
+        case toolCalls = "tool_calls"
+        case toolName = "tool_name"
+    }
+}
+
+public indirect enum JSONValue: Codable, Hashable, Sendable {
+    case object([String: JSONValue])
+    case array([JSONValue])
+    case string(String)
+    case number(Double)
+    case boolean(Bool)
+    case null
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if container.decodeNil() {
+            self = .null
+        } else if let value = try? container.decode(Bool.self) {
+            self = .boolean(value)
+        } else if let value = try? container.decode(Double.self) {
+            self = .number(value)
+        } else if let value = try? container.decode(String.self) {
+            self = .string(value)
+        } else if let value = try? container.decode([String: JSONValue].self) {
+            self = .object(value)
+        } else if let value = try? container.decode([JSONValue].self) {
+            self = .array(value)
+        } else {
+            throw DecodingError.dataCorruptedError(
+                in: container,
+                debugDescription: "Unsupported JSON value"
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case let .object(value): try container.encode(value)
+        case let .array(value): try container.encode(value)
+        case let .string(value): try container.encode(value)
+        case let .number(value): try container.encode(value)
+        case let .boolean(value): try container.encode(value)
+        case .null: try container.encodeNil()
+        }
+    }
+}
+
+public struct APIToolCall: Codable, Hashable, Sendable {
+    public struct Function: Codable, Hashable, Sendable {
+        public let name: String
+        public let arguments: JSONValue?
+
+        public init(name: String, arguments: JSONValue? = nil) {
+            self.name = name
+            self.arguments = arguments
+        }
+    }
+
+    public let id: String?
+    public let type: String?
+    public let function: Function
+
+    public init(id: String? = nil, type: String? = nil, function: Function) {
+        self.id = id
+        self.type = type
+        self.function = function
+    }
+}
+
+public struct APIToolDefinition: Encodable, Hashable, Sendable {
+    public struct Function: Encodable, Hashable, Sendable {
+        public let name: String
+        public let description: String?
+        public let parameters: JSONValue
+
+        public init(name: String, description: String? = nil, parameters: JSONValue) {
+            self.name = name
+            self.description = description
+            self.parameters = parameters
+        }
+    }
+
+    public let type = "function"
+    public let function: Function
+
+    public init(function: Function) {
+        self.function = function
     }
 }
 
@@ -522,6 +638,8 @@ public struct ChatRequest: Encodable, Sendable {
     public let keepAlive = "forever"
     public let options: Options
     public let workspaceID: String?
+    public let reasoningStrength: String?
+    public let tools: [APIToolDefinition]?
 
     public init(
         requestID: String,
@@ -529,7 +647,9 @@ public struct ChatRequest: Encodable, Sendable {
         messages: [APIChatMessage],
         context: [String],
         options: Options,
-        workspaceID: String? = nil
+        workspaceID: String? = nil,
+        reasoningStrength: String? = nil,
+        tools: [APIToolDefinition]? = nil
     ) {
         self.requestID = requestID
         self.model = model
@@ -537,6 +657,8 @@ public struct ChatRequest: Encodable, Sendable {
         self.context = context
         self.options = options
         self.workspaceID = workspaceID
+        self.reasoningStrength = reasoningStrength
+        self.tools = tools
     }
 
     public struct Options: Encodable, Sendable {
@@ -566,6 +688,8 @@ public struct ChatRequest: Encodable, Sendable {
         case keepAlive = "keep_alive"
         case options
         case workspaceID = "workspace_id"
+        case reasoningStrength = "think"
+        case tools
     }
 }
 
@@ -573,10 +697,26 @@ public struct ChatEvent: Decodable, Sendable {
     public struct Message: Decodable, Sendable {
         public let role: String?
         public let content: String
+        public let thinking: String?
+        public let toolCalls: [APIToolCall]?
 
-        public init(role: String?, content: String) {
+        public init(
+            role: String?,
+            content: String,
+            thinking: String? = nil,
+            toolCalls: [APIToolCall]? = nil
+        ) {
             self.role = role
             self.content = content
+            self.thinking = thinking
+            self.toolCalls = toolCalls
+        }
+
+        enum CodingKeys: String, CodingKey {
+            case role
+            case content
+            case thinking
+            case toolCalls = "tool_calls"
         }
     }
 

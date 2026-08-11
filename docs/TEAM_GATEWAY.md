@@ -2,7 +2,8 @@
 
 MachBoost Team Gateway turns one Apple Silicon Mac into a private inference
 endpoint for a small team. It keeps supported MLX text and vision models
-resident, accepts concurrent OpenAI- and Ollama-compatible requests, and adds
+resident, can bridge supported model-native Ollama MLX runners, accepts
+concurrent OpenAI- and Ollama-compatible requests, and adds
 employee keys, limits, fair admission, revision-aware memory, budgeted provider
 fallback, local traces, and evaluations.
 
@@ -103,6 +104,27 @@ export OLLAMA_API_KEY="mbk_employee_key"
 returns requested tool calls but never executes them; execution remains inside
 the employee's coding agent and its permission system.
 
+### Serve Muse Glimmer 30B MLX
+
+Muse Glimmer can be exposed through the same endpoint when the host has Apple
+Silicon, at least 32 GB unified memory, and Ollama 0.32.7 or newer:
+
+```sh
+machboost pull muse-glimmer:30b-mlx
+machboost warm muse-glimmer:30b-mlx --keep-alive -1
+```
+
+Allow employee keys to use `muse-glimmer:30b-mlx`, then send ordinary OpenAI or
+Ollama chat requests. OpenAI requests may set `think` to `low`, `medium`,
+`high`, or `xhigh` in the top-level request extension. Image content parts and
+function-tool schemas are forwarded to the native model. Streaming reasoning
+is returned separately from final text, and tool calls remain structured.
+
+Muse uses Ollama's MLX runner and model-native DFlash; MachBoost supplies the
+authenticated gateway, lifecycle, cancellation, compatibility, queueing, and
+metrics around that runner. Ollama is an explicit host dependency for this
+model and is not bundled by MachBoost.
+
 ## Fairness And Concurrency
 
 Each employee key has independent concurrent-request and requests-per-minute
@@ -114,8 +136,9 @@ cache locality.
 Replicas are independent model instances. They improve isolation and can reduce
 queue latency, but consume additional unified memory and do not promise a linear
 GPU-throughput increase. MLX-VLM remains one replica per model because its
-mutable visual state is not replica-safe. MachBoost v0.9.0 does not implement
-continuous batching.
+mutable visual state is not replica-safe. MachBoost does not implement
+continuous batching. The Muse Ollama bridge also queues simultaneous clients
+around the runner; it does not turn serial decode into continuous batching.
 
 ## What Repository Sharing Actually Reuses
 

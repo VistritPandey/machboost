@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 import json
 import os
-from typing import Any, Callable, Iterable, Mapping, Optional
+from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
 from urllib import error, request
 
 DEFAULT_OLLAMA_ENDPOINT = "http://127.0.0.1:11434"
@@ -11,6 +11,16 @@ DEFAULT_OLLAMA_ENDPOINT = "http://127.0.0.1:11434"
 
 class OllamaHTTPError(RuntimeError):
     pass
+
+
+def normalize_ollama_keep_alive(value: Any) -> Any:
+    if isinstance(value, str) and value.strip().lower() in {
+        "forever",
+        "infinite",
+        "infinity",
+    }:
+        return -1
+    return value
 
 
 @dataclass(frozen=True)
@@ -94,19 +104,35 @@ class OllamaGenerateResult:
 @dataclass(frozen=True)
 class OllamaChatChunk:
     model: str
+    role: str
     content: str
+    thinking: str
+    tool_calls: tuple[Mapping[str, Any], ...]
     done: bool
     raw: Mapping[str, Any]
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "OllamaChatChunk":
         message = data.get("message") or {}
+        role = "assistant"
         content = ""
+        thinking = ""
+        tool_calls: tuple[Mapping[str, Any], ...] = ()
         if isinstance(message, Mapping):
+            role = str(message.get("role", "assistant"))
             content = str(message.get("content", ""))
+            thinking = str(message.get("thinking", ""))
+            raw_tool_calls = message.get("tool_calls") or []
+            if isinstance(raw_tool_calls, list):
+                tool_calls = tuple(
+                    dict(item) for item in raw_tool_calls if isinstance(item, Mapping)
+                )
         return cls(
             model=str(data.get("model", "")),
+            role=role,
             content=content,
+            thinking=thinking,
+            tool_calls=tool_calls,
             done=bool(data.get("done", False)),
             raw=data,
         )
@@ -166,6 +192,12 @@ class OllamaHTTPAdapter:
         *,
         options: Optional[Mapping[str, Any]] = None,
         keep_alive: Any = None,
+        images: Optional[Sequence[str]] = None,
+        system: Optional[str] = None,
+        format: Any = None,
+        think: Any = None,
+        logprobs: Optional[bool] = None,
+        top_logprobs: Optional[int] = None,
     ) -> OllamaGenerateResult:
         merged_options = dict(self.default_options)
         merged_options.update(dict(options or {}))
@@ -177,9 +209,21 @@ class OllamaHTTPAdapter:
         if keep_alive is None:
             keep_alive = self.keep_alive
         if keep_alive is not None:
-            payload["keep_alive"] = keep_alive
+            payload["keep_alive"] = normalize_ollama_keep_alive(keep_alive)
         if merged_options:
             payload["options"] = merged_options
+        if images:
+            payload["images"] = list(images)
+        if system is not None:
+            payload["system"] = system
+        if format is not None:
+            payload["format"] = format
+        if think is not None:
+            payload["think"] = think
+        if logprobs is not None:
+            payload["logprobs"] = bool(logprobs)
+        if top_logprobs is not None:
+            payload["top_logprobs"] = int(top_logprobs)
 
         data = self._json_request("POST", "/api/generate", payload)
         return OllamaGenerateResult.from_dict(data)
@@ -198,6 +242,12 @@ class OllamaHTTPAdapter:
 
     def tags(self) -> dict[str, Any]:
         return self._json_request("GET", "/api/tags", None)
+
+    def version(self) -> str:
+        return str(self._json_request("GET", "/api/version", None).get("version", ""))
+
+    def show(self, model: Optional[str] = None) -> dict[str, Any]:
+        return self._json_request("POST", "/api/show", {"model": model or self.model})
 
     def installed_models(self) -> tuple[str, ...]:
         models = self.tags().get("models", [])
@@ -225,11 +275,17 @@ class OllamaHTTPAdapter:
 
     def chat(
         self,
-        messages: list[Mapping[str, str]],
+        messages: Sequence[Mapping[str, Any]],
         *,
         options: Optional[Mapping[str, Any]] = None,
         keep_alive: Any = None,
         stream: bool = True,
+        tools: Optional[Sequence[Mapping[str, Any]]] = None,
+        tool_choice: Any = None,
+        format: Any = None,
+        think: Any = None,
+        logprobs: Optional[bool] = None,
+        top_logprobs: Optional[int] = None,
     ) -> Iterable[OllamaChatChunk]:
         merged_options = dict(self.default_options)
         merged_options.update(dict(options or {}))
@@ -241,12 +297,31 @@ class OllamaHTTPAdapter:
         if keep_alive is None:
             keep_alive = self.keep_alive
         if keep_alive is not None:
-            payload["keep_alive"] = keep_alive
+            payload["keep_alive"] = normalize_ollama_keep_alive(keep_alive)
         if merged_options:
             payload["options"] = merged_options
+        if tools:
+            payload["tools"] = [dict(tool) for tool in tools]
+        if tool_choice is not None:
+            payload["tool_choice"] = tool_choice
+        if format is not None:
+            payload["format"] = format
+        if think is not None:
+            payload["think"] = think
+        if logprobs is not None:
+            payload["logprobs"] = bool(logprobs)
+        if top_logprobs is not None:
+            payload["top_logprobs"] = int(top_logprobs)
 
         for item in self._stream_json_request("POST", "/api/chat", payload):
             yield OllamaChatChunk.from_dict(item)
+
+    def unload(self) -> None:
+        self._json_request(
+            "POST",
+            "/api/generate",
+            {"model": self.model, "prompt": "", "stream": False, "keep_alive": 0},
+        )
 
     def require_native_verifier(self) -> None:
         raise NotImplementedError(self.capabilities().warning)

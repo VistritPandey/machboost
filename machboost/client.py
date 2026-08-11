@@ -476,6 +476,10 @@ class MachBoostClient:
         options: Optional[dict[str, Any]] = None,
         context: Optional[list[str] | str] = None,
         images: Optional[list[str] | str] = None,
+        tools: Optional[list[dict[str, Any]]] = None,
+        tool_choice: Any = None,
+        format: Any = None,
+        think: Optional[bool | str] = None,
         keep_alive: Any = None,
         stream: bool = True,
         affinity_key: Optional[str] = None,
@@ -509,6 +513,14 @@ class MachBoostClient:
         }
         if context is not None:
             payload["context"] = context
+        if tools is not None:
+            payload["tools"] = [dict(tool) for tool in tools]
+        if tool_choice is not None:
+            payload["tool_choice"] = tool_choice
+        if format is not None:
+            payload["format"] = format
+        if think is not None:
+            payload["think"] = think
         if keep_alive is not None:
             payload["keep_alive"] = keep_alive
         if request_id is not None:
@@ -535,6 +547,8 @@ class MachBoostClient:
         options: Optional[dict[str, Any]] = None,
         context: Optional[list[str] | str] = None,
         images: Optional[list[str] | str] = None,
+        format: Any = None,
+        think: Optional[bool | str] = None,
         keep_alive: Any = None,
         stream: bool = True,
         affinity_key: Optional[str] = None,
@@ -561,6 +575,10 @@ class MachBoostClient:
             payload["context"] = context
         if images is not None:
             payload["images"] = images
+        if format is not None:
+            payload["format"] = format
+        if think is not None:
+            payload["think"] = think
         if keep_alive is not None:
             payload["keep_alive"] = keep_alive
         if request_id is not None:

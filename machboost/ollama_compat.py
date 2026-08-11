@@ -25,9 +25,13 @@ OLLAMA_OPTION_KEYS = {
 
 
 def normalize_ollama_options(payload: dict[str, Any]) -> dict[str, Any]:
-    options = dict(payload.get("options") or {})
+    options = {
+        key: value
+        for key, value in dict(payload.get("options") or {}).items()
+        if value is not None
+    }
     for key in OLLAMA_OPTION_KEYS:
-        if key in payload and key not in options:
+        if key in payload and payload[key] is not None and key not in options:
             options[key] = payload[key]
     if "format" in payload:
         options["_format"] = normalize_format(payload["format"])

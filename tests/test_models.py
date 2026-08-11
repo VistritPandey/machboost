@@ -9,17 +9,41 @@ from unittest.mock import patch
 from machboost.models import (
     DFLASH_ALIASES,
     MODEL_ALIASES,
+    OLLAMA_MLX_ALIASES,
     alias_rows,
+    backend_available,
     cached_repo_path,
     catalog_rows,
     model_targets,
     model_repositories,
+    ollama_executable,
     preflight_model,
     resolve_model,
 )
 
 
 class ModelCatalogTests(unittest.TestCase):
+    def test_ollama_executable_honors_native_app_override(self):
+        with tempfile.TemporaryDirectory() as directory:
+            executable = Path(directory, "ollama")
+            executable.write_text("#!/bin/sh\n", encoding="utf-8")
+            executable.chmod(0o755)
+            with (
+                patch.dict("os.environ", {"OLLAMA_BINARY": str(executable)}),
+                patch("machboost.models.shutil.which", return_value=None),
+            ):
+                located = ollama_executable()
+
+        self.assertEqual(located, str(executable.resolve()))
+
+    def test_ollama_mlx_backend_uses_runtime_locator(self):
+        with (
+            patch("machboost.models.platform.system", return_value="Darwin"),
+            patch("machboost.models.platform.machine", return_value="arm64"),
+            patch("machboost.models.ollama_executable", return_value="/Applications/Ollama.app/ollama"),
+        ):
+            self.assertTrue(backend_available("ollama-mlx"))
+
     def test_short_alias_prefers_mlx_when_available(self):
         with patch("machboost.models.native_mlx_available", return_value=True):
             resolution = resolve_model("qwen2.5:3b")
@@ -80,10 +104,38 @@ class ModelCatalogTests(unittest.TestCase):
             ),
         )
 
+    def test_muse_glimmer_alias_selects_official_ollama_mlx_backend(self):
+        for alias in ("muse-glimmer:30b", "muse-glimmer:30b-mlx"):
+            with self.subTest(alias=alias):
+                resolution = resolve_model(alias)
+                self.assertEqual(resolution.backend, "ollama-mlx")
+                self.assertEqual(resolution.model, "muse-glimmer:30b-mlx")
+                self.assertEqual(resolution.alias, "muse-glimmer:30b-mlx")
+
+    def test_muse_glimmer_rejects_incompatible_backend_override(self):
+        with self.assertRaisesRegex(ValueError, "requires Ollama's MLX backend"):
+            resolve_model("muse-glimmer:30b-mlx", backend="mlx-vlm")
+
+    def test_muse_glimmer_lists_ollama_model_as_lifecycle_target(self):
+        self.assertEqual(
+            model_repositories("muse-glimmer:30b"),
+            ("muse-glimmer:30b-mlx",),
+        )
+        self.assertEqual(
+            model_targets("muse-glimmer:30b"),
+            {"muse-glimmer:30b-mlx"},
+        )
+
     def test_catalog_rows_are_stable_and_sorted(self):
         rows = alias_rows()
 
-        expected_names = sorted((*MODEL_ALIASES, *DFLASH_ALIASES))
+        expected_names = sorted(
+            (
+                *MODEL_ALIASES,
+                *DFLASH_ALIASES,
+                *{item.name for item in OLLAMA_MLX_ALIASES.values()},
+            )
+        )
         self.assertEqual([row["name"] for row in rows], expected_names)
         self.assertTrue(all(row["mlx"] or row["hf"] for row in rows))
 
@@ -101,6 +153,42 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertGreater(llama["download_size_gb"], 0)
         self.assertTrue(vision["recommended"])
         self.assertFalse(vision["cached"])
+
+    def test_muse_glimmer_catalog_reports_installed_capabilities(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = Path(
+                directory,
+                "manifests",
+                "registry.ollama.ai",
+                "library",
+                "muse-glimmer",
+                "30b-mlx",
+            )
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text(
+                json.dumps({"layers": [{"size": 20_000_000_000}, {"size": 1_000_000_000}]}),
+                encoding="utf-8",
+            )
+            with (
+                patch.dict("os.environ", {"OLLAMA_MODELS": directory}),
+                patch("machboost.models.cached_repo_path", return_value=None),
+                patch("machboost.models.backend_available", return_value=True),
+            ):
+                rows = catalog_rows(include_cached_repositories=False)
+                preflight = preflight_model("muse-glimmer:30b-mlx")
+
+        muse = next(row for row in rows if row["name"] == "muse-glimmer:30b-mlx")
+        self.assertEqual(muse["backend"], "ollama-mlx")
+        self.assertEqual(
+            muse["capabilities"],
+            ["chat", "completion", "vision", "reasoning", "tools"],
+        )
+        self.assertEqual(muse["context_length"], 131_072)
+        self.assertEqual(muse["disk_size_gb"], 21.0)
+        self.assertTrue(muse["cached"])
+        self.assertTrue(muse["recommended"])
+        self.assertTrue(preflight["supported"])
+        self.assertEqual(preflight["model_type"], "muse_glimmer")
 
     def test_desktop_catalog_requires_both_dflash_repositories_in_cache(self):
         target = Path("/tmp/dflash-target")

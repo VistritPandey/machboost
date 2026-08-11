@@ -19,7 +19,7 @@ from .adapters.ollama import OllamaHTTPAdapter, OllamaHTTPError
 from .client import MachBoostAPIError, MachBoostClient, ensure_server
 from .context_bench import benchmark_context_acceleration, context_fingerprint
 from .latency import benchmark_chat_latency
-from .models import alias_rows, resolve_model
+from .models import alias_rows, backend_available, catalog_rows, resolve_model
 from .server import (
     DEFAULT_HOST,
     DEFAULT_MAX_QUEUE,
@@ -168,6 +168,22 @@ def model_list_data(
 ) -> dict:
     cache_paths = [Path(item).expanduser() for item in cache_dirs] if cache_dirs else default_hf_cache_dirs()
     models = discover_cached_models(cache_paths, backend=backend, include_unsupported=include_unsupported)
+    for row in catalog_rows(include_cached_repositories=False):
+        if row["backend"] != "ollama-mlx" or not row["cached"]:
+            continue
+        if backend not in {"all", "ollama-mlx"}:
+            continue
+        models.append(
+            CachedModel(
+                name=str(row["name"]),
+                backend="ollama-mlx",
+                source="ollama_cache",
+                path=str(row["cached_path"] or ""),
+                runnable=row["support"] == "ready",
+                reason=str(row.get("support_reason") or "official Ollama MLX model"),
+            )
+        )
+    models.sort(key=lambda model: (not model.runnable, model.backend, model.name.lower()))
     return {
         "schema_version": "machboost.model_list.v1",
         "machboost_version": __version__,
@@ -193,6 +209,11 @@ def model_list_data(
                 "backend": "mlx-vlm",
                 "model": "mlx-community/Qwen2.5-VL-3B-Instruct-4bit",
                 "command": "machboost run qwen2.5-vl:3b --image ./image.png",
+            },
+            {
+                "backend": "ollama-mlx",
+                "model": "muse-glimmer:30b-mlx",
+                "command": "machboost run muse-glimmer:30b-mlx --think high --show-stats",
             },
         ],
     }
@@ -259,6 +280,10 @@ def native_backend_status() -> dict:
                 "mlx_lm": asdict(mlx_lm),
                 "dflash_mlx": asdict(dflash_mlx),
             },
+        },
+        "ollama-mlx": {
+            "available": backend_available("ollama-mlx"),
+            "packages": {},
         },
     }
 
@@ -466,7 +491,10 @@ def load_native_accelerator(args: argparse.Namespace, *, stream=None):
     if resolution.alias:
         print(f"resolved {resolution.alias!r} to {resolution.model!r}", file=stream)
     print(f"loading {resolution.model!r} with native {backend} backend...", file=stream)
-    print("if the model is not cached, HF/MLX may download it into its local cache", file=stream)
+    if backend == "ollama-mlx":
+        print("Muse Glimmer uses Ollama's native Apple Silicon MLX engine", file=stream)
+    else:
+        print("if the model is not cached, HF/MLX may download it into its local cache", file=stream)
 
     common = {
         "context_paths": context_paths,
@@ -509,6 +537,16 @@ def load_native_accelerator(args: argparse.Namespace, *, stream=None):
             draft_quant=args.draft_quant,
             verify_mode=args.verify_mode,
             lazy=args.lazy,
+        )
+    if backend == "ollama-mlx":
+        from .adapters.ollama_mlx import OllamaMLXAccelerator
+
+        return OllamaMLXAccelerator.from_pretrained(
+            resolution.model,
+            context_paths=context_paths,
+            max_context_chars=args.max_context_chars,
+            keep_alive=args.keep_alive,
+            timeout=args.timeout,
         )
     raise ValueError(f"unsupported backend: {backend}")
 
@@ -608,8 +646,23 @@ def run_native_chat(
             print(chunk, end="", flush=True, file=output_stream)
 
         started = time.perf_counter()
+        thinking_started = False
+
+        def emit_thinking(chunk: str) -> None:
+            nonlocal thinking_started
+            if not chunk:
+                return
+            if not thinking_started:
+                print("thinking> ", end="", flush=True, file=error_stream)
+                thinking_started = True
+            print(chunk, end="", flush=True, file=error_stream)
+
         try:
             kwargs = {"max_tokens": args.max_tokens, "on_text": emit}
+            if args.think:
+                kwargs["enable_thinking"] = args.think
+            if args.show_thinking:
+                kwargs["on_thinking"] = emit_thinking
             if getattr(accelerator, "supports_vision", False):
                 kwargs.update(
                     use_vision_cache=not args.no_vision_cache,
@@ -633,19 +686,36 @@ def run_native_chat(
 
         elapsed_s = time.perf_counter() - started
         response = response.strip()
+        if thinking_started:
+            print("", flush=True, file=error_stream)
         if streamed:
             print("", flush=True, file=output_stream)
         else:
             print(response, flush=True, file=output_stream)
         if args.show_stats:
             tokens_per_second = stats.generated_tokens / elapsed_s if elapsed_s > 0 else 0.0
-            if getattr(stats, "backend", "") == "mlx-vlm":
+            stats_backend = getattr(stats, "backend", "")
+            if stats_backend == "mlx-vlm":
                 print(
                     "stats: "
                     f"elapsed={elapsed_s:.2f}s "
                     f"tokens_per_second={tokens_per_second:.2f} "
                     f"prompt_tps={stats.prompt_tokens_per_second:.2f} "
                     f"vision_cache={'hit' if stats.visual_cache_hit else 'miss' if stats.visual_cache_miss else 'off'}",
+                    file=output_stream,
+                )
+            elif stats_backend == "ollama-mlx":
+                ttft = getattr(stats, "time_to_first_token_seconds", None)
+                ttft_text = "n/a" if ttft is None else f"{ttft:.3f}s"
+                print(
+                    "stats: "
+                    f"elapsed={elapsed_s:.2f}s "
+                    f"ttft={ttft_text} "
+                    f"decode_tps={stats.generation_tokens_per_second:.2f} "
+                    f"prompt_tps={stats.prompt_tokens_per_second:.2f} "
+                    f"tokens={stats.generated_tokens} "
+                    f"images={stats.image_count} "
+                    f"tool_calls={len(stats.tool_calls)}",
                     file=output_stream,
                 )
             else:
@@ -793,6 +863,9 @@ def native_server_options(args: argparse.Namespace) -> dict:
         "draft_model": args.draft_model,
         "draft_quant": args.draft_quant,
         "verify_mode": args.verify_mode,
+        "num_ctx": args.ctx,
+        "_think": args.think or False,
+        "_reasoning_strength": args.think,
     }
 
 
@@ -808,6 +881,40 @@ def connect_resident(args: argparse.Namespace, *, error_stream=None) -> MachBoos
     if started:
         print(f"started resident MachBoost server at {client.endpoint}", file=error_stream)
     return client
+
+
+def ensure_resident_model(
+    client: MachBoostClient,
+    args: argparse.Namespace,
+    *,
+    stream=None,
+) -> None:
+    stream = stream or sys.stderr
+    resolution = resolve_model(args.model, args.backend)
+    if resolution.backend != "ollama-mlx":
+        return
+    response = client.show(
+        args.model,
+        preflight=True,
+        backend=resolution.backend,
+    )
+    preflight = response.get("preflight") or response
+    if not preflight.get("runtime_available", False):
+        raise MachBoostAPIError(
+            str(preflight.get("reason") or "Muse Glimmer requires current Ollama on Apple Silicon")
+        )
+    if preflight.get("cached"):
+        return
+    print(f"model {resolution.model!r} is not installed; pulling 21 GB...", file=stream)
+    events = client.pull(args.model, stream=True)
+    last_status = None
+    for event in events:
+        if event.get("error"):
+            raise MachBoostAPIError(str(event["error"]))
+        status = str(event.get("status") or "")
+        if status and status != last_status:
+            print(f"pull: {status}", file=stream)
+            last_status = status
 
 
 def prepare_visual_inputs(
@@ -861,7 +968,8 @@ def run_resident_chat(
     session_started = time.perf_counter()
     try:
         client = connect_resident(args, error_stream=error_stream)
-    except MachBoostAPIError as exc:
+        ensure_resident_model(client, args, stream=error_stream)
+    except (MachBoostAPIError, ValueError) as exc:
         print(f"machboost server error: {exc}", file=error_stream)
         return 2
 
@@ -957,10 +1065,33 @@ def run_resident_chat(
         turns.append({"role": "user", "content": content})
         messages = [{"role": "system", "content": args.system or DEFAULT_CHAT_SYSTEM}, *turns]
         response_parts: list[str] = []
+        tool_calls: list[dict] = []
         final_row: dict = {}
         started = time.perf_counter()
         rows = None
-        print("assistant> ", end="", flush=True, file=output_stream)
+        thinking_started = False
+        answer_started = False
+
+        def show_thinking(chunk: str) -> None:
+            nonlocal thinking_started
+            if not args.show_thinking or not chunk:
+                return
+            if not thinking_started:
+                print("thinking> ", end="", flush=True, file=output_stream)
+                thinking_started = True
+            print(chunk, end="", flush=True, file=output_stream)
+
+        def show_answer(chunk: str) -> None:
+            nonlocal answer_started
+            if not chunk:
+                return
+            if not answer_started:
+                if thinking_started:
+                    print("", flush=True, file=output_stream)
+                print("assistant> ", end="", flush=True, file=output_stream)
+                answer_started = True
+            print(chunk, end="", flush=True, file=output_stream)
+
         try:
             request_options = {
                 "options": native_server_options(args),
@@ -973,9 +1104,13 @@ def run_resident_chat(
             for row in rows:
                 message = row.get("message") or {}
                 chunk = str(message.get("content") or "")
+                thinking = str(message.get("thinking") or "")
+                show_thinking(thinking)
                 if chunk:
-                    print(chunk, end="", flush=True, file=output_stream)
+                    show_answer(chunk)
                     response_parts.append(chunk)
+                if message.get("tool_calls"):
+                    tool_calls.extend(message["tool_calls"])
                 if row.get("done"):
                     final_row = row
         except KeyboardInterrupt:
@@ -990,8 +1125,18 @@ def run_resident_chat(
             print(f"\ngeneration error: {exc}", file=error_stream)
             continue
 
-        print("", flush=True, file=output_stream)
+        if thinking_started and not answer_started:
+            print("", flush=True, file=output_stream)
+        if not answer_started and tool_calls:
+            print("assistant> ", file=output_stream)
+        elif answer_started:
+            print("", flush=True, file=output_stream)
         response = "".join(response_parts).strip()
+        if tool_calls:
+            print(
+                "tool calls: " + json.dumps(tool_calls, ensure_ascii=True),
+                file=output_stream,
+            )
         if args.show_stats:
             print_resident_stats(final_row, time.perf_counter() - started, stream=output_stream)
         turns.append({"role": "assistant", "content": response})
@@ -1022,10 +1167,25 @@ def run_resident_completion(args: argparse.Namespace, *, output_stream=None, err
             prompt = video_prompt(prompt)
         if args.direct:
             accelerator = load_native_accelerator(args, stream=error_stream)
+            thinking_started = False
+
+            def emit_thinking(text: str) -> None:
+                nonlocal thinking_started
+                if not text:
+                    return
+                if not thinking_started:
+                    print("thinking> ", end="", flush=True, file=error_stream)
+                    thinking_started = True
+                print(text, end="", flush=True, file=error_stream)
+
             kwargs = {
                 "max_tokens": args.max_tokens,
                 "on_text": lambda text: print(text, end="", flush=True, file=output_stream),
             }
+            if args.think:
+                kwargs["enable_thinking"] = args.think
+            if args.show_thinking:
+                kwargs["on_thinking"] = emit_thinking
             if images and not getattr(accelerator, "supports_vision", False):
                 raise ValueError("attached images require a vision model")
             if getattr(accelerator, "supports_vision", False):
@@ -1041,13 +1201,34 @@ def run_resident_completion(args: argparse.Namespace, *, output_stream=None, err
                     vision_token_bucket=args.vision_token_bucket,
                     vision_calibration=load_vision_calibration(args.vision_calibration),
                 )
+            started = time.perf_counter()
             text, stats = accelerator.generate(prompt, **kwargs)
+            elapsed_s = time.perf_counter() - started
+            if thinking_started:
+                print("", file=error_stream)
             print("", file=output_stream)
             if args.show_stats:
-                print(f"stats: generated={stats.generated_tokens} accepted={stats.accepted_draft_tokens}", file=output_stream)
+                if getattr(stats, "backend", "") == "ollama-mlx":
+                    print(
+                        "stats: "
+                        f"elapsed={elapsed_s:.2f}s "
+                        f"decode_tps={stats.generation_tokens_per_second:.2f} "
+                        f"prompt_tps={stats.prompt_tokens_per_second:.2f} "
+                        f"tokens={stats.generated_tokens} "
+                        f"images={stats.image_count} "
+                        f"tool_calls={len(stats.tool_calls)}",
+                        file=output_stream,
+                    )
+                else:
+                    print(
+                        f"stats: generated={stats.generated_tokens} "
+                        f"accepted={stats.accepted_draft_tokens}",
+                        file=output_stream,
+                    )
             return 0
 
         client = connect_resident(args, error_stream=error_stream)
+        ensure_resident_model(client, args, stream=error_stream)
         started = time.perf_counter()
         request_options = {
             "options": native_server_options(args),
@@ -1060,6 +1241,9 @@ def run_resident_completion(args: argparse.Namespace, *, output_stream=None, err
         final_row: dict = {}
         for row in rows:
             chunk = str(row.get("response") or "")
+            thinking = str(row.get("thinking") or "")
+            if thinking and args.show_thinking:
+                print(thinking, end="", flush=True, file=error_stream)
             if chunk:
                 print(chunk, end="", flush=True, file=output_stream)
             if row.get("done"):
@@ -1131,15 +1315,27 @@ def print_resident_stats(row: dict, elapsed_s: float, *, stream=None) -> None:
     print(f"eval count:           {generated} token(s)", file=stream)
     print(f"eval duration:        {eval_s:.3f}s", file=stream)
     print(f"eval rate:            {rate:.2f} tokens/s", file=stream)
-    print(
-        "machboost: "
-        f"backend={metrics.get('backend', 'unknown')} "
-        f"accepted={int(stats.get('accepted_draft_tokens') or 0)} "
-        f"target_calls={int(stats.get('target_calls') or 0)}/"
-        f"{int(stats.get('baseline_target_calls') or 0)}"
-        f"{cache_state}",
-        file=stream,
-    )
+    backend = str(metrics.get("backend") or stats.get("backend") or "unknown")
+    if backend == "ollama-mlx":
+        speculative = "on" if stats.get("native_speculative_decoding", True) else "off"
+        print(
+            "machboost: "
+            f"backend={backend} "
+            f"native_speculative={speculative} "
+            f"tool_calls={len(stats.get('tool_calls') or ())}"
+            f"{cache_state}",
+            file=stream,
+        )
+    else:
+        print(
+            "machboost: "
+            f"backend={backend} "
+            f"accepted={int(stats.get('accepted_draft_tokens') or 0)} "
+            f"target_calls={int(stats.get('target_calls') or 0)}/"
+            f"{int(stats.get('baseline_target_calls') or 0)}"
+            f"{cache_state}",
+            file=stream,
+        )
 
 
 def run_serve(args: argparse.Namespace, *, output_stream=None, error_stream=None) -> int:
@@ -1319,6 +1515,7 @@ def run_latency_bench(
             ollama_model=args.ollama_model,
             ollama_endpoint=args.ollama_endpoint,
             timeout=args.timeout,
+            draft_num_predict=args.draft_num_predict,
         )
     except (MachBoostAPIError, OllamaHTTPError, OSError, ValueError) as exc:
         print(f"machboost bench error: {exc}", file=error_stream)
@@ -1748,12 +1945,19 @@ def print_latency_benchmark(artifact: dict, *, stream=None) -> None:
             )
     comparison = artifact.get("comparison")
     if comparison:
+        output_equal = comparison.get("median_output_equal")
+        output_label = "n/a" if output_equal is None else "yes" if output_equal else "no"
         print(
             "comparison: "
             f"MachBoost wall={comparison['machboost_total_speedup_vs_ollama']:.3f}x "
             f"TTFT={comparison['machboost_ttft_speedup_vs_ollama']:.3f}x "
-            f"output_equal={'yes' if comparison['median_output_equal'] else 'no'} "
+            f"output_equal={output_label} "
             "relative to Ollama",
+            file=stream,
+        )
+    if config.get("draft_control_method") == "ollama_logprobs_parking":
+        print(
+            "control: Ollama logprobs park native MLX speculation; logprob materialization overhead is included",
             file=stream,
         )
     print("note: plain chat uses the native backend when no draft context is supplied", file=stream)
@@ -1839,7 +2043,7 @@ def build_parser() -> argparse.ArgumentParser:
     model_list = subcommands.add_parser("list", help="List cached native HF/MLX models.")
     model_list.add_argument(
         "--backend",
-        choices=["all", "mlx", "hf", "mlx-vlm", "hf-vlm"],
+        choices=["all", "mlx", "hf", "mlx-vlm", "hf-vlm", "ollama-mlx"],
         default="all",
         help="Filter by backend.",
     )
@@ -1884,8 +2088,17 @@ def build_parser() -> argparse.ArgumentParser:
     bench.add_argument("--warmups", type=int, default=1)
     bench.add_argument("--max-tokens", type=int, default=32)
     bench.add_argument(
+        "--draft-num-predict",
+        type=int,
+        default=None,
+        help=(
+            "Ollama MLX DFlash draft block size; 0 uses a logprobs-based "
+            "no-speculation diagnostic that includes logprob overhead."
+        ),
+    )
+    bench.add_argument(
         "--backend",
-        choices=["auto", "mlx", "hf", "dflash"],
+        choices=["auto", "mlx", "hf", "dflash", "ollama-mlx"],
         default="auto",
     )
     bench.add_argument("--keep-alive", default="5m")
@@ -2083,7 +2296,15 @@ def add_native_run_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--backend",
-        choices=["auto", "mlx", "hf", "mlx-vlm", "hf-vlm", "dflash"],
+        choices=[
+            "auto",
+            "mlx",
+            "hf",
+            "mlx-vlm",
+            "hf-vlm",
+            "dflash",
+            "ollama-mlx",
+        ],
         default="auto",
         help="Model backend. DFlash enables target-verified block-diffusion decoding on supported MLX text models.",
     )
@@ -2095,6 +2316,25 @@ def add_native_run_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--max-context-chars", type=int, default=200_000)
     parser.add_argument("--max-tokens", type=int, default=128)
+    parser.add_argument(
+        "--ctx",
+        "--num-ctx",
+        type=int,
+        default=None,
+        help="Context-window limit passed to compatible backends.",
+    )
+    parser.add_argument(
+        "--think",
+        nargs="?",
+        const="medium",
+        choices=["low", "medium", "high", "xhigh"],
+        help="Enable reasoning, optionally selecting Muse Glimmer reasoning strength.",
+    )
+    parser.add_argument(
+        "--show-thinking",
+        action="store_true",
+        help="Print streamed reasoning separately from the visible answer.",
+    )
     parser.add_argument("--ngram", type=int, default=2)
     parser.add_argument("--max-draft-tokens", type=int, default=8)
     parser.add_argument(

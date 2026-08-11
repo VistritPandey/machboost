@@ -109,6 +109,54 @@ class OllamaAdapterTest(unittest.TestCase):
         self.assertEqual(payload["options"]["num_predict"], 12)
         self.assertEqual(payload["options"]["num_ctx"], 1024)
 
+    def test_indefinite_keep_alive_uses_ollama_negative_duration(self):
+        generate_opener = RecordingOpener(
+            {"model": "muse-glimmer:30b-mlx", "response": "", "done": True}
+        )
+        adapter = OllamaHTTPAdapter(
+            "muse-glimmer:30b-mlx",
+            keep_alive="forever",
+            opener=generate_opener,
+        )
+
+        adapter.generate("load")
+
+        payload = json.loads(generate_opener.requests[0].data.decode("utf-8"))
+        self.assertEqual(payload["keep_alive"], -1)
+
+        chat_opener = RecordingOpener(
+            [{"model": "muse-glimmer:30b-mlx", "message": {}, "done": True}]
+        )
+        adapter = OllamaHTTPAdapter("muse-glimmer:30b-mlx", opener=chat_opener)
+
+        list(
+            adapter.chat(
+                [{"role": "user", "content": "hello"}],
+                keep_alive="infinite",
+            )
+        )
+
+        payload = json.loads(chat_opener.requests[0].data.decode("utf-8"))
+        self.assertEqual(payload["keep_alive"], -1)
+
+    def test_chat_forwards_top_level_logprob_controls(self):
+        opener = RecordingOpener(
+            [{"model": "muse-glimmer:30b-mlx", "message": {}, "done": True}]
+        )
+        adapter = OllamaHTTPAdapter("muse-glimmer:30b-mlx", opener=opener)
+
+        list(
+            adapter.chat(
+                [{"role": "user", "content": "control"}],
+                logprobs=True,
+                top_logprobs=0,
+            )
+        )
+
+        payload = json.loads(opener.requests[0].data.decode("utf-8"))
+        self.assertTrue(payload["logprobs"])
+        self.assertEqual(payload["top_logprobs"], 0)
+
     def test_tags_uses_get(self):
         opener = RecordingOpener({"models": [{"name": "qwen2.5:3b"}]})
         adapter = OllamaHTTPAdapter("qwen2.5:3b", endpoint="http://localhost:11434", opener=opener)
@@ -162,6 +210,84 @@ class OllamaAdapterTest(unittest.TestCase):
         self.assertEqual(opener.requests[0].full_url, "http://127.0.0.1:11434/api/chat")
         self.assertEqual(payload["messages"], [{"role": "user", "content": "hi"}])
         self.assertEqual(payload["options"], {"temperature": 0})
+
+    def test_chat_preserves_muse_reasoning_tools_and_images(self):
+        opener = RecordingOpener(
+            [
+                {
+                    "model": "muse-glimmer:30b-mlx",
+                    "message": {
+                        "role": "assistant",
+                        "content": "",
+                        "thinking": "I should inspect the image.",
+                    },
+                    "done": False,
+                },
+                {
+                    "model": "muse-glimmer:30b-mlx",
+                    "message": {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "call_1",
+                                "function": {
+                                    "index": 0,
+                                    "name": "lookup",
+                                    "arguments": {"query": "score"},
+                                },
+                            }
+                        ],
+                    },
+                    "done": True,
+                },
+            ]
+        )
+        adapter = OllamaHTTPAdapter("muse-glimmer:30b-mlx", opener=opener)
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "lookup",
+                    "parameters": {"type": "object"},
+                },
+            }
+        ]
+
+        chunks = list(
+            adapter.chat(
+                [{"role": "user", "content": "Inspect", "images": ["base64-image"]}],
+                tools=tools,
+                think=True,
+                format="json",
+            )
+        )
+
+        self.assertEqual(chunks[0].thinking, "I should inspect the image.")
+        self.assertEqual(chunks[1].tool_calls[0]["function"]["name"], "lookup")
+        payload = json.loads(opener.requests[0].data.decode("utf-8"))
+        self.assertEqual(payload["messages"][0]["images"], ["base64-image"])
+        self.assertEqual(payload["tools"], tools)
+        self.assertTrue(payload["think"])
+        self.assertEqual(payload["format"], "json")
+
+    def test_show_version_and_unload_use_lifecycle_routes(self):
+        version_opener = RecordingOpener({"version": "0.32.7"})
+        adapter = OllamaHTTPAdapter("muse-glimmer:30b-mlx", opener=version_opener)
+        self.assertEqual(adapter.version(), "0.32.7")
+        self.assertEqual(version_opener.requests[0].full_url, "http://127.0.0.1:11434/api/version")
+
+        show_opener = RecordingOpener({"capabilities": ["vision", "tools", "thinking"]})
+        adapter = OllamaHTTPAdapter("muse-glimmer:30b-mlx", opener=show_opener)
+        self.assertIn("thinking", adapter.show()["capabilities"])
+        self.assertEqual(show_opener.requests[0].full_url, "http://127.0.0.1:11434/api/show")
+
+        unload_opener = RecordingOpener({"done": True})
+        adapter = OllamaHTTPAdapter("muse-glimmer:30b-mlx", opener=unload_opener)
+        adapter.unload()
+        payload = json.loads(unload_opener.requests[0].data.decode("utf-8"))
+        self.assertEqual(payload["keep_alive"], 0)
+        self.assertEqual(payload["prompt"], "")
 
     def test_with_draft_options_sets_ollama_draft_depth(self):
         options = OllamaHTTPAdapter.with_draft_options({"num_predict": 32}, draft_num_predict=8)

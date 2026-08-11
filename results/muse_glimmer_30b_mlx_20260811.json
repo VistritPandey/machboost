@@ -1,0 +1,156 @@
+{
+  "schema_version": "machboost.muse_glimmer_evidence.v1",
+  "created_at": "2026-08-11",
+  "scope": "Single-machine validation of Muse Glimmer 30B MLX through direct Ollama and the MachBoost gateway. This is not a universal speedup claim.",
+  "machine": {
+    "model": "MacBook Pro Mac17,8",
+    "chip": "Apple M5 Pro",
+    "cpu_cores": 18,
+    "unified_memory_gb": 48,
+    "os": "macOS 26.6.1",
+    "architecture": "arm64",
+    "python": "3.13.3"
+  },
+  "runtime": {
+    "machboost": "0.11.0",
+    "ollama": "0.32.9",
+    "ollama_model": "muse-glimmer:30b-mlx",
+    "ollama_required_version": "0.32.7",
+    "format": "mlx",
+    "quantization": "nvfp4",
+    "artifact_size_gb": 21,
+    "ollama_reported_parameters": "32.3B",
+    "model_card_reported_parameters": "29.6B including vision encoder",
+    "context_length": 131072,
+    "capabilities": [
+      "completion",
+      "vision",
+      "tools",
+      "thinking"
+    ]
+  },
+  "latency_method": {
+    "runs": 5,
+    "warmups": 2,
+    "max_tokens": 256,
+    "temperature": 0.0,
+    "keep_alive": "30m",
+    "execution_order": "alternating_by_round",
+    "prompt_tokens_per_request": 71,
+    "unique_engine_specific_nonces": true,
+    "output_comparison": "not comparable between direct and gateway because cache-isolating nonces differ",
+    "prompt": "Explain how bounded queues, request cancellation, and graceful shutdown work together in a concurrent model server. Keep the answer concise.",
+    "control": "Ollama MLX exposes no direct DFlash-off request option. logprobs=true parks speculation but includes per-token logprob materialization overhead."
+  },
+  "measurements": {
+    "logprobs_no_speculation_control": {
+      "machboost": {
+        "median_wall_seconds": 15.060797958009061,
+        "median_ttft_seconds": 3.818612374991062,
+        "median_decode_tokens_per_second": 17.28549595546042
+      },
+      "direct_ollama": {
+        "median_wall_seconds": 15.057614834004198,
+        "median_ttft_seconds": 3.808049708008184,
+        "median_decode_tokens_per_second": 17.28224515305879
+      },
+      "machboost_gateway_overhead_percent": 0.02113962961567406
+    },
+    "native_dflash": {
+      "machboost": {
+        "median_wall_seconds": 11.882504709006753,
+        "median_ttft_seconds": 2.2222313749953173,
+        "median_decode_tokens_per_second": 21.6089246299767
+      },
+      "direct_ollama": {
+        "median_wall_seconds": 11.41365866700653,
+        "median_ttft_seconds": 2.2214040830003796,
+        "median_decode_tokens_per_second": 22.50438058119149
+      },
+      "machboost_gateway_overhead_percent": 4.107762950328242
+    }
+  },
+  "dflash_vs_control": {
+    "machboost": {
+      "decode_throughput_speedup": 1.2501188676134296,
+      "wall_time_speedup": 1.2674767085590306,
+      "ttft_speedup": 1.7183684912193757
+    },
+    "direct_ollama": {
+      "decode_throughput_speedup": 1.3021676513603,
+      "wall_time_speedup": 1.3192627599361504,
+      "ttft_speedup": 1.7142534927120385
+    },
+    "interpretation": "This control is conservative because logprob materialization is included. It is not directly comparable to Meta's runtime-level no-speculation measurements."
+  },
+  "output_audit": {
+    "same_prompt_pairs": 10,
+    "byte_exact_pairs": 2,
+    "formal_quality_evaluation": false,
+    "interpretation": "Temperature-zero output was not byte deterministic in this Ollama MLX runtime, including within each mode. The sampled responses were semantically similar, but this run does not establish exact token equality or general quality equivalence."
+  },
+  "feature_smokes": {
+    "reasoning": {
+      "passed": true,
+      "prompt": "Compute 17 multiplied by 23. Put only the number in the final answer.",
+      "reasoning_strength": "high",
+      "final_answer": "391",
+      "thinking_characters": 318,
+      "generated_tokens": 101,
+      "decode_tokens_per_second": 33.66491561974562
+    },
+    "openai_tool_call": {
+      "passed": true,
+      "tool": "get_weather",
+      "arguments": {
+        "city": "Chicago"
+      },
+      "finish_reason": "tool_calls",
+      "prompt_tokens": 389,
+      "completion_tokens": 108
+    },
+    "vision": {
+      "passed": true,
+      "prompt_tokens": 1087,
+      "generated_tokens": 88,
+      "total_seconds": 8.702888041,
+      "answer": "Lionel Messi in Argentina's blue-and-black #10 kit stands alone on the pitch, appearing contemplative as he looks down during a match."
+    },
+    "cancellation": {
+      "passed": true,
+      "request_id": "muse-cancel-smoke-001",
+      "cancel_acknowledged": true,
+      "stream_closed": true,
+      "elapsed_seconds": 4.145
+    },
+    "interactive_cli": {
+      "passed": true,
+      "reasoning_streamed_separately": true,
+      "final_answer": "CLI READY",
+      "decode_tokens_per_second": 26.08
+    }
+  },
+  "concurrency_smoke": {
+    "simultaneous_clients": 4,
+    "replicas": 1,
+    "max_active_requests": 1,
+    "max_queued_requests": 3,
+    "successful_requests": 4,
+    "failed_requests": 0,
+    "tokens_per_request": 128,
+    "total_wall_seconds": 18.96553045800829,
+    "request_wall_seconds": [
+      5.2136017919983715,
+      9.793973959007417,
+      14.275556874999893,
+      18.93972870799189
+    ],
+    "interpretation": "MachBoost admitted and queued concurrent clients safely. One resident model worker serialized decode; this is not continuous batching or four-way parallel inference."
+  },
+  "external_reference": {
+    "meta_m4_max_dflash_speedup": 1.5,
+    "meta_m5_max_dflash_speedup": 1.8,
+    "meta_rtx_5090_dflash_speedup": 3.1,
+    "warning": "Meta's Apple measurements used ExecuTorch and a K-Quant-17GB target. They are cited context, not MachBoost measurements."
+  }
+}

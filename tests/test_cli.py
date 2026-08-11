@@ -43,6 +43,27 @@ class CLITests(unittest.TestCase):
         self.assertIn("not a wall-clock benchmark", rendered)
         self.assertNotIn("estimated speedup:", rendered)
 
+    def test_resident_stats_show_disabled_native_speculation(self):
+        output = io.StringIO()
+
+        cli.print_resident_stats(
+            {
+                "eval_count": 8,
+                "eval_duration": 1_000_000_000,
+                "machboost": {
+                    "backend": "ollama-mlx",
+                    "stats": {
+                        "backend": "ollama-mlx",
+                        "native_speculative_decoding": False,
+                    },
+                },
+            },
+            1.0,
+            stream=output,
+        )
+
+        self.assertIn("native_speculative=off", output.getvalue())
+
     def test_main_version_prints_version(self):
         output = io.StringIO()
 
@@ -140,8 +161,10 @@ class CLITests(unittest.TestCase):
 
         data = json.loads(output.getvalue())
         self.assertEqual(code, 0)
-        self.assertEqual(data["models"][0]["name"], "thenlper/gte-base")
-        self.assertFalse(data["models"][0]["runnable"])
+        model = next(
+            item for item in data["models"] if item["name"] == "thenlper/gte-base"
+        )
+        self.assertFalse(model["runnable"])
 
     def test_select_native_backend_prefers_mlx_for_mlx_models(self):
         self.assertEqual(cli.select_native_backend("mlx-community/Qwen3.5-0.8B-MLX-4bit", "auto"), "mlx")
@@ -173,6 +196,77 @@ class CLITests(unittest.TestCase):
         self.assertEqual(options["draft_model"], "z-lab/custom-draft")
         self.assertEqual(options["draft_quant"], "w4:gs64")
         self.assertEqual(options["verify_mode"], "adaptive")
+
+    def test_muse_glimmer_run_parses_reasoning_and_context_options(self):
+        args = cli.build_parser().parse_args(
+            [
+                "run",
+                "muse-glimmer:30b-mlx",
+                "--ctx",
+                "131072",
+                "--think",
+                "high",
+                "--show-thinking",
+            ]
+        )
+
+        resolution = cli.resolve_model(args.model, args.backend)
+        options = cli.native_server_options(args)
+
+        self.assertEqual(resolution.backend, "ollama-mlx")
+        self.assertEqual(resolution.model, "muse-glimmer:30b-mlx")
+        self.assertEqual(options["num_ctx"], 131072)
+        self.assertEqual(options["_think"], "high")
+        self.assertEqual(options["_reasoning_strength"], "high")
+        self.assertTrue(args.show_thinking)
+
+    def test_muse_glimmer_bench_parses_no_speculation_control(self):
+        args = cli.build_parser().parse_args(
+            [
+                "bench",
+                "muse-glimmer:30b-mlx",
+                "--backend",
+                "ollama-mlx",
+                "--draft-num-predict",
+                "0",
+            ]
+        )
+
+        self.assertEqual(args.backend, "ollama-mlx")
+        self.assertEqual(args.draft_num_predict, 0)
+
+    def test_model_list_includes_cached_muse_glimmer(self):
+        row = {
+            "name": "muse-glimmer:30b-mlx",
+            "backend": "ollama-mlx",
+            "cached": True,
+            "cached_path": "/tmp/muse-glimmer-manifest",
+            "support": "ready",
+            "support_reason": "compatible with Ollama's Apple Silicon MLX engine",
+        }
+
+        with patch.object(cli, "catalog_rows", return_value=[row]):
+            data = cli.model_list_data(cache_dirs=[])
+
+        muse = next(
+            model
+            for model in data["models"]
+            if model["name"] == "muse-glimmer:30b-mlx"
+        )
+        self.assertEqual(muse["backend"], "ollama-mlx")
+        self.assertTrue(muse["runnable"])
+
+    def test_missing_muse_glimmer_is_pulled_before_load(self):
+        client = FakeMuseResidentClient(cached=False)
+        args = cli.build_parser().parse_args(["run", "muse-glimmer:30b-mlx"])
+        output = io.StringIO()
+
+        cli.ensure_resident_model(client, args, stream=output)
+
+        self.assertEqual(client.show_calls, [("muse-glimmer:30b-mlx", True, "ollama-mlx")])
+        self.assertEqual(client.pull_calls, [("muse-glimmer:30b-mlx", True)])
+        self.assertIn("pulling 21 GB", output.getvalue())
+        self.assertIn("pull: success", output.getvalue())
 
     def test_decode_bench_resolves_bf16_target_and_forwards_suite(self):
         args = cli.build_parser().parse_args(
@@ -651,6 +745,13 @@ class CLITests(unittest.TestCase):
         self.assertIn("median wall=0.500s", output.getvalue())
         self.assertIn("output_equal=yes", output.getvalue())
 
+        artifact["comparison"]["median_output_equal"] = None
+        artifact["config"]["draft_control_method"] = "ollama_logprobs_parking"
+        output = io.StringIO()
+        cli.print_latency_benchmark(artifact, stream=output)
+        self.assertIn("output_equal=n/a", output.getvalue())
+        self.assertIn("logprobs park native MLX speculation", output.getvalue())
+
     def test_context_bench_uses_one_model_and_reports_valid_speedup(self):
         output = io.StringIO()
         error = io.StringIO()
@@ -819,6 +920,38 @@ class CLITests(unittest.TestCase):
         self.assertEqual(client.chat_calls[0][2]["vision_max_edge"], 512)
         self.assertIn("vision_cache=off", output.getvalue())
         self.assertIn("cold_vision=adaptive:512px", output.getvalue())
+
+    def test_muse_glimmer_chat_streams_reasoning_answer_and_tool_calls(self):
+        output = io.StringIO()
+        prompts = iter(["What is the weather?", "/bye"])
+        client = FakeMuseResidentClient(cached=True)
+
+        with patch.object(cli, "connect_resident", return_value=client):
+            code = cli.run_resident_chat(
+                cli.build_parser().parse_args(
+                    [
+                        "run",
+                        "muse-glimmer:30b-mlx",
+                        "--think",
+                        "high",
+                        "--show-thinking",
+                        "--ctx",
+                        "32768",
+                    ]
+                ),
+                input_func=lambda prompt: next(prompts),
+                output_stream=output,
+            )
+
+        rendered = output.getvalue()
+        self.assertEqual(code, 0)
+        self.assertIn("thinking> I should use the weather tool.", rendered)
+        self.assertIn("assistant> Checking now.", rendered)
+        self.assertIn('"name": "get_weather"', rendered)
+        options = client.chat_calls[0][2]
+        self.assertEqual(options["_think"], "high")
+        self.assertEqual(options["_reasoning_strength"], "high")
+        self.assertEqual(options["num_ctx"], 32768)
 
     def test_visual_chat_can_attach_image_interactively(self):
         output = io.StringIO()
@@ -1097,6 +1230,76 @@ class FakeResidentClient:
     def stop(self, model):
         self.stop_calls.append(model)
         return {"unloaded": 1}
+
+
+class FakeMuseResidentClient(FakeResidentClient):
+    def __init__(self, *, cached):
+        super().__init__()
+        self.cached = cached
+        self.show_calls = []
+        self.pull_calls = []
+
+    def show(self, model, *, preflight, backend):
+        self.show_calls.append((model, preflight, backend))
+        return {
+            "preflight": {
+                "runtime_available": True,
+                "cached": self.cached,
+                "supported": True,
+            }
+        }
+
+    def pull(self, model, *, stream):
+        self.pull_calls.append((model, stream))
+        self.cached = True
+        return iter([{"status": "pulling model"}, {"status": "success", "done": True}])
+
+    def load(self, model, *, options, keep_alive, warmup=False):
+        self.load_calls.append((model, options, keep_alive, warmup))
+        return {
+            "status": "success",
+            "load_duration_seconds": 0.25,
+            "warmup_duration_seconds": 0.1 if warmup else 0.0,
+            "instance": {
+                "model": "muse-glimmer:30b-mlx",
+                "backend": "ollama-mlx",
+            },
+        }
+
+    def chat(self, model, messages, *, options, keep_alive, stream, images=None):
+        self.chat_calls.append((model, messages, options, keep_alive, stream, images))
+        return iter(
+            [
+                {
+                    "message": {"content": "", "thinking": "I should use the weather tool."},
+                    "done": False,
+                },
+                {"message": {"content": "Checking now."}, "done": False},
+                {
+                    "message": {
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "function": {
+                                    "name": "get_weather",
+                                    "arguments": {"city": "Chicago"},
+                                }
+                            }
+                        ],
+                    },
+                    "done": False,
+                },
+                {
+                    "message": {"content": ""},
+                    "done": True,
+                    "eval_count": 12,
+                    "machboost": {
+                        "backend": "ollama-mlx",
+                        "stats": {"generated_tokens": 12},
+                    },
+                },
+            ]
+        )
 
 
 class InterruptingResidentClient(FakeResidentClient):

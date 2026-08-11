@@ -63,6 +63,31 @@ Same-weight speedup and absolute speed against a quantized native model are
 different measurements. See [the unique-request contract](../../docs/unique-request-acceleration.md)
 for supported boundaries and interpretation.
 
+## Muse Glimmer Agent Features
+
+Muse Glimmer requires Apple Silicon, a current Ollama installation, and the
+official 21 GB MLX artifact:
+
+```sh
+machboost pull muse-glimmer:30b-mlx
+python3 examples/python/muse_glimmer_agent.py
+python3 examples/python/muse_glimmer_agent.py --image ./screenshot.png
+```
+
+The example preflights the runtime and cached model without downloading
+implicitly. It requests a native function call, executes a deterministic local
+example tool, returns the tool result to the model, and prints reasoning
+separately from the final answer. With `--image`, it also sends an independent
+vision request. The calling application remains responsible for validating and
+authorizing every tool execution.
+
+Muse Glimmer's embedded DFlash acceleration belongs to the official model and
+Ollama MLX runner. MachBoost preserves it behind resident OpenAI- and
+Ollama-compatible APIs; the gateway does not make an additional decoder
+speedup claim. See the [hardware evidence](../../results/muse_glimmer_30b_mlx_20260811.json)
+for measured overhead, a diagnostic no-speculation control, feature smokes, and
+concurrency behavior.
+
 ## RAG And Internal Knowledge
 
 The knowledge-bot example performs a small keyword retrieval step, includes the selected passages in the model prompt, and also exposes those passages to MachBoost's verified drafter:
