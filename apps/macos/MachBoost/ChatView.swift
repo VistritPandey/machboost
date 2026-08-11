@@ -333,38 +333,33 @@ struct ChatView: View {
                     }
                 }
 
-            ZStack {
-                Button {
-                    stop()
-                } label: {
-                    Image(systemName: "stop.fill")
-                        .frame(width: 28, height: 28)
+            Group {
+                if isGenerating {
+                    Button {
+                        stop()
+                    } label: {
+                        Image(systemName: "stop.fill")
+                            .frame(width: 28, height: 28)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.red)
+                    .accessibilityLabel("Stop generation")
+                    .accessibilityIdentifier("stop-generation")
+                    .help("Stop generation")
+                    .keyboardShortcut(.escape, modifiers: [])
+                } else {
+                    Button {
+                        send()
+                    } label: {
+                        Image(systemName: "arrow.up")
+                            .frame(width: 28, height: 28)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .accessibilityLabel("Send message")
+                    .help("Send")
+                    .keyboardShortcut(.return, modifiers: .command)
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(.red)
-                .accessibilityLabel("Stop generation")
-                .help("Stop generation")
-                .keyboardShortcut(.escape, modifiers: [])
-                .opacity(isGenerating ? 1 : 0)
-                .allowsHitTesting(isGenerating)
-                .accessibilityHidden(!isGenerating)
-                .zIndex(isGenerating ? 1 : 0)
-
-                Button {
-                    send()
-                } label: {
-                    Image(systemName: "arrow.up")
-                        .frame(width: 28, height: 28)
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                .accessibilityLabel("Send message")
-                .help("Send")
-                .keyboardShortcut(.return, modifiers: .command)
-                .opacity(isGenerating ? 0 : 1)
-                .allowsHitTesting(!isGenerating)
-                .accessibilityHidden(isGenerating)
-                .zIndex(isGenerating ? 0 : 1)
             }
             .frame(width: 52, height: 36)
         }
@@ -677,6 +672,7 @@ private struct MessageRow: View {
                                 .foregroundStyle(.secondary)
                         }
                         .font(.callout)
+                        .accessibilityIdentifier("message-reasoning")
                     }
                     if !message.content.isEmpty {
                         MessageContentView(content: message.content)
