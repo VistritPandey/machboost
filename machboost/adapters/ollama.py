@@ -13,6 +13,16 @@ class OllamaHTTPError(RuntimeError):
     pass
 
 
+def normalize_ollama_keep_alive(value: Any) -> Any:
+    if isinstance(value, str) and value.strip().lower() in {
+        "forever",
+        "infinite",
+        "infinity",
+    }:
+        return -1
+    return value
+
+
 @dataclass(frozen=True)
 class OllamaCapabilities:
     backend: str = "ollama-http"
@@ -197,7 +207,7 @@ class OllamaHTTPAdapter:
         if keep_alive is None:
             keep_alive = self.keep_alive
         if keep_alive is not None:
-            payload["keep_alive"] = keep_alive
+            payload["keep_alive"] = normalize_ollama_keep_alive(keep_alive)
         if merged_options:
             payload["options"] = merged_options
         if images:
@@ -279,7 +289,7 @@ class OllamaHTTPAdapter:
         if keep_alive is None:
             keep_alive = self.keep_alive
         if keep_alive is not None:
-            payload["keep_alive"] = keep_alive
+            payload["keep_alive"] = normalize_ollama_keep_alive(keep_alive)
         if merged_options:
             payload["options"] = merged_options
         if tools:
