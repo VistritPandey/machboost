@@ -5,14 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta
       name="description"
-      content="MachBoost turns one Apple Silicon Mac into a private team inference gateway with resident MLX models, scoped keys, repository-aware assistants, traces, and local evaluations."
+      content="MachBoost turns one Apple Silicon Mac into a private team inference gateway with resident MLX models, Muse Glimmer reasoning and vision, scoped keys, repository-aware assistants, traces, and local evaluations."
     >
     <meta name="theme-color" content="#111713">
     <meta property="og:type" content="website">
     <meta property="og:title" content="MachBoost — Faster local inference on Apple Silicon">
     <meta
       property="og:description"
-      content="Serve local text, vision, coding agents, and repository-aware AI from one native macOS app and compatible API."
+      content="Serve local text, vision, reasoning, tool-calling agents, and repository-aware AI from one native macOS app and compatible API."
     >
     <meta
       property="og:image"
@@ -106,8 +106,8 @@
       <section class="signal-band" aria-label="MachBoost benchmark highlights">
         <div class="shell signal-grid">
           <div>
-            <strong>1.43×</strong>
-            <span>new 7B repo question</span>
+            <strong>1.25×</strong>
+            <span>Muse DFlash diagnostic</span>
           </div>
           <div>
             <strong>3.84×</strong>
@@ -166,10 +166,10 @@
             </li>
             <li>
               <i data-lucide="scan-eye" aria-hidden="true"></i>
-              <h3>Text and vision</h3>
+              <h3>Text, vision, and tools</h3>
               <p>
-                Run MLX and MLX-VLM models with persistent files and images that remain
-                attached until you remove them.
+                Run MLX and MLX-VLM models with persistent files and images. Muse
+                Glimmer adds separate reasoning and native tool-call output.
               </p>
             </li>
             <li>
@@ -249,8 +249,9 @@ export OPENAI_API_KEY="mbk_employee_key"</code></pre>
             <h2>Speed where expensive work can be skipped.</h2>
             <p>
               MachBoost can reuse exact prefixes or reduce target decode passes on
-              selected verified-decoding models. It does not claim every request,
-              model, or prompt becomes faster.
+              selected verified-decoding models, and it preserves model-native
+              acceleration when serving through its gateway. It does not claim every
+              request, model, or prompt becomes faster.
             </p>
           </div>
 
@@ -267,6 +268,14 @@ export OPENAI_API_KEY="mbk_employee_key"</code></pre>
                 </tr>
               </thead>
               <tbody>
+                <tr>
+                  <td>Muse native DFlash</td>
+                  <td>Muse Glimmer 30B MLX</td>
+                  <td>17.29 tok/s control</td>
+                  <td>21.61 tok/s</td>
+                  <td class="speedup">1.25×</td>
+                  <td>Diagnostic; no exactness claim</td>
+                </tr>
                 <tr>
                   <td>Fresh unique decode</td>
                   <td>Qwen3.5 4B BF16</td>
@@ -353,7 +362,13 @@ export OPENAI_API_KEY="mbk_employee_key"</code></pre>
               prefixes match. The same-weight 9B BF16 row ranges from 1.58× to
               2.42×, but its output gate found a mismatch; a faster 9B 4-bit control
               also diverged. Exact replay and semantic memory are separate contracts.
-              The visual figure is the median of six model-level paired medians.
+              The visual figure is the median of six model-level paired medians. The
+              Muse row uses Meta's model-native DFlash through Ollama's MLX runner;
+              MachBoost did not create that decoder. The control parks speculation by
+              requesting logprobs because Ollama exposes no DFlash-off switch, so it is
+              conservative and not comparable to Meta's ExecuTorch baseline. Across
+              the same run, direct Ollama reached 22.50 tok/s and MachBoost added 4.11%
+              median wall-time overhead. Only 2/10 same-prompt pairs were byte-identical.
             </p>
             <div class="artifact-links">
               <a
@@ -365,6 +380,11 @@ export OPENAI_API_KEY="mbk_employee_key"</code></pre>
                 href="https://github.com/VistritPandey/machboost/blob/main/results/unique_decode_qwen35_20260810.json"
               >
                 Unique decode matrix <i data-lucide="arrow-up-right" aria-hidden="true"></i>
+              </a>
+              <a
+                href="https://github.com/VistritPandey/machboost/blob/main/results/muse_glimmer_30b_mlx_20260811.json"
+              >
+                Muse Glimmer evidence <i data-lucide="arrow-up-right" aria-hidden="true"></i>
               </a>
               <a
                 href="https://github.com/VistritPandey/machboost/blob/main/results/vision_cache_qwen_matrix_20260714.json"
@@ -455,7 +475,8 @@ export OPENAI_API_KEY="mbk_employee_key"</code></pre>
                 <span>2</span>
                 <div>
                   <h3>Drag MachBoost to Applications</h3>
-                  <p>The bundled runtime means no Homebrew or Python setup.</p>
+                  <p>The bundled runtime means no Homebrew or Python setup. Muse
+                    Glimmer additionally requires the current Ollama app.</p>
                 </div>
               </li>
               <li>
@@ -544,8 +565,9 @@ client = OpenAI(
 )
 
 response = client.chat.completions.create(
-    model="qwen2.5:3b",
-    messages=[{"role": "user", "content": "Explain this repo"}]
+    model="muse-glimmer:30b-mlx",
+    messages=[{"role": "user", "content": "Inspect this incident"}],
+    extra_body={"think": "high"}
 )</code></pre>
             </div>
             <div class="code-block">
@@ -557,9 +579,9 @@ response = client.chat.completions.create(
                 </button>
               </div>
               <pre id="terminal-code"><code>machboost serve
-machboost pull qwen2.5-coder:7b
-machboost create company-coder --from qwen2.5-coder:7b --option num_ctx=8192
-machboost run company-coder</code></pre>
+machboost pull muse-glimmer:30b-mlx
+machboost run muse-glimmer:30b-mlx --think high --show-thinking
+machboost ps</code></pre>
             </div>
           </div>
         </div>
