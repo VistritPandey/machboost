@@ -197,6 +197,21 @@ class CLITests(unittest.TestCase):
         self.assertEqual(options["_reasoning_strength"], "high")
         self.assertTrue(args.show_thinking)
 
+    def test_muse_glimmer_bench_parses_no_speculation_control(self):
+        args = cli.build_parser().parse_args(
+            [
+                "bench",
+                "muse-glimmer:30b-mlx",
+                "--backend",
+                "ollama-mlx",
+                "--draft-num-predict",
+                "0",
+            ]
+        )
+
+        self.assertEqual(args.backend, "ollama-mlx")
+        self.assertEqual(args.draft_num_predict, 0)
+
     def test_model_list_includes_cached_muse_glimmer(self):
         row = {
             "name": "muse-glimmer:30b-mlx",
