@@ -57,6 +57,11 @@ def benchmark_chat_latency(
             "backend": backend,
             "keep_alive": keep_alive,
             "draft_num_predict": draft_num_predict,
+            "draft_control_method": (
+                "ollama_logprobs_parking"
+                if backend == "ollama-mlx" and draft_num_predict == 0
+                else None
+            ),
             "unique_prompt_nonce": True,
             "execution_order": (
                 "alternating_by_round" if engine == "both" else "single_engine"
@@ -87,6 +92,10 @@ def benchmark_chat_latency(
         artifact["notes"].append(
             "Both paths use the same installed Ollama MLX model; the comparison measures MachBoost gateway overhead."
         )
+        if draft_num_predict == 0:
+            artifact["notes"].append(
+                "Ollama's MLX API has no direct DFlash-off switch. This diagnostic control requests token logprobs, which parks native speculation but includes logprob materialization overhead."
+            )
     else:
         artifact["notes"].append(
             "Ollama and MLX conversions may use different quantization formats and model files."
@@ -465,12 +474,16 @@ def measure_ollama_chat(
     options: dict[str, Any] = {"num_predict": max_tokens, "temperature": 0.0}
     if draft_num_predict is not None:
         options["draft_num_predict"] = int(draft_num_predict)
+    control_options: dict[str, Any] = {}
+    if draft_num_predict == 0:
+        control_options = {"logprobs": True, "top_logprobs": 0}
     for chunk in adapter.chat(
         messages,
         options=options,
         keep_alive=keep_alive,
         stream=True,
         think=False,
+        **control_options,
     ):
         if chunk.content:
             if first_text_at is None:
