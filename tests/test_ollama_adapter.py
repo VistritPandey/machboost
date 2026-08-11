@@ -139,6 +139,24 @@ class OllamaAdapterTest(unittest.TestCase):
         payload = json.loads(chat_opener.requests[0].data.decode("utf-8"))
         self.assertEqual(payload["keep_alive"], -1)
 
+    def test_chat_forwards_top_level_logprob_controls(self):
+        opener = RecordingOpener(
+            [{"model": "muse-glimmer:30b-mlx", "message": {}, "done": True}]
+        )
+        adapter = OllamaHTTPAdapter("muse-glimmer:30b-mlx", opener=opener)
+
+        list(
+            adapter.chat(
+                [{"role": "user", "content": "control"}],
+                logprobs=True,
+                top_logprobs=0,
+            )
+        )
+
+        payload = json.loads(opener.requests[0].data.decode("utf-8"))
+        self.assertTrue(payload["logprobs"])
+        self.assertEqual(payload["top_logprobs"], 0)
+
     def test_tags_uses_get(self):
         opener = RecordingOpener({"models": [{"name": "qwen2.5:3b"}]})
         adapter = OllamaHTTPAdapter("qwen2.5:3b", endpoint="http://localhost:11434", opener=opener)
