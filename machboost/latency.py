@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import platform
 import statistics
 import time
 from typing import Any, Callable, Mapping, Optional, Sequence
@@ -78,6 +79,11 @@ def benchmark_chat_latency(
             ),
         },
         "engines": {},
+        "environment": {
+            "platform": platform.platform(),
+            "machine": platform.machine(),
+            "python": platform.python_version(),
+        },
         "notes": [
             (
                 "Unique engine-specific system-message nonces prevent repeated and cross-path exact prompt-cache hits. Outputs are not compared because the requests differ."
