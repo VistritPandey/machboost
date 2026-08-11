@@ -161,8 +161,10 @@ class CLITests(unittest.TestCase):
 
         data = json.loads(output.getvalue())
         self.assertEqual(code, 0)
-        self.assertEqual(data["models"][0]["name"], "thenlper/gte-base")
-        self.assertFalse(data["models"][0]["runnable"])
+        model = next(
+            item for item in data["models"] if item["name"] == "thenlper/gte-base"
+        )
+        self.assertFalse(model["runnable"])
 
     def test_select_native_backend_prefers_mlx_for_mlx_models(self):
         self.assertEqual(cli.select_native_backend("mlx-community/Qwen3.5-0.8B-MLX-4bit", "auto"), "mlx")
@@ -742,6 +744,11 @@ class CLITests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("median wall=0.500s", output.getvalue())
         self.assertIn("output_equal=yes", output.getvalue())
+
+        artifact["comparison"]["median_output_equal"] = None
+        output = io.StringIO()
+        cli.print_latency_benchmark(artifact, stream=output)
+        self.assertIn("output_equal=n/a", output.getvalue())
 
     def test_context_bench_uses_one_model_and_reports_valid_speedup(self):
         output = io.StringIO()
