@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Website](https://img.shields.io/badge/Website-MachBoost-22c55e)](https://vistritpandey.github.io/machboost/)
 
-MachBoost is an alpha-stage, local-first inference server, team gateway, native macOS app, and Python package for MLX, MLX-VLM, and Hugging Face models. It offers an Ollama-like model workflow, keeps models resident between requests, and streams text and visual chat. Team Mode adds scoped employee keys, fair admission, revision-aware private/shared memory, exact-request reuse, local traces, evaluations, and budgeted external-provider fallback. Optional acceleration paths target fresh text decoding on selected Qwen models, reusable local text, repeated image inputs, and selected Qwen3-VL visual-prefill workloads.
+MachBoost is an alpha-stage, local-first inference server, team gateway, native macOS app, and Python package for MLX, MLX-VLM, and Hugging Face models. It offers an Ollama-like model workflow, keeps models resident between requests, and streams text and visual chat. Team Mode adds scoped employee keys, fair admission, revision-aware private/shared memory, exact-request reuse, local traces, evaluations, and budgeted external-provider fallback. Optional acceleration paths target fresh text decoding on selected Qwen models and Muse Glimmer, reusable local text, repeated image inputs, and selected Qwen3-VL visual-prefill workloads.
 
 The paths have different contracts. Plain chat delegates generation to the selected backend and mainly provides residency and API compatibility. The optional DFlash backend proposes blocks for fresh prompts and emits only tokens approved by the target model. Context drafting instead proposes tokens from caller-supplied text; its cache-enabled MLX path remains experimental because a recent Llama 3.2 audit found one token-sequence mismatch in 21 pairs. Repeated-image acceleration reuses process-local visual work for unchanged image bytes. First-view Qwen3-VL compression is explicitly approximate and can change answers.
 
@@ -17,6 +17,8 @@ MachBoost is not a universal `2x-8x` switch. A speedup measured on a context-bac
 Context drafting helps only when the model's next tokens are recoverable from caller-supplied local text and the target model accepts those draft tokens. Repository workspaces use a separate mechanism: a stable file/symbol map and query-specific code retrieval stay within a bounded prompt, while MLX can reuse the exact stable prefix on later workspace requests. The question itself can be new, but the first request still pays normal indexing and prefill costs. Without a supported verified-decoding backend, a novel message outside a workspace falls back to native generation, where expected algorithmic speedup is about `1.0x` and the server layer can add latency.
 
 DFlash is the first MachBoost path aimed directly at unique output decoding. It is explicit opt-in, greedy-only, text-only, and limited to published model/draft pairs. On this Apple M5 Pro, the same Qwen3.5 4B BF16 target reached a `1.65x` median decode-throughput speedup across three fresh 512-token prompt families; per-prompt medians ranged from `1.31x` for code to `2.43x` for reasoning, and all three 128-token validation prefixes matched native greedy output. The same-weight 9B BF16 row reached `1.61x`, with one prompt at `2.42x`, but only 2/3 validation prefixes matched. Both used the shippable `dflash-mlx==0.1.8` wheel. A practical Qwen3.5 9B 4-bit control reached `1.32x` with adaptive verification and also diverged; fixed 16-token verification regressed to `0.84x` overall. These are decode results, not universal end-to-end, quality-equivalence, or short-answer claims.
+
+Muse Glimmer uses a different integration. Its official Ollama MLX artifact includes a DFlash drafter, and MachBoost preserves that native path while adding residency, APIs, cancellation, bounded concurrency, reasoning, vision, and tool-call transport. On one Apple M5 Pro workload, native DFlash through MachBoost reached `21.61` decode tok/s versus `17.29` tok/s in a logprobs-based no-speculation diagnostic, or `1.25x`; direct Ollama measured `1.30x`. MachBoost added `4.11%` median wall overhead in the accelerated leg. The control includes logprob materialization and only 2/10 same-prompt pairs were byte-identical, so this is neither a pure runtime-level baseline nor an exact-output claim.
 
 | Likely fit | Why it can help |
 |---|---|
@@ -42,6 +44,7 @@ Treat every workload as uncalibrated until it passes a same-model paired benchma
 | Path | Current evidence | Product status |
 |---|---|---|
 | Plain resident text chat | Native MLX decode through a local server; no drafting without context | usable, with measurable server/streaming overhead versus direct `mlx-lm` |
+| Muse Glimmer 30B MLX | reasoning, vision, native tool calls, and embedded DFlash verified on Apple M5 Pro; 4.11% gateway overhead in the measured accelerated leg | usable with Ollama 0.32.7+ and 32 GB unified memory; model-native acceleration, not a MachBoost invention |
 | Fresh-prompt DFlash decode | Qwen3.5 4B BF16 median was 1.65x with 3/3 validation prefixes exact; Qwen3.5 9B BF16 reached 1.61x with 2/3 exact | 4B alias is opt-in; 9B remains experimental; greedy-only and workload-dependent |
 | Concurrent text API serving | bounded tenant-fair admission, explicit overload responses, per-key limits, and isolated model replicas | usable; replicas consume additional memory and do not guarantee higher GPU throughput |
 | Team gateway | hashed scoped keys, model allowlists, fair queueing, configurable local traces, and evaluations | usable on a trusted private network; MachBoost does not terminate TLS |
@@ -122,6 +125,12 @@ signing, notarization, DMG creation, and update delivery. Signed builds use
 Sparkle; unsigned community builds link to the latest GitHub Release for manual
 installation.
 
+The bundled runtime remains self-contained for ordinary MLX and MLX-VLM models.
+`muse-glimmer:30b-mlx` specifically uses Ollama's native MLX runner, so that
+model requires a current Ollama installation. The app locates both terminal
+installs and `/Applications/Ollama.app`, validates the runtime before download,
+and asks before pulling the approximately 21 GB artifact.
+
 An unsigned Apple Silicon community preview is available from the
 [MachBoost website](https://vistritpandey.github.io/machboost/) and
 [GitHub Releases](https://github.com/VistritPandey/machboost/releases/latest).
@@ -152,6 +161,47 @@ machboost ps
 ```
 
 Inside chat, `Ctrl-C` stops only the current reply and `Ctrl-D` unloads the current model and exits. `/bye` exits while preserving the five-minute idle window. Use `--keep-alive forever` only when indefinite residency is intentional.
+
+### Muse Glimmer 30B MLX
+
+Muse Glimmer is a roughly 30B multimodal agent model with a 131,072-token
+context window, controllable reasoning, function tools, and an embedded DFlash
+drafter. The supported MachBoost alias uses the official 21 GB Ollama MLX
+artifact. It requires Apple Silicon, Ollama 0.32.7 or newer, and a conservative
+minimum of 32 GB unified memory.
+
+```sh
+python3 -m pip install --upgrade "machboost @ git+https://github.com/VistritPandey/machboost.git"
+machboost pull muse-glimmer:30b-mlx
+machboost run muse-glimmer:30b-mlx --think high --show-thinking --show-stats
+machboost run muse-glimmer:30b-mlx --image ./screenshot.png --think medium
+```
+
+The model stays behind the same OpenAI- and Ollama-compatible MachBoost
+endpoint. Connected agents may provide tool schemas and execute returned calls;
+MachBoost transports tool requests but does not grant or execute tools itself.
+Run the complete local reasoning/tool/vision example with:
+
+```sh
+python3 examples/python/muse_glimmer_agent.py --image ./screenshot.png
+```
+
+Measure gateway overhead with native DFlash enabled:
+
+```sh
+machboost bench muse-glimmer:30b-mlx \
+  --engine both --backend ollama-mlx \
+  --ollama-model muse-glimmer:30b-mlx \
+  --runs 5 --warmups 2 --max-tokens 256 \
+  --draft-num-predict 15
+```
+
+Use `--draft-num-predict 0` only as a diagnostic. Ollama's current public MLX
+API has no direct DFlash-off switch, so MachBoost requests token logprobs to park
+speculation; the result includes logprob materialization overhead. Meta's
+published M4/M5 figures used ExecuTorch and are not MachBoost measurements. See
+the [local evidence artifact](results/muse_glimmer_30b_mlx_20260811.json) for
+the commands, hardware, feature smokes, concurrency behavior, and limitations.
 
 Compare warm MachBoost and Ollama chat latency with unique prompts:
 
@@ -822,7 +872,7 @@ machboost ollama run qwen2.5:3b --ctx 4096 --temperature 0
 machboost ollama run llama3.2 --system "Answer concisely." --no-pull
 ```
 
-This wrapper uses Ollama's public HTTP API and is not native MachBoost verifier acceleration. `machboost run` and `machboost chat` use the MachBoost resident runtime.
+This wrapper uses Ollama's public HTTP API and is not native MachBoost verifier acceleration. `machboost run` and `machboost chat` normally use the MachBoost-owned MLX/HF runtime. The documented exception is `muse-glimmer:30b-mlx`: MachBoost deliberately hosts the official Ollama MLX engine behind its resident gateway so the model's embedded DFlash, reasoning, vision, and tool behavior remain available.
 
 The repository also includes the original Go CLI for diagnostics, command wrapping, and local benchmark experiments:
 
@@ -845,7 +895,7 @@ The Go CLI is useful for local systems experiments. The Python package is the pr
 | Hugging Face Transformers | native adapter | Useful for research and broad model coverage. |
 | MachBoost resident server | native control plane | Keeps MLX/HF models warm and exposes Ollama/OpenAI-compatible streaming APIs. |
 | Custom Python service | native if verifier exists | Implement `next_token`, `verify`, `encode`, and `decode` as needed. |
-| Ollama HTTP | wrapper only | Useful for benchmarking/capability detection; public HTTP does not expose logits/token IDs/KV hooks needed for exact acceleration. |
+| Ollama HTTP | wrapper, plus Muse bridge | General models remain wrapper-only. `muse-glimmer:30b-mlx` is a supported resident bridge to Ollama's native MLX/DFlash runner; MachBoost adds serving controls but does not claim ownership of its decoder acceleration. |
 
 ## Evidence
 
@@ -858,6 +908,7 @@ Public benchmark artifacts live in [results](results/), with methods and limitat
 | `context_bench_llama32_3b_20260720.json` | `mlx-community/Llama-3.2-3B-Instruct-4bit` | same-model controlled code boundary | 6 | 100% exact output | 1.412x |
 | `llama32_3b_mlx_context_benchmark_20260716.json` | `mlx-community/Llama-3.2-3B-Instruct-4bit` | seven-fixture context suite | 21 | 95.24% exact output | 1.008x |
 | `team_repository_reuse_qwen25_7b_20260809.json` | `mlx-community/Qwen2.5-7B-Instruct-4bit` | new cross-thread private-repo questions | 6 | 6/6 byte-identical output | 1.31x related; 1.43x unrelated |
+| `muse_glimmer_30b_mlx_20260811.json` | `muse-glimmer:30b-mlx` | native DFlash vs logprobs no-spec diagnostic | 10 requests per mode | 2/10 same-prompt pairs byte-identical; no equivalence claim | 1.25x MachBoost decode; 1.30x direct Ollama decode |
 | `vision_cache_qwen25_3b_20260714.json` | `mlx-community/Qwen2.5-VL-3B-Instruct-4bit` | repeated questions over one image | 12 | 100% | 18.33x |
 | `vision_cache_qwen3vl_2b_20260714.json` | `mlx-community/Qwen3-VL-2B-Instruct-4bit` | repeated questions over one image | 12 | 100% | 11.41x |
 | `vision_cache_qwen3vl_4b_20260714.json` | `mlx-community/Qwen3-VL-4B-Instruct-4bit` | same | 12 | 100% | 12.73x |
