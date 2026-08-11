@@ -761,7 +761,7 @@ def backend_available(backend: str) -> bool:
         return (
             platform.system() == "Darwin"
             and platform.machine() == "arm64"
-            and shutil.which("ollama") is not None
+            and ollama_executable() is not None
         )
     if backend == "mlx":
         return native_mlx_available()
@@ -772,6 +772,25 @@ def backend_available(backend: str) -> bool:
     if backend == "hf":
         return importlib.util.find_spec("torch") is not None and importlib.util.find_spec("transformers") is not None
     return False
+
+
+def ollama_executable() -> Optional[str]:
+    """Locate Ollama from shells, app bundles, and common macOS installs."""
+    candidates = [
+        os.environ.get("OLLAMA_BINARY"),
+        shutil.which("ollama"),
+        "/Applications/Ollama.app/Contents/Resources/ollama",
+        str(Path.home() / "Applications/Ollama.app/Contents/Resources/ollama"),
+        "/opt/homebrew/bin/ollama",
+        "/usr/local/bin/ollama",
+    ]
+    for candidate in candidates:
+        if not candidate:
+            continue
+        path = Path(candidate).expanduser()
+        if path.is_file() and os.access(path, os.X_OK):
+            return str(path.resolve())
+    return None
 
 
 def ollama_model_manifest(model: str) -> Optional[Path]:
