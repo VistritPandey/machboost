@@ -909,6 +909,8 @@ def ensure_resident_model(
     events = client.pull(args.model, stream=True)
     last_status = None
     for event in events:
+        if event.get("error"):
+            raise MachBoostAPIError(str(event["error"]))
         status = str(event.get("status") or "")
         if status and status != last_status:
             print(f"pull: {status}", file=stream)
@@ -1165,10 +1167,25 @@ def run_resident_completion(args: argparse.Namespace, *, output_stream=None, err
             prompt = video_prompt(prompt)
         if args.direct:
             accelerator = load_native_accelerator(args, stream=error_stream)
+            thinking_started = False
+
+            def emit_thinking(text: str) -> None:
+                nonlocal thinking_started
+                if not text:
+                    return
+                if not thinking_started:
+                    print("thinking> ", end="", flush=True, file=error_stream)
+                    thinking_started = True
+                print(text, end="", flush=True, file=error_stream)
+
             kwargs = {
                 "max_tokens": args.max_tokens,
                 "on_text": lambda text: print(text, end="", flush=True, file=output_stream),
             }
+            if args.think:
+                kwargs["enable_thinking"] = args.think
+            if args.show_thinking:
+                kwargs["on_thinking"] = emit_thinking
             if images and not getattr(accelerator, "supports_vision", False):
                 raise ValueError("attached images require a vision model")
             if getattr(accelerator, "supports_vision", False):
@@ -1184,13 +1201,34 @@ def run_resident_completion(args: argparse.Namespace, *, output_stream=None, err
                     vision_token_bucket=args.vision_token_bucket,
                     vision_calibration=load_vision_calibration(args.vision_calibration),
                 )
+            started = time.perf_counter()
             text, stats = accelerator.generate(prompt, **kwargs)
+            elapsed_s = time.perf_counter() - started
+            if thinking_started:
+                print("", file=error_stream)
             print("", file=output_stream)
             if args.show_stats:
-                print(f"stats: generated={stats.generated_tokens} accepted={stats.accepted_draft_tokens}", file=output_stream)
+                if getattr(stats, "backend", "") == "ollama-mlx":
+                    print(
+                        "stats: "
+                        f"elapsed={elapsed_s:.2f}s "
+                        f"decode_tps={stats.generation_tokens_per_second:.2f} "
+                        f"prompt_tps={stats.prompt_tokens_per_second:.2f} "
+                        f"tokens={stats.generated_tokens} "
+                        f"images={stats.image_count} "
+                        f"tool_calls={len(stats.tool_calls)}",
+                        file=output_stream,
+                    )
+                else:
+                    print(
+                        f"stats: generated={stats.generated_tokens} "
+                        f"accepted={stats.accepted_draft_tokens}",
+                        file=output_stream,
+                    )
             return 0
 
         client = connect_resident(args, error_stream=error_stream)
+        ensure_resident_model(client, args, stream=error_stream)
         started = time.perf_counter()
         request_options = {
             "options": native_server_options(args),
@@ -1203,6 +1241,9 @@ def run_resident_completion(args: argparse.Namespace, *, output_stream=None, err
         final_row: dict = {}
         for row in rows:
             chunk = str(row.get("response") or "")
+            thinking = str(row.get("thinking") or "")
+            if thinking and args.show_thinking:
+                print(thinking, end="", flush=True, file=error_stream)
             if chunk:
                 print(chunk, end="", flush=True, file=output_stream)
             if row.get("done"):
@@ -1274,15 +1315,26 @@ def print_resident_stats(row: dict, elapsed_s: float, *, stream=None) -> None:
     print(f"eval count:           {generated} token(s)", file=stream)
     print(f"eval duration:        {eval_s:.3f}s", file=stream)
     print(f"eval rate:            {rate:.2f} tokens/s", file=stream)
-    print(
-        "machboost: "
-        f"backend={metrics.get('backend', 'unknown')} "
-        f"accepted={int(stats.get('accepted_draft_tokens') or 0)} "
-        f"target_calls={int(stats.get('target_calls') or 0)}/"
-        f"{int(stats.get('baseline_target_calls') or 0)}"
-        f"{cache_state}",
-        file=stream,
-    )
+    backend = str(metrics.get("backend") or stats.get("backend") or "unknown")
+    if backend == "ollama-mlx":
+        print(
+            "machboost: "
+            f"backend={backend} "
+            "native_speculative=on "
+            f"tool_calls={len(stats.get('tool_calls') or ())}"
+            f"{cache_state}",
+            file=stream,
+        )
+    else:
+        print(
+            "machboost: "
+            f"backend={backend} "
+            f"accepted={int(stats.get('accepted_draft_tokens') or 0)} "
+            f"target_calls={int(stats.get('target_calls') or 0)}/"
+            f"{int(stats.get('baseline_target_calls') or 0)}"
+            f"{cache_state}",
+            file=stream,
+        )
 
 
 def run_serve(args: argparse.Namespace, *, output_stream=None, error_stream=None) -> int:
