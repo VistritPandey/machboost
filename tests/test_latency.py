@@ -18,6 +18,7 @@ class StepClock:
 class FakeMachBoostClient:
     def __init__(self, trace=None) -> None:
         self.messages = []
+        self.options = []
         self.trace = trace
 
     def load(self, model, *, options, keep_alive, warmup=False):
@@ -32,6 +33,7 @@ class FakeMachBoostClient:
 
     def chat(self, model, messages, *, options, keep_alive, stream):
         self.messages.append(messages)
+        self.options.append(options)
         if self.trace is not None:
             self.trace.append("machboost")
         return iter(
@@ -60,11 +62,13 @@ class FakeOllamaAdapter:
 
     def __init__(self, trace=None) -> None:
         self.messages = []
+        self.options = []
         self.think_values = []
         self.trace = trace
 
     def chat(self, messages, *, options, keep_alive, stream, think=None):
         self.messages.append(messages)
+        self.options.append(options)
         self.think_values.append(think)
         if self.trace is not None:
             self.trace.append("ollama")
@@ -136,6 +140,8 @@ class ChatLatencyTests(unittest.TestCase):
         self.assertEqual(ollama.think_values, [False, False, False])
 
     def test_labels_same_ollama_mlx_engine_as_gateway_overhead(self) -> None:
+        machboost = FakeMachBoostClient()
+        ollama = FakeOllamaAdapter()
         artifact = benchmark_chat_latency(
             "muse-glimmer:30b-mlx",
             prompt="Write a short response.",
@@ -144,8 +150,9 @@ class ChatLatencyTests(unittest.TestCase):
             warmups=0,
             max_tokens=16,
             backend="ollama-mlx",
-            machboost_client=FakeMachBoostClient(),
-            ollama_adapter=FakeOllamaAdapter(),
+            machboost_client=machboost,
+            ollama_adapter=ollama,
+            draft_num_predict=15,
             clock=StepClock(),
         )
 
@@ -157,6 +164,9 @@ class ChatLatencyTests(unittest.TestCase):
             artifact["comparison"]["machboost_gateway_overhead_percent"]
         )
         self.assertIn("same installed Ollama MLX model", " ".join(artifact["notes"]))
+        self.assertEqual(artifact["config"]["draft_num_predict"], 15)
+        self.assertEqual(machboost.options[0]["draft_num_predict"], 15)
+        self.assertEqual(ollama.options[0]["draft_num_predict"], 15)
 
     def test_rejects_empty_measurement_set(self) -> None:
         with self.assertRaisesRegex(ValueError, "runs must be at least 1"):
