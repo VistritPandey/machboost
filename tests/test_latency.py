@@ -122,6 +122,15 @@ class ChatLatencyTests(unittest.TestCase):
         )
         self.assertTrue(artifact["comparison"]["median_output_equal"])
         self.assertEqual(len({row[0]["content"] for row in machboost.messages}), 3)
+        for machboost_messages, ollama_messages in zip(
+            machboost.messages, ollama.messages
+        ):
+            self.assertNotEqual(
+                machboost_messages[0]["content"], ollama_messages[0]["content"]
+            )
+            self.assertEqual(
+                machboost_messages[1]["content"], ollama_messages[1]["content"]
+            )
         self.assertEqual(
             trace,
             [
