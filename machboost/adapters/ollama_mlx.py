@@ -131,7 +131,10 @@ class OllamaMLXAccelerator:
         options = dict(generation_options or {})
         options["num_predict"] = int(max_tokens)
         options.setdefault("temperature", float(temperature))
-        native_speculative_decoding = int(options.get("draft_num_predict", 15)) > 0
+        draft_num_predict = options.get("draft_num_predict")
+        native_speculative_decoding = not (
+            draft_num_predict is not None and int(draft_num_predict) == 0
+        )
         if stop_strings:
             options["stop"] = list(stop_strings)
 
@@ -148,6 +151,8 @@ class OllamaMLXAccelerator:
             tools=tools,
             format=format,
             think=think,
+            logprobs=True if not native_speculative_decoding else None,
+            top_logprobs=0 if not native_speculative_decoding else None,
         )
         try:
             for chunk in stream:
