@@ -711,6 +711,25 @@ final class MachBoostTests: XCTestCase {
     }
 
     @MainActor
+    func testDaemonEnvironmentKeepsBundledRuntimeImmutable() {
+        let environment = DaemonManager.launchEnvironment(
+            base: [
+                "MACHBOOST_API_TOKEN": "stale-token",
+                "PATH": "/usr/bin",
+            ],
+            apiToken: nil
+        )
+
+        XCTAssertEqual(environment["PYTHONDONTWRITEBYTECODE"], "1")
+        XCTAssertEqual(environment["PYTHONUNBUFFERED"], "1")
+        XCTAssertEqual(environment["PATH"], "/usr/bin")
+        XCTAssertNil(environment["MACHBOOST_API_TOKEN"])
+
+        let secured = DaemonManager.launchEnvironment(base: [:], apiToken: "fresh-token")
+        XCTAssertEqual(secured["MACHBOOST_API_TOKEN"], "fresh-token")
+    }
+
+    @MainActor
     func testDaemonStartsAndShutsDownFromSourceRuntime() async throws {
         let sourceRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
