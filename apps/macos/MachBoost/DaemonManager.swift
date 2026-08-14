@@ -55,14 +55,10 @@ final class DaemonManager {
             process.arguments?.append("--require-auth")
         }
         process.currentDirectoryURL = launch.workingDirectory
-        var environment = ProcessInfo.processInfo.environment
-        environment["PYTHONUNBUFFERED"] = "1"
-        if let apiToken, !apiToken.isEmpty {
-            environment["MACHBOOST_API_TOKEN"] = apiToken
-        } else {
-            environment.removeValue(forKey: "MACHBOOST_API_TOKEN")
-        }
-        process.environment = environment
+        process.environment = Self.launchEnvironment(
+            base: ProcessInfo.processInfo.environment,
+            apiToken: apiToken
+        )
 
         let pipe = Pipe()
         process.standardOutput = pipe
@@ -186,6 +182,23 @@ final class DaemonManager {
         if recentLogs.count > 300 {
             recentLogs.removeFirst(recentLogs.count - 300)
         }
+    }
+
+    static func launchEnvironment(
+        base: [String: String],
+        apiToken: String?
+    ) -> [String: String] {
+        var environment = base
+        environment["PYTHONUNBUFFERED"] = "1"
+        // The app bundle is code-signed and immutable. Python bytecode written into
+        // the embedded runtime would invalidate its sealed-resource signature.
+        environment["PYTHONDONTWRITEBYTECODE"] = "1"
+        if let apiToken, !apiToken.isEmpty {
+            environment["MACHBOOST_API_TOKEN"] = apiToken
+        } else {
+            environment.removeValue(forKey: "MACHBOOST_API_TOKEN")
+        }
+        return environment
     }
 
     private func runtimeLaunch() throws -> RuntimeLaunch {
