@@ -165,8 +165,10 @@ class FakeVisionAccelerator:
         max_tokens,
         context=None,
         on_text=None,
+        on_thinking=None,
         use_vision_cache=True,
         temperature=0.0,
+        enable_thinking=False,
         cold_vision_mode="off",
         cold_vision_max_edge=None,
         vision_token_mode="off",
@@ -175,7 +177,9 @@ class FakeVisionAccelerator:
         vision_token_bucket=None,
         vision_calibration=None,
     ):
-        self.chat_calls.append((messages, max_tokens, use_vision_cache, temperature))
+        self.chat_calls.append(
+            (messages, max_tokens, use_vision_cache, temperature, enable_thinking)
+        )
         self.cold_vision_calls.append((cold_vision_mode, cold_vision_max_edge))
         self.vision_token_calls.append(
             (
@@ -199,9 +203,11 @@ class FakeVisionAccelerator:
         max_tokens,
         context=None,
         on_text=None,
+        on_thinking=None,
         images=None,
         use_vision_cache=True,
         temperature=0.0,
+        enable_thinking=False,
         cold_vision_mode="off",
         cold_vision_max_edge=None,
         vision_token_mode="off",
@@ -269,6 +275,7 @@ class FakeMuseAccelerator:
         format=None,
         reasoning_strength=None,
         cancel_event=None,
+        **runtime_options,
     ):
         self.chat_calls.append(
             {
@@ -281,6 +288,7 @@ class FakeMuseAccelerator:
                 "tools": tools,
                 "format": format,
                 "reasoning_strength": reasoning_strength,
+                "runtime_options": runtime_options,
             }
         )
         if on_thinking is not None:
@@ -381,7 +389,7 @@ class FakeClock:
 
 class RuntimeManagerTests(unittest.TestCase):
     def test_muse_glimmer_uses_ollama_mlx_backend_and_loader(self):
-        config = model_config("muse-glimmer:30b", {})
+        config = model_config("muse-glimmer:30b-mlx", {})
         sentinel = object()
         with patch(
             "machboost.adapters.ollama_mlx.OllamaMLXAccelerator.from_pretrained",
@@ -397,6 +405,13 @@ class RuntimeManagerTests(unittest.TestCase):
             max_context_chars=200_000,
             keep_alive="forever",
         )
+
+    def test_muse_glimmer_default_uses_native_mlx_vlm_repository(self):
+        with patch("machboost.models.native_mlx_vlm_available", return_value=True):
+            config = model_config("muse-glimmer:30b", {})
+
+        self.assertEqual(config.backend, "mlx-vlm")
+        self.assertEqual(config.model, "mlx-community/Muse-Glimmer-30B-4bit")
 
     def test_muse_glimmer_runtime_preserves_native_reasoning_and_tools(self):
         manager = RuntimeManager(loader=lambda config: FakeMuseAccelerator())
@@ -431,6 +446,25 @@ class RuntimeManagerTests(unittest.TestCase):
         entry = manager.ps()[0]
         self.assertIn("reasoning", entry["capabilities"])
         self.assertIn("tools", entry["capabilities"])
+
+    def test_native_muse_glimmer_forwards_reasoning_to_mlx_vlm(self):
+        manager = RuntimeManager(loader=lambda config: FakeMuseAccelerator())
+        reasoning = []
+
+        with patch("machboost.models.native_mlx_vlm_available", return_value=True):
+            result = manager.chat(
+                "muse-glimmer:30b",
+                [{"role": "user", "content": "Inspect this."}],
+                options={"_think": "high", "num_predict": 32},
+                emit_thinking=reasoning.append,
+            )
+
+        self.assertEqual(result.backend, "mlx-vlm")
+        self.assertEqual(result.thinking, "Checking the evidence.")
+        self.assertEqual(reasoning, ["Checking the evidence."])
+        entry = next(iter(manager._models.values()))
+        call = entry.accelerator.chat_calls[0]
+        self.assertEqual(call["enable_thinking"], "high")
 
     def test_pull_muse_glimmer_uses_ollama_lifecycle(self):
         events = []
@@ -1464,6 +1498,143 @@ class HTTPServerTests(unittest.TestCase):
         self.assertEqual([call["function"]["name"] for call in calls], ["read_file", "search_repo"])
         self.assertEqual(json.loads(calls[0]["function"]["arguments"])["path"], "a.py")
         self.assertEqual(len(self.loaded[0][1].chat_calls[0][3]), 2)
+
+    def test_responses_endpoint_returns_coding_agent_function_calls(self):
+        _, _, body = self.request(
+            "/v1/responses",
+            {
+                "model": "mlx-community/tool-calling",
+                "instructions": "Work inside the repository.",
+                "input": "Inspect and search",
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "read_file",
+                        "description": "Read a workspace file",
+                        "parameters": {"type": "object"},
+                    },
+                    {
+                        "type": "function",
+                        "name": "search_repo",
+                        "parameters": {"type": "object"},
+                    },
+                ],
+                "parallel_tool_calls": True,
+            },
+        )
+
+        response = json.loads(body)
+        calls = [item for item in response["output"] if item["type"] == "function_call"]
+        self.assertEqual(response["object"], "response")
+        self.assertEqual(response["status"], "completed")
+        self.assertEqual([call["name"] for call in calls], ["read_file", "search_repo"])
+        self.assertEqual(json.loads(calls[0]["arguments"])["path"], "a.py")
+        self.assertEqual(self.loaded[0][1].chat_calls[0][0][0]["role"], "system")
+
+    def test_responses_endpoint_streams_native_sse_events(self):
+        _, headers, body = self.request(
+            "/v1/responses",
+            {
+                "model": "mlx-community/example",
+                "input": [{"role": "user", "content": "Say hello"}],
+                "stream": True,
+                "request_id": "resp_test_stream",
+            },
+        )
+
+        events = [
+            json.loads(line.removeprefix("data: "))
+            for line in body.splitlines()
+            if line.startswith("data: ")
+        ]
+        event_types = [event["type"] for event in events]
+        self.assertEqual(headers.get_content_type(), "text/event-stream")
+        self.assertEqual(event_types[0], "response.created")
+        self.assertIn("response.output_text.delta", event_types)
+        self.assertEqual(event_types[-1], "response.completed")
+        self.assertEqual(events[-1]["response"]["id"], "resp_test_stream")
+
+    def test_anthropic_messages_endpoint_maps_tools_and_results(self):
+        _, _, body = self.request(
+            "/v1/messages",
+            {
+                "model": "mlx-community/tool-calling",
+                "system": "Edit only files in the workspace.",
+                "messages": [{"role": "user", "content": "Inspect and search"}],
+                "max_tokens": 128,
+                "tools": [
+                    {
+                        "name": "read_file",
+                        "description": "Read a file",
+                        "input_schema": {"type": "object"},
+                    },
+                    {
+                        "name": "search_repo",
+                        "input_schema": {"type": "object"},
+                    },
+                ],
+            },
+        )
+
+        response = json.loads(body)
+        calls = [block for block in response["content"] if block["type"] == "tool_use"]
+        self.assertEqual(response["type"], "message")
+        self.assertEqual(response["stop_reason"], "tool_use")
+        self.assertEqual([call["name"] for call in calls], ["read_file", "search_repo"])
+        self.assertEqual(calls[0]["input"]["path"], "a.py")
+
+    def test_anthropic_messages_endpoint_streams_text_events(self):
+        _, headers, body = self.request(
+            "/v1/messages",
+            {
+                "model": "mlx-community/example",
+                "messages": [{"role": "user", "content": "Say hello"}],
+                "max_tokens": 32,
+                "stream": True,
+                "request_id": "msg_test_stream",
+            },
+        )
+
+        events = [
+            json.loads(line.removeprefix("data: "))
+            for line in body.splitlines()
+            if line.startswith("data: ")
+        ]
+        event_types = [event["type"] for event in events]
+        self.assertEqual(headers.get_content_type(), "text/event-stream")
+        self.assertEqual(event_types[0], "message_start")
+        self.assertIn("content_block_delta", event_types)
+        self.assertEqual(event_types[-1], "message_stop")
+
+    def test_anthropic_base64_image_maps_to_native_vision_content(self):
+        with patch("machboost.models.native_mlx_vlm_available", return_value=True):
+            self.request(
+                "/v1/messages",
+                {
+                    "model": "qwen2.5-vl:3b",
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "image",
+                                    "source": {
+                                        "type": "base64",
+                                        "media_type": "image/png",
+                                        "data": "aW1hZ2U=",
+                                    },
+                                },
+                                {"type": "text", "text": "What is shown?"},
+                            ],
+                        }
+                    ],
+                    "max_tokens": 32,
+                },
+            )
+
+        content = self.loaded[0][1].chat_calls[0][0][0]["content"]
+        image = next(part for part in content if part["type"] == "image_url")
+        self.assertTrue(image["image_url"]["url"].startswith("data:image/png;base64,"))
 
     def test_ollama_chat_returns_compatible_tool_calls(self):
         _, _, body = self.request(
