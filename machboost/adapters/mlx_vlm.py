@@ -45,9 +45,134 @@ class VisionRunStats:
     accepted_draft_tokens: int = 0
     target_calls: int = 0
     baseline_target_calls: int = 0
+    thinking: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+@dataclass(frozen=True)
+class ThinkingDelta:
+    reasoning: str = ""
+    content: str = ""
+
+
+class ThinkingStreamSplitter:
+    """Separate model reasoning markers without leaking partial tags."""
+
+    DEFAULT_MARKERS = (
+        ("<|channel>thought", "<channel|>"),
+        ("<think>", "</think>"),
+        ("<|START_THINKING|>", "<|END_THINKING|>"),
+    )
+    CONTENT_MARKERS = (
+        "<|start|>assistant to=user<|message|>",
+        "<|start|>assistant<|message|>",
+        "<|START_TEXT|>",
+        "<|END_TEXT|>",
+        "<|eot|>",
+    )
+
+    def __init__(
+        self,
+        *,
+        starts_in_thinking: bool = False,
+        start_marker: Optional[str] = None,
+        end_marker: Optional[str] = None,
+    ) -> None:
+        markers: list[tuple[str, str]] = []
+        if start_marker and end_marker:
+            if start_marker.startswith("to="):
+                markers.append((f"<|start|>assistant {start_marker}", end_marker))
+            markers.append((start_marker, end_marker))
+        markers.extend(pair for pair in self.DEFAULT_MARKERS if pair not in markers)
+        self.markers = tuple(markers)
+        self.open_markers = tuple(pair[0] for pair in self.markers)
+        self.close_markers = tuple(pair[1] for pair in self.markers)
+        self.in_thinking = starts_in_thinking
+        self.thinking_done = False
+        self.buffer = ""
+
+    def feed(self, text: str, *, final: bool = False) -> ThinkingDelta:
+        self.buffer += text
+        reasoning: list[str] = []
+        content: list[str] = []
+        while self.buffer:
+            if self.in_thinking:
+                index, marker = self._find_first(self.buffer, self.close_markers)
+                if index < 0:
+                    value, self.buffer = self._split_partial(
+                        self.buffer, self.close_markers, final=final
+                    )
+                    if value:
+                        reasoning.append(self._strip_open_marker(value))
+                    break
+                value = self._strip_open_marker(self.buffer[:index])
+                if value:
+                    reasoning.append(value)
+                self.buffer = self.buffer[index + len(marker) :].lstrip("\n")
+                self.in_thinking = False
+                self.thinking_done = True
+                continue
+
+            if self.thinking_done:
+                value, self.buffer = self._split_partial(
+                    self.buffer, self.CONTENT_MARKERS, final=final
+                )
+                if value:
+                    content.append(self._clean_content(value))
+                break
+
+            index, marker = self._find_first(self.buffer, self.open_markers)
+            if index < 0:
+                value, self.buffer = self._split_partial(
+                    self.buffer,
+                    self.open_markers + self.CONTENT_MARKERS,
+                    final=final,
+                )
+                if value:
+                    content.append(self._clean_content(value))
+                break
+            if index:
+                content.append(self._clean_content(self.buffer[:index]))
+            self.buffer = self.buffer[index + len(marker) :].lstrip("\n")
+            self.in_thinking = True
+
+        return ThinkingDelta("".join(reasoning), "".join(content))
+
+    @staticmethod
+    def _find_first(text: str, markers: Sequence[str]) -> tuple[int, str]:
+        matches = ((text.find(marker), marker) for marker in markers)
+        return min(
+            ((index, marker) for index, marker in matches if index >= 0),
+            default=(-1, ""),
+            key=lambda match: match[0],
+        )
+
+    @staticmethod
+    def _split_partial(
+        text: str, markers: Sequence[str], *, final: bool
+    ) -> tuple[str, str]:
+        if final or not markers:
+            return text, ""
+        hold = 0
+        for marker in markers:
+            for length in range(1, min(len(text), len(marker) - 1) + 1):
+                if text.endswith(marker[:length]):
+                    hold = max(hold, length)
+        if hold:
+            return text[:-hold], text[-hold:]
+        return text, ""
+
+    def _strip_open_marker(self, text: str) -> str:
+        for marker in self.open_markers:
+            text = text.replace(marker, "")
+        return text
+
+    def _clean_content(self, text: str) -> str:
+        for marker in self.CONTENT_MARKERS:
+            text = text.replace(marker, "")
+        return text
 
 
 class MLXVLMAccelerator:
@@ -154,6 +279,7 @@ class MLXVLMAccelerator:
         max_tokens: int,
         context: Optional[Iterable[str] | str] = None,
         on_text: Optional[Callable[[str], None]] = None,
+        on_thinking: Optional[Callable[[str], None]] = None,
         use_vision_cache: bool = True,
         temperature: float = 0.0,
         enable_thinking: bool = False,
@@ -177,6 +303,8 @@ class MLXVLMAccelerator:
             images=images,
             max_tokens=max_tokens,
             on_text=on_text,
+            on_thinking=on_thinking,
+            enable_thinking=enable_thinking,
             use_vision_cache=use_vision_cache,
             temperature=temperature,
             cold_vision_mode=cold_vision_mode,
@@ -249,6 +377,7 @@ class MLXVLMAccelerator:
         max_tokens: int,
         context: Optional[Iterable[str] | str] = None,
         on_text: Optional[Callable[[str], None]] = None,
+        on_thinking: Optional[Callable[[str], None]] = None,
         images: Optional[Sequence[str]] = None,
         use_vision_cache: bool = True,
         temperature: float = 0.0,
@@ -274,6 +403,8 @@ class MLXVLMAccelerator:
             images=materialized,
             max_tokens=max_tokens,
             on_text=on_text,
+            on_thinking=on_thinking,
+            enable_thinking=enable_thinking,
             use_vision_cache=use_vision_cache,
             temperature=temperature,
             cold_vision_mode=cold_vision_mode,
@@ -293,6 +424,8 @@ class MLXVLMAccelerator:
         images: Sequence[str],
         max_tokens: int,
         on_text: Optional[Callable[[str], None]],
+        on_thinking: Optional[Callable[[str], None]],
+        enable_thinking: bool,
         use_vision_cache: bool,
         temperature: float,
         cold_vision_mode: str,
@@ -312,6 +445,8 @@ class MLXVLMAccelerator:
             images=images,
             max_tokens=max_tokens,
             on_text=on_text,
+            on_thinking=on_thinking,
+            enable_thinking=enable_thinking,
             use_vision_cache=use_vision_cache,
             temperature=temperature,
             cold_vision_mode=cold_vision_mode,
@@ -332,6 +467,8 @@ class MLXVLMAccelerator:
         images: Sequence[str],
         max_tokens: int,
         on_text: Optional[Callable[[str], None]],
+        on_thinking: Optional[Callable[[str], None]],
+        enable_thinking: bool,
         use_vision_cache: bool,
         temperature: float,
         cold_vision_mode: str,
@@ -380,6 +517,7 @@ class MLXVLMAccelerator:
             started = time.perf_counter()
             first_text_at: Optional[float] = None
             parts: list[str] = []
+            thinking_parts: list[str] = []
             token_logprobs: list[float] = []
             observed_generation_steps: set[int] = set()
             last: Any = None
@@ -421,6 +559,29 @@ class MLXVLMAccelerator:
                 image=stream_image,
                 **stream_options,
             )
+            thinking_start = config_value(
+                self.model.config, "thinking_start_token", None
+            )
+            thinking_end = config_value(
+                self.model.config, "thinking_end_token", None
+            )
+            splitter = ThinkingStreamSplitter(
+                starts_in_thinking=bool(enable_thinking)
+                and thinking_start in {None, "<think>", "<|START_THINKING|>"},
+                start_marker=thinking_start,
+                end_marker=thinking_end,
+            )
+
+            def emit_split(delta: ThinkingDelta) -> None:
+                if delta.reasoning:
+                    thinking_parts.append(delta.reasoning)
+                    if on_thinking is not None:
+                        on_thinking(delta.reasoning)
+                if delta.content:
+                    parts.append(delta.content)
+                    if on_text is not None:
+                        on_text(delta.content)
+
             for row in rows:
                 last = row
                 generation_step = int(getattr(row, "generation_tokens", 0) or 0)
@@ -442,9 +603,8 @@ class MLXVLMAccelerator:
                     continue
                 if first_text_at is None:
                     first_text_at = time.perf_counter()
-                parts.append(text)
-                if on_text is not None:
-                    on_text(text)
+                emit_split(splitter.feed(text))
+            emit_split(splitter.feed("", final=True))
             if apc_manager is not None:
                 apc_matched_after = int(
                     apc_manager.stats_snapshot().get("matched_tokens", 0)
@@ -496,6 +656,7 @@ class MLXVLMAccelerator:
                 None if not token_logprobs else sum(token_logprobs) / len(token_logprobs)
             ),
             minimum_token_logprob=(None if not token_logprobs else min(token_logprobs)),
+            thinking="".join(thinking_parts).strip(),
         )
         return "".join(parts), stats
 
