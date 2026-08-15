@@ -7,12 +7,11 @@ Ollama-compatible HTTP surface. That compatibility lets existing clients use a
 MachBoost-owned decode path. General external Ollama models remain wrapper-only;
 an HTTP gateway does not make their decoder faster.
 
-`muse-glimmer:30b-mlx` is the explicit exception to the ownership model. The
-official artifact requires Ollama's native MLX runner and includes its own
-DFlash drafter. MachBoost hosts that same runner behind its resident gateway and
-adds lifecycle, queueing, cancellation, metrics, authentication, reasoning,
-vision, and tool-call transport. The decoder acceleration remains Meta/Ollama
-technology rather than a MachBoost algorithm.
+The default `muse-glimmer:30b` alias is owned by MachBoost's native MLX-VLM
+runtime and resolves to `mlx-community/Muse-Glimmer-30B-4bit`. The explicit
+`muse-glimmer:30b-mlx` alias preserves the older Ollama artifact for
+compatibility and historical benchmark reproduction. Its DFlash acceleration
+remains Meta/Ollama technology rather than a MachBoost algorithm.
 
 An installed Ollama runtime could become a native MachBoost target, but not through Ollama's public HTTP API alone. The required integration point is inside the model runner, where tokenization, logits, sampling state, KV cache state, accepted-prefix commits, and rollback are available.
 
@@ -48,9 +47,9 @@ Ollama's current `main` branch and the local source archive contain several rele
 - llama-server launch arguments already support MTP/draft-model speculative decoding.
 - The MLX runner already has a `drafter` abstraction, accepted-prefix validation, sampler commits, cache snapshots, rollback, and adaptive draft-depth control.
 
-This makes a native runner patch technically plausible: a MachBoost candidate source could reuse existing validation and rollback machinery. The current package does not include that custom patch. Muse Glimmer instead uses the drafter already shipped in its official checkpoint and Ollama runner.
+This makes a native runner patch technically plausible: a MachBoost candidate source could reuse existing validation and rollback machinery. The current package does not include that custom patch. The legacy Muse Glimmer bridge instead uses the drafter already shipped in its official checkpoint and Ollama runner; the default native MLX-VLM path is separate.
 
-## Muse Glimmer Bridge
+## Legacy Muse Glimmer Bridge
 
 ```sh
 machboost pull muse-glimmer:30b-mlx
@@ -248,7 +247,7 @@ The same conceptual interface can back the Hugging Face prototype, MLX, and futu
 
 ## Product Guidance
 
-For public users, the supported path is the standalone resident MachBoost server. It gives clients familiar streaming APIs without mutating an installed Ollama app. Muse Glimmer delegates to an unmodified installed Ollama MLX runtime; other Ollama models do not gain MachBoost verifier acceleration. A future custom native Ollama integration should ship one of:
+For public users, the supported path is the standalone resident MachBoost server. It gives clients familiar streaming APIs without mutating an installed Ollama app. Only the explicit legacy Muse Glimmer bridge delegates to an unmodified installed Ollama MLX runtime; the default Muse alias is native MLX-VLM. Other Ollama models do not gain MachBoost verifier acceleration. A future custom native Ollama integration should ship one of:
 
 - A documented fork for research builds.
 - A patch file users apply to a known Ollama commit.
