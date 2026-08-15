@@ -13,6 +13,8 @@ __pycache__/
 .coverage
 htmlcov/
 tmp/
+*.profraw
+*.profdata
 
 # Python packaging/build outputs
 build/
