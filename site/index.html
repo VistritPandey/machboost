@@ -106,12 +106,12 @@
       <section class="signal-band" aria-label="MachBoost benchmark highlights">
         <div class="shell signal-grid">
           <div>
-            <strong>1.25×</strong>
-            <span>Muse DFlash diagnostic</span>
+            <strong>2.89×</strong>
+            <span>3B repository median</span>
           </div>
           <div>
-            <strong>3.84×</strong>
-            <span>7B repository prefill</span>
+            <strong>5.06×</strong>
+            <span>team throughput diagnostic</span>
           </div>
           <div>
             <strong>13.51×</strong>
@@ -169,15 +169,16 @@
               <h3>Text, vision, and tools</h3>
               <p>
                 Run MLX and MLX-VLM models with persistent files and images. Muse
-                Glimmer adds separate reasoning and native tool-call output.
+                Glimmer runs from native Hugging Face MLX conversions with reasoning,
+                vision, and tool-call output.
               </p>
             </li>
             <li>
               <i data-lucide="braces" aria-hidden="true"></i>
               <h3>Drop-in APIs</h3>
               <p>
-                Connect existing tools through OpenAI- and Ollama-compatible endpoints
-                or use the Python client directly.
+                Connect through OpenAI Chat Completions and Responses, Anthropic
+                Messages, Ollama-compatible routes, or the Python client.
               </p>
             </li>
           </ul>
@@ -190,8 +191,8 @@
             <p class="kicker">Team Gateway</p>
             <h2>One Mac. Your team's coding agents.</h2>
             <p>
-              Give each employee a scoped key and point Cline, Kilo Code, or another
-              OpenAI-compatible client at the same private endpoint. Models stay
+              Give each employee a scoped key and point Codex, Claude Code, Cline,
+              Kilo Code, or another compatible client at the same private endpoint. Models stay
               resident while MachBoost enforces model access, concurrency, request
               rates, and fair queueing between employees. Revision-aware memory can
               reuse validated repository knowledge without exposing private work,
@@ -215,7 +216,7 @@
             <dl class="team-stats">
               <div><dt>Identity</dt><dd>Scoped keys</dd></div>
               <div><dt>Admission</dt><dd>Tenant-fair</dd></div>
-              <div><dt>Protocols</dt><dd>OpenAI + Ollama</dd></div>
+              <div><dt>Protocols</dt><dd>Responses + Messages + Ollama</dd></div>
               <div><dt>Memory</dt><dd>Private + shared</dd></div>
             </dl>
             <pre><code>export OPENAI_BASE_URL="http://TEAM-MAC:11435/v1"
@@ -269,12 +270,20 @@ export OPENAI_API_KEY="mbk_employee_key"</code></pre>
               </thead>
               <tbody>
                 <tr>
-                  <td>Muse native DFlash</td>
-                  <td>Muse Glimmer 30B MLX</td>
-                  <td>17.29 tok/s control</td>
-                  <td>21.61 tok/s</td>
-                  <td class="speedup">1.25×</td>
-                  <td>Diagnostic; no exactness claim</td>
+                  <td>Different repository questions</td>
+                  <td>Qwen2.5 3B 4-bit</td>
+                  <td>3.501s</td>
+                  <td>1.186s</td>
+                  <td class="speedup">2.89×</td>
+                  <td>10/10 exact tokens</td>
+                </tr>
+                <tr class="control-row">
+                  <td>10-client repository batch</td>
+                  <td>Qwen2.5 3B 4-bit</td>
+                  <td>0.267 req/s</td>
+                  <td>1.351 req/s</td>
+                  <td class="speedup">5.06×</td>
+                  <td>Diagnostic; 16/20 byte-identical</td>
                 </tr>
                 <tr>
                   <td>Fresh unique decode</td>
@@ -352,7 +361,15 @@ export OPENAI_API_KEY="mbk_employee_key"</code></pre>
 
           <div class="benchmark-notes">
             <p>
-              The production-shaped repository audit used an 8,754-file private
+              The latest native 3B audit indexed 8,843 files into 26,394 chunks
+              and compared cache-off MLX against MachBoost with the same loaded model,
+              weights, prompts, tokenizer, and greedy generation. Ten different
+              repository questions were token-identical; the median reused 8,410 of
+              10,265 prompt tokens. The 10-client diagnostic used one safe resident
+              replica and 20 measured requests. It improved throughput 5.06×, p50
+              latency 4.97×, and TTFT 5.93×, but only 16/20 output hashes matched, so
+              it is not presented as an exact acceleration result. The earlier
+              production-shaped repository audit used an 8,754-file private
               monorepo, independent standalone threads, alternating order, and the same
               loaded MLX model, weights, prompts, and tokenization within each pair.
               Private paths, prompts, and outputs are not published. Decode time did not
@@ -362,15 +379,18 @@ export OPENAI_API_KEY="mbk_employee_key"</code></pre>
               prefixes match. The same-weight 9B BF16 row ranges from 1.58× to
               2.42×, but its output gate found a mismatch; a faster 9B 4-bit control
               also diverged. Exact replay and semantic memory are separate contracts.
-              The visual figure is the median of six model-level paired medians. The
-              Muse row uses Meta's model-native DFlash through Ollama's MLX runner;
-              MachBoost did not create that decoder. The control parks speculation by
-              requesting logprobs because Ollama exposes no DFlash-off switch, so it is
-              conservative and not comparable to Meta's ExecuTorch baseline. Across
-              the same run, direct Ollama reached 22.50 tok/s and MachBoost added 4.11%
-              median wall-time overhead. Only 2/10 same-prompt pairs were byte-identical.
+              The visual figure is the median of six model-level paired medians. Muse
+              Glimmer now resolves to the native
+              <code>mlx-community/Muse-Glimmer-30B-4bit</code> conversion through
+              MLX-VLM. The older explicit <code>muse-glimmer:30b-mlx</code> Ollama
+              adapter remains for backward compatibility.
             </p>
             <div class="artifact-links">
+              <a
+                href="https://github.com/VistritPandey/machboost/blob/main/results/native_workspace_team_qwen25_3b_20260815.json"
+              >
+                Native workspace + team audit <i data-lucide="arrow-up-right" aria-hidden="true"></i>
+              </a>
               <a
                 href="https://github.com/VistritPandey/machboost/blob/main/results/team_repository_reuse_qwen25_7b_20260809.json"
               >
@@ -397,6 +417,9 @@ export OPENAI_API_KEY="mbk_employee_key"</code></pre>
               <a href="https://github.com/VistritPandey/machboost/blob/main/scripts/benchmark_repository_reuse.py">
                 Reuse benchmark <i data-lucide="arrow-up-right" aria-hidden="true"></i>
               </a>
+              <a href="https://github.com/VistritPandey/machboost/blob/main/scripts/benchmark_workspace_prefix.py">
+                Native workspace benchmark <i data-lucide="arrow-up-right" aria-hidden="true"></i>
+              </a>
             </div>
           </div>
         </div>
@@ -422,7 +445,8 @@ export OPENAI_API_KEY="mbk_employee_key"</code></pre>
                 <h3>Build stable context</h3>
                 <p>
                   Repository maps, documents, images, and chat prefixes are organized
-                  so exact reusable regions remain identifiable.
+                  so exact reusable regions remain identifiable. Long app chats compact
+                  older turns into durable summaries near the selected context limit.
                 </p>
               </div>
             </li>
@@ -458,7 +482,8 @@ export OPENAI_API_KEY="mbk_employee_key"</code></pre>
             <p>
               The preview DMG is free and ad-hoc signed. Apple has not notarized it, so
               macOS asks you to approve the app manually after download. Community
-              updates open GitHub Releases and may require the same approval again.
+              builds check GitHub Releases automatically and expose Check Now in
+              Settings; installing an update is manual and may require approval again.
             </p>
           </div>
 
@@ -475,8 +500,8 @@ export OPENAI_API_KEY="mbk_employee_key"</code></pre>
                 <span>2</span>
                 <div>
                   <h3>Drag MachBoost to Applications</h3>
-                  <p>The bundled runtime means no Homebrew or Python setup. Muse
-                    Glimmer additionally requires the current Ollama app.</p>
+                  <p>The bundled runtime includes Python, MLX, MLX-LM, and MLX-VLM.
+                    Native models do not require Ollama.</p>
                 </div>
               </li>
               <li>
@@ -541,8 +566,8 @@ export OPENAI_API_KEY="mbk_employee_key"</code></pre>
             <p class="kicker">Use your existing tools</p>
             <h2>One local endpoint.</h2>
             <p>
-              The app and CLI speak through the same daemon. Point OpenAI-compatible
-              clients at MachBoost or call the Ollama-style routes directly.
+              The app and CLI speak through the same daemon. Point Responses,
+              Chat Completions, Anthropic Messages, or Ollama-compatible clients at MachBoost.
               Loopback works only on the host Mac; authenticated LAN mode displays a
               reachable address and token for teammates on the same private network.
             </p>
@@ -550,7 +575,7 @@ export OPENAI_API_KEY="mbk_employee_key"</code></pre>
           <div class="code-samples">
             <div class="code-block">
               <div class="code-header">
-                <span>OpenAI Python</span>
+                <span>OpenAI Responses</span>
                 <button type="button" class="copy-button" data-copy-target="openai-code">
                   <i data-lucide="copy" aria-hidden="true"></i>
                   <span class="sr-only">Copy OpenAI example</span>
@@ -564,11 +589,31 @@ client = OpenAI(
     api_key="machboost"
 )
 
-response = client.chat.completions.create(
-    model="muse-glimmer:30b-mlx",
-    messages=[{"role": "user", "content": "Inspect this incident"}],
-    extra_body={"think": "high"}
+response = client.responses.create(
+    model="muse-glimmer:30b",
+    input="Inspect this incident and propose the next tool call."
 )</code></pre>
+            </div>
+            <div class="code-block">
+              <div class="code-header">
+                <span>Codex and Claude Code</span>
+                <button type="button" class="copy-button" data-copy-target="agent-code">
+                  <i data-lucide="copy" aria-hidden="true"></i>
+                  <span class="sr-only">Copy coding agent example</span>
+                </button>
+              </div>
+              <pre id="agent-code"><code># Codex config.toml
+model = "qwen2.5-coder:7b"
+model_provider = "machboost"
+[model_providers.machboost]
+base_url = "http://TEAM-MAC:11435/v1"
+env_key = "MACHBOOST_API_KEY"
+wire_api = "responses"
+
+# Claude Code shell
+export ANTHROPIC_BASE_URL="http://TEAM-MAC:11435"
+export ANTHROPIC_AUTH_TOKEN="YOUR_MACHBOOST_KEY"
+export ANTHROPIC_MODEL="qwen2.5-coder:7b"</code></pre>
             </div>
             <div class="code-block">
               <div class="code-header">
@@ -579,8 +624,8 @@ response = client.chat.completions.create(
                 </button>
               </div>
               <pre id="terminal-code"><code>machboost serve
-machboost pull muse-glimmer:30b-mlx
-machboost run muse-glimmer:30b-mlx --think high --show-thinking
+machboost pull muse-glimmer:30b
+machboost run muse-glimmer:30b --think high --show-thinking
 machboost ps</code></pre>
             </div>
           </div>
