@@ -165,6 +165,60 @@ MODEL_ALIASES = {
             "Qwen/Qwen3.5-9B",
             "vision",
         ),
+        ModelAlias(
+            "muse-glimmer:30b",
+            "mlx-community/Muse-Glimmer-30B-4bit",
+            "meta-models/Muse-Glimmer-30B",
+            "vision",
+        ),
+        ModelAlias(
+            "muse-glimmer:30b-4bit",
+            "mlx-community/Muse-Glimmer-30B-4bit",
+            "meta-models/Muse-Glimmer-30B",
+            "vision",
+        ),
+        ModelAlias(
+            "muse-glimmer:30b-5bit",
+            "mlx-community/Muse-Glimmer-30B-5bit",
+            "meta-models/Muse-Glimmer-30B",
+            "vision",
+        ),
+        ModelAlias(
+            "muse-glimmer:30b-6bit",
+            "mlx-community/Muse-Glimmer-30B-6bit",
+            "meta-models/Muse-Glimmer-30B",
+            "vision",
+        ),
+        ModelAlias(
+            "muse-glimmer:30b-8bit",
+            "mlx-community/Muse-Glimmer-30B-8bit",
+            "meta-models/Muse-Glimmer-30B",
+            "vision",
+        ),
+        ModelAlias(
+            "muse-glimmer:30b-bf16",
+            "mlx-community/Muse-Glimmer-30B-bf16",
+            "meta-models/Muse-Glimmer-30B",
+            "vision",
+        ),
+        ModelAlias(
+            "muse-glimmer:30b-mxfp4",
+            "mlx-community/Muse-Glimmer-30B-mxfp4",
+            "meta-models/Muse-Glimmer-30B",
+            "vision",
+        ),
+        ModelAlias(
+            "muse-glimmer:30b-mxfp8",
+            "mlx-community/Muse-Glimmer-30B-mxfp8",
+            "meta-models/Muse-Glimmer-30B",
+            "vision",
+        ),
+        ModelAlias(
+            "muse-glimmer:30b-nvfp4",
+            "mlx-community/Muse-Glimmer-30B-nvfp4",
+            "meta-models/Muse-Glimmer-30B",
+            "vision",
+        ),
     )
 }
 
@@ -190,6 +244,15 @@ MODEL_RESOURCE_HINTS = {
     "qwen3.5:0.8b": (0.8, 6.0),
     "qwen3.5:4b": (3.0, 12.0),
     "qwen3.5:9b": (6.2, 16.0),
+    "muse-glimmer:30b": (6.0, 32.0),
+    "muse-glimmer:30b-4bit": (6.0, 32.0),
+    "muse-glimmer:30b-5bit": (7.0, 32.0),
+    "muse-glimmer:30b-6bit": (8.0, 36.0),
+    "muse-glimmer:30b-8bit": (10.0, 48.0),
+    "muse-glimmer:30b-bf16": (30.0, 64.0),
+    "muse-glimmer:30b-mxfp4": (7.0, 32.0),
+    "muse-glimmer:30b-mxfp8": (10.0, 48.0),
+    "muse-glimmer:30b-nvfp4": (9.0, 40.0),
 }
 
 RECOMMENDED_MODELS = {
@@ -199,6 +262,7 @@ RECOMMENDED_MODELS = {
     "llama3.2:3b",
     "qwen2.5-vl:3b",
     "qwen3-vl:4b",
+    "muse-glimmer:30b",
 }
 
 DFLASH_TARGETS = {
@@ -231,7 +295,7 @@ DFLASH_ALIASES = {
 MUSE_GLIMMER = OllamaMLXAlias(
     name="muse-glimmer:30b-mlx",
     model="muse-glimmer:30b-mlx",
-    display_name="Muse Glimmer 30B MLX",
+    display_name="Muse Glimmer 30B (Ollama MLX)",
     source_repository="meta-models/Muse-Glimmer-30B",
     capabilities=("chat", "completion", "vision", "reasoning", "tools"),
     download_size_gb=21.0,
@@ -240,9 +304,11 @@ MUSE_GLIMMER = OllamaMLXAlias(
 )
 
 OLLAMA_MLX_ALIASES = {
-    "muse-glimmer:30b": MUSE_GLIMMER,
     MUSE_GLIMMER.name: MUSE_GLIMMER,
 }
+
+MUSE_GLIMMER_CAPABILITIES = ("chat", "completion", "vision", "reasoning", "tools")
+MUSE_GLIMMER_CONTEXT_LENGTH = 131_072
 
 
 def native_mlx_available() -> bool:
@@ -340,7 +406,16 @@ def select_backend_for_repo(model: str, backend: str = "auto") -> str:
 
 def looks_like_vision_model(model: str) -> bool:
     normalized = model.lower()
-    markers = ("-vl-", "-vl:", "vision", "llava", "pixtral", "florence", "moondream")
+    markers = (
+        "-vl-",
+        "-vl:",
+        "vision",
+        "llava",
+        "pixtral",
+        "florence",
+        "moondream",
+        "muse-glimmer",
+    )
     return any(marker in normalized for marker in markers)
 
 
@@ -393,7 +468,13 @@ def catalog_rows(
             name,
             (None, None),
         )
-        capabilities = ["chat", "vision"] if alias.capability == "vision" else ["chat", "completion"]
+        capabilities = (
+            list(MUSE_GLIMMER_CAPABILITIES)
+            if name.startswith("muse-glimmer:")
+            else ["chat", "vision"]
+            if alias.capability == "vision"
+            else ["chat", "completion"]
+        )
         if alias.capability == "code":
             capabilities.append("code")
         rows.append(
@@ -410,6 +491,11 @@ def catalog_rows(
                 "download_size_gb": download_size_gb,
                 "disk_size_gb": _directory_size_gb(cached_path),
                 "minimum_memory_gb": minimum_memory_gb,
+                "context_length": (
+                    MUSE_GLIMMER_CONTEXT_LENGTH
+                    if name.startswith("muse-glimmer:")
+                    else None
+                ),
                 "support": "ready" if backend_available(backend) else "missing_runtime",
                 "support_reason": None,
             }
@@ -570,7 +656,9 @@ def _latest_snapshot(repository_dir: Path) -> Optional[Path]:
     candidates = [
         path
         for path in snapshots.iterdir()
-        if path.is_dir() and (path / "config.json").is_file()
+        if path.is_dir()
+        and (path / "config.json").is_file()
+        and _snapshot_has_weights(path)
     ]
     if not candidates:
         return None
@@ -668,6 +756,23 @@ def _directory_size_gb(path: Optional[Path]) -> Optional[float]:
     except OSError:
         return None
     return total / 1_000_000_000
+
+
+def _snapshot_has_weights(path: Path) -> bool:
+    indexes = sorted(path.glob("*.safetensors.index.json"))
+    if indexes:
+        try:
+            referenced = {
+                str(filename)
+                for index in indexes
+                for filename in json.loads(index.read_text(encoding="utf-8"))
+                .get("weight_map", {})
+                .values()
+            }
+        except (OSError, TypeError, json.JSONDecodeError):
+            return False
+        return bool(referenced) and all((path / filename).is_file() for filename in referenced)
+    return any(path.glob("*.safetensors"))
 
 
 def preflight_model(
@@ -821,6 +926,8 @@ def _resolution_capabilities(resolution: ModelResolution) -> list[str]:
     alias = OLLAMA_MLX_ALIASES.get((resolution.alias or resolution.requested).lower())
     if alias is not None:
         return list(alias.capabilities)
+    if (resolution.alias or resolution.requested).lower().startswith("muse-glimmer:"):
+        return list(MUSE_GLIMMER_CAPABILITIES)
     if resolution.backend.endswith("-vlm"):
         return ["chat", "vision"]
     return ["chat", "completion"]
@@ -839,7 +946,9 @@ def cached_repo_path(model: Optional[str]) -> Optional[Path]:
     except (ImportError, OSError, ValueError):
         return None
     snapshot_path = Path(snapshot)
-    if not (snapshot_path / "config.json").is_file():
+    if not (snapshot_path / "config.json").is_file() or not _snapshot_has_weights(
+        snapshot_path
+    ):
         return None
     return snapshot_path.resolve()
 
@@ -877,6 +986,8 @@ def _validate_mlx_architecture(
 
 def _display_name(alias: str) -> str:
     family, _, size = alias.partition(":")
+    if family == "muse-glimmer":
+        return f"Muse Glimmer {size.upper()}".strip()
     family = family.replace("qwen", "Qwen").replace("llama", "Llama ")
     return f"{family} {size.upper()}".strip()
 
