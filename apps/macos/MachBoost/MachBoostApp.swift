@@ -53,9 +53,7 @@ struct MachBoostApp: App {
         .commands {
             CommandGroup(after: .appInfo) {
                 Button(
-                    updates.supportsAutomaticUpdates
-                        ? "Check for Updates…"
-                        : "View Latest Release"
+                    "Check for Updates…"
                 ) {
                     updates.checkForUpdates()
                 }
