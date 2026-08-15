@@ -324,6 +324,36 @@ class MLXVLMAcceleratorTests(unittest.TestCase):
         _, options = self.templates[0]
         self.assertTrue(options["enable_thinking"])
 
+    def test_streams_reasoning_separately_across_marker_boundaries(self):
+        self.accelerator.model.config = {
+            "model_type": "muse_glimmer",
+            "thinking_start_token": "to=self<|message|>",
+            "thinking_end_token": "<|eom|>",
+        }
+
+        def reasoning_stream(model, processor, prompt, **kwargs):
+            yield FakeGenerationRow("<|start|>assistant to=se")
+            yield FakeGenerationRow("lf<|message|>Inspecting")
+            yield FakeGenerationRow(" inputs<|eo")
+            yield FakeGenerationRow("m|><|start|>assistant to=user<|message|>Done")
+
+        self.accelerator._stream_generate = reasoning_stream
+        content = []
+        thinking = []
+
+        text, stats = self.accelerator.generate_chat(
+            [{"role": "user", "content": "Work it out."}],
+            max_tokens=8,
+            on_text=content.append,
+            on_thinking=thinking.append,
+            enable_thinking=True,
+        )
+
+        self.assertEqual("".join(thinking), "Inspecting inputs")
+        self.assertEqual(stats.thinking, "Inspecting inputs")
+        self.assertEqual(text, "Done")
+        self.assertEqual("".join(content), text)
+
     def test_reset_cache_releases_projected_features(self):
         self.accelerator.generate(
             "Describe the image.", images=[str(self.image)], max_tokens=8
