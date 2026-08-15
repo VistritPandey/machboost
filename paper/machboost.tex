@@ -319,6 +319,13 @@ MachBoost's indefinite lifetime to Ollama's supported negative duration. The
 model remains an external 21 GB artifact; MachBoost neither redistributes its
 weights nor replaces its inference runner.
 
+Version 0.12 adds a separate native route: \texttt{muse-glimmer:30b} resolves
+to the 4-bit Hugging Face MLX conversion and runs through MLX-VLM 0.6.13. The
+older suffixed alias remains only for reproducing the external bridge study
+below. Version 0.12 also adds OpenAI Responses and Anthropic Messages protocol
+adapters for coding-agent clients. These protocol additions were integration
+tested but are not part of the latency experiments reported in this paper.
+
 The current server also owns the repository index and exposes workspace
 registration, reindex, search, listing, and deletion routes. Chat and generation
 requests can provide a workspace identifier through either the
