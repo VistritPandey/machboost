@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "machboost"
-version = "0.11.0"
+version = "0.12.0"
 description = "Resident local inference server with conditional text and visual acceleration."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -38,7 +38,7 @@ mlx = [
   "mlx-lm",
 ]
 vision = [
-  "mlx-vlm>=0.5.0",
+  "mlx-vlm>=0.6.13",
   "Pillow",
 ]
 dflash = [
@@ -54,7 +54,7 @@ all = [
   "transformers",
   "mlx",
   "mlx-lm",
-  "mlx-vlm>=0.5.0",
+  "mlx-vlm>=0.6.13",
   "dflash-mlx>=0.1.8",
   "Pillow",
 ]
