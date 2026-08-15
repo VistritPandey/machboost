@@ -2,8 +2,8 @@
 
 MachBoost Team Gateway turns one Apple Silicon Mac into a private inference
 endpoint for a small team. It keeps supported MLX text and vision models
-resident, can bridge supported model-native Ollama MLX runners, accepts
-concurrent OpenAI- and Ollama-compatible requests, and adds
+resident, accepts concurrent OpenAI Chat/Responses, Anthropic Messages, and
+Ollama-compatible requests, and adds
 employee keys, limits, fair admission, revision-aware memory, budgeted provider
 fallback, local traces, and evaluations.
 
@@ -98,32 +98,53 @@ export OLLAMA_HOST="http://TEAM-MAC:11435"
 export OLLAMA_API_KEY="mbk_employee_key"
 ```
 
+Codex-style clients can use MachBoost as a Responses provider:
+
+```toml
+model = "muse-glimmer:30b"
+model_provider = "machboost"
+
+[model_providers.machboost]
+name = "MachBoost"
+base_url = "http://TEAM-MAC:11435/v1"
+env_key = "MACHBOOST_API_KEY"
+wire_api = "responses"
+```
+
+Claude Code can use the Anthropic Messages route:
+
+```sh
+export ANTHROPIC_BASE_URL="http://TEAM-MAC:11435"
+export ANTHROPIC_AUTH_TOKEN="mbk_employee_key"
+export ANTHROPIC_MODEL="muse-glimmer:30b"
+claude
+```
+
 `GET /api/integrations` returns the same connection values for the active host.
-`POST /v1/chat/completions` accepts OpenAI function tools, `tool_choice`, and
-`parallel_tool_calls`. `POST /api/chat` accepts Ollama tool schemas. MachBoost
-returns requested tool calls but never executes them; execution remains inside
-the employee's coding agent and its permission system.
+`POST /v1/responses`, `POST /v1/messages`, and `POST /v1/chat/completions`
+accept function tools and preserve streaming tool-call events. `POST /api/chat`
+accepts Ollama tool schemas. MachBoost returns requested tool calls but never
+executes them; execution remains inside the employee's coding agent and its
+permission system.
 
 ### Serve Muse Glimmer 30B MLX
 
 Muse Glimmer can be exposed through the same endpoint when the host has Apple
-Silicon, at least 32 GB unified memory, and Ollama 0.32.7 or newer:
+Silicon and at least 32 GB unified memory:
 
 ```sh
-machboost pull muse-glimmer:30b-mlx
-machboost warm muse-glimmer:30b-mlx --keep-alive -1
+machboost pull muse-glimmer:30b
+machboost warm muse-glimmer:30b --keep-alive -1
 ```
 
-Allow employee keys to use `muse-glimmer:30b-mlx`, then send ordinary OpenAI or
-Ollama chat requests. OpenAI requests may set `think` to `low`, `medium`,
-`high`, or `xhigh` in the top-level request extension. Image content parts and
-function-tool schemas are forwarded to the native model. Streaming reasoning
-is returned separately from final text, and tool calls remain structured.
+The default alias resolves to `mlx-community/Muse-Glimmer-30B-4bit` and runs
+through MachBoost's native MLX-VLM backend. Image content parts, reasoning, and
+function-tool schemas are preserved across all four protocol surfaces. The
+model stays resident until its keep-alive expires or an administrator unloads
+it. Ollama is not required for this path.
 
-Muse uses Ollama's MLX runner and model-native DFlash; MachBoost supplies the
-authenticated gateway, lifecycle, cancellation, compatibility, queueing, and
-metrics around that runner. Ollama is an explicit host dependency for this
-model and is not bundled by MachBoost.
+The explicit legacy alias `muse-glimmer:30b-mlx` still bridges the older Ollama
+artifact for compatibility and historical benchmarking.
 
 ## Fairness And Concurrency
 
@@ -137,8 +158,7 @@ Replicas are independent model instances. They improve isolation and can reduce
 queue latency, but consume additional unified memory and do not promise a linear
 GPU-throughput increase. MLX-VLM remains one replica per model because its
 mutable visual state is not replica-safe. MachBoost does not implement
-continuous batching. The Muse Ollama bridge also queues simultaneous clients
-around the runner; it does not turn serial decode into continuous batching.
+continuous batching. Simultaneous clients queue around each native replica.
 
 ## What Repository Sharing Actually Reuses
 
@@ -150,12 +170,17 @@ system and repository-map prefix. Query-specific evidence and the new question
 are still evaluated normally. Private memories and exact responses remain in
 their own access namespaces.
 
-In a three-pair Qwen2.5 7B audit over a private 8,754-file monorepo, an adjacent
-coding request reused 3,269 of 4,243 prompt tokens. Median prefill fell from
-2.306 to 0.605 seconds, while total time fell from 7.034 to 5.377 seconds
-(1.314x). An unrelated-subsystem control reused 3,257 of 4,327 prompt tokens
-and improved total time from 5.995 to 4.217 seconds (1.426x). All six paired
-outputs were byte-identical under greedy decoding. Decode time did not improve.
+In an August 15 same-model audit, ten repository questions used the same loaded
+Qwen2.5 3B MLX weights, tokenizer, prompts, and greedy settings. Median wall
+time fell from 3.501 to 1.186 seconds (2.894x), with exact token equality in all
+ten pairs. The median request reused 8,409.5 of 10,265 prompt tokens. Decode
+speed itself did not improve.
+
+A separate 10-client hosted diagnostic improved throughput from 0.267 to 1.351
+requests/s and reduced median time to first token from 19.821 to 3.342 seconds.
+Only 16 of 20 cached outputs were byte-identical to the uncached control, so
+that 5.06x throughput observation is not an exactness or quality claim and is
+not the default public performance contract.
 
 This path works across chat threads and employee keys because the cache
 namespace follows the workspace content revision. The revision combines Git
