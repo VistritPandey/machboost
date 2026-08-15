@@ -17,6 +17,8 @@ final class UpdateController: ObservableObject {
     @Published private(set) var latestCommunityVersion: String?
     @Published private(set) var communityCheckCompleted = false
     @Published private(set) var communityCheckFailed = false
+    @Published private(set) var isChecking = false
+    @Published private(set) var lastCheckedAt: Date?
 
     private static let automaticCommunityChecksKey =
         "MachBoostAutomaticallyChecksCommunityReleases"
@@ -80,16 +82,28 @@ final class UpdateController: ObservableObject {
     }
 
     var actionTitle: String {
-        updaterController != nil ? "Check for updates" : "View latest release"
+        "Check Now"
+    }
+
+    var updateAvailable: Bool {
+        guard let latestCommunityVersion else { return false }
+        return Self.isVersion(latestCommunityVersion, newerThan: currentVersion)
+    }
+
+    var canDownloadUpdate: Bool {
+        updaterController == nil && updateAvailable
+    }
+
+    var downloadTitle: String {
+        guard let latestCommunityVersion else { return "Download Update" }
+        return "Download \(latestCommunityVersion)"
     }
 
     var deliveryDescription: String {
         if updaterController != nil {
             return "Signed updates install through Sparkle"
         }
-        if let latestCommunityVersion,
-           Self.isVersion(latestCommunityVersion, newerThan: currentVersion)
-        {
+        if updateAvailable, let latestCommunityVersion {
             return "\(latestCommunityVersion) is available on GitHub; installation is manual"
         }
         if communityCheckFailed {
@@ -105,8 +119,13 @@ final class UpdateController: ObservableObject {
         if let updaterController {
             updaterController.checkForUpdates(nil)
         } else {
-            openRelease(releasesURL)
+            Task { await checkCommunityRelease() }
         }
+    }
+
+    func downloadUpdate() {
+        guard updaterController == nil, updateAvailable else { return }
+        openRelease(releasesURL)
     }
 
     var automaticallyChecksForUpdates: Bool {
@@ -133,13 +152,18 @@ final class UpdateController: ObservableObject {
 
     func checkCommunityRelease() async {
         guard updaterController == nil else { return }
+        isChecking = true
+        defer {
+            isChecking = false
+            communityCheckCompleted = true
+            lastCheckedAt = .now
+        }
         do {
             latestCommunityVersion = try await fetchLatestRelease(latestReleaseURL)
             communityCheckFailed = false
         } catch {
             communityCheckFailed = true
         }
-        communityCheckCompleted = true
     }
 
     private static func isValidSparklePublicKey(_ value: String) -> Bool {
