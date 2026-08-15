@@ -126,7 +126,7 @@ class ModelCatalogTests(unittest.TestCase):
 
     def test_muse_glimmer_lists_native_repository_as_lifecycle_target(self):
         self.assertEqual(
-            model_repositories("muse-glimmer:30b"),
+            model_repositories("muse-glimmer:30b", backend="mlx-vlm"),
             ("mlx-community/Muse-Glimmer-30B-4bit",),
         )
         self.assertEqual(
