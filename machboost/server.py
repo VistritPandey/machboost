@@ -39,6 +39,15 @@ from .ollama_compat import (
     validate_structured_output,
 )
 from .providers import ProviderError, ProviderResult, ProviderStore, route_with_fallback
+from .protocols import (
+    anthropic_body,
+    anthropic_messages,
+    anthropic_tools,
+    response_body,
+    response_message_item,
+    responses_messages,
+    responses_tools,
+)
 from .scheduler import ReplicaPool, RequestAdmissionError
 from .team import (
     TeamAccessError,
@@ -83,6 +92,18 @@ class RequestMemoryContext:
             "remember": self.remember,
             "exact_cache": self.exact_cache,
         }
+
+
+@dataclass(frozen=True)
+class PreparedChat:
+    model: str
+    runtime_model: str
+    messages: list[dict[str, Any]]
+    options: dict[str, Any]
+    context: Any
+    workspace: Optional[WorkspaceQuery]
+    memory: Optional[RequestMemoryContext]
+    user_query: str
 
 
 @dataclass
@@ -621,8 +642,12 @@ class RuntimeManager:
                     max_tokens=max_tokens,
                     context=context,
                     on_text=timed_emit if emit is not None or cancel_event is not None else None,
+                    on_thinking=timed_emit_thinking
+                    if emit_thinking is not None or cancel_event is not None
+                    else None,
                     use_vision_cache=not bool(options.get("no_vision_cache", False)),
                     temperature=float(options.get("temperature", 0.0)),
+                    enable_thinking=options.get("_think", False),
                     cold_vision_mode=str(options.get("cold_vision", "off")),
                     cold_vision_max_edge=_optional_int(options.get("vision_max_edge")),
                     vision_token_mode=str(options.get("vision_tokens", "off")),
@@ -799,9 +824,13 @@ class RuntimeManager:
                     max_tokens=max_tokens,
                     context=context,
                     on_text=timed_emit if emit is not None or cancel_event is not None else None,
+                    on_thinking=timed_emit_thinking
+                    if emit_thinking is not None or cancel_event is not None
+                    else None,
                     images=images,
                     use_vision_cache=not bool(options.get("no_vision_cache", False)),
                     temperature=float(options.get("temperature", 0.0)),
+                    enable_thinking=options.get("_think", False),
                     cold_vision_mode=str(options.get("cold_vision", "off")),
                     cold_vision_max_edge=_optional_int(options.get("vision_max_edge")),
                     vision_token_mode=str(options.get("vision_tokens", "off")),
@@ -2271,6 +2300,12 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
             if path == "/v1/chat/completions":
                 self.handle_openai_chat(payload)
                 return
+            if path == "/v1/responses":
+                self.handle_openai_response(payload)
+                return
+            if path == "/v1/messages":
+                self.handle_anthropic_message(payload)
+                return
             if path == "/v1/completions":
                 self.handle_openai_completion(payload)
                 return
@@ -2768,6 +2803,442 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                 ),
             }
         )
+
+    def prepare_compat_chat(
+        self,
+        payload: dict[str, Any],
+        messages: list[dict[str, Any]],
+        options: dict[str, Any],
+    ) -> PreparedChat:
+        model = required_string(payload, "model")
+        user_query = latest_user_text(messages)
+        runtime_model, options, _ = self.resolve_local_model(model, options)
+        merge_candidate_context = should_merge_candidate_context(
+            runtime_model, options
+        )
+        options["_tenant_key"] = self.principal.id
+        workspace = workspace_query_for_request(
+            self.workspaces,
+            payload,
+            default_query=user_query,
+        )
+        context = payload.get("context")
+        if workspace is not None:
+            messages = inject_workspace_messages(messages, workspace)
+            if merge_candidate_context:
+                context = merge_draft_context(context, workspace)
+            options.setdefault("affinity_key", f"workspace:{workspace.workspace.id}")
+            options.setdefault("workspace_prefix_cache", True)
+            options.setdefault(
+                "_prompt_cache_namespace", workspace_prompt_cache_namespace(workspace)
+            )
+        memory_context = self.prepare_memory(payload, workspace, query=user_query)
+        if memory_context is not None:
+            messages = inject_memory_messages(messages, memory_context)
+            if merge_candidate_context:
+                context = merge_memory_draft_context(context, memory_context)
+            options["_cache_namespace"] = memory_context.cache_namespace.key
+        return PreparedChat(
+            model=model,
+            runtime_model=runtime_model,
+            messages=messages,
+            options=options,
+            context=context,
+            workspace=workspace,
+            memory=memory_context,
+            user_query=user_query,
+        )
+
+    def handle_openai_response(self, payload: dict[str, Any]) -> None:
+        translated = dict(payload)
+        translated["max_tokens"] = payload.get("max_output_tokens", payload.get("max_tokens", 1024))
+        tools = responses_tools(payload.get("tools"))
+        if tools:
+            translated["tools"] = tools
+            translated["tool_choice"] = compatibility_tool_choice(payload.get("tool_choice"))
+        prepared = self.prepare_compat_chat(
+            payload,
+            normalize_messages(responses_messages(payload)),
+            openai_options(translated),
+        )
+        request_id = request_identifier(payload, "resp")
+
+        if not bool(payload.get("stream", False)):
+            result = self.run_traced_operation(
+                request_id,
+                "responses",
+                prepared.model,
+                lambda cancel_event: self.runtime.chat(
+                    prepared.runtime_model,
+                    prepared.messages,
+                    options=prepared.options,
+                    context=prepared.context,
+                    cancel_event=cancel_event,
+                ),
+                input_data=prepared.messages,
+            )
+            content, tool_calls = result_content_and_tool_calls(result)
+            self.remember_exchange(
+                prepared.memory,
+                prepared.workspace,
+                user_text=prepared.user_query,
+                assistant_text=result.text,
+            )
+            self.send_json(
+                response_body(
+                    response_id=request_id,
+                    model=prepared.model,
+                    text=content,
+                    tool_calls=tool_calls,
+                    usage=usage_from_result(result),
+                    metadata=openai_machboost_result(
+                        result,
+                        workspace=prepared.workspace,
+                        memory=prepared.memory,
+                    ),
+                )
+            )
+            return
+
+        stream_started = False
+        text_started = False
+        streamed_text = ""
+        message_item_id = f"msg_{request_id.removeprefix('resp_')}"
+
+        def event(event_type: str, **values: Any) -> None:
+            self.write_named_sse(event_type, {"type": event_type, **values})
+
+        def on_admitted() -> None:
+            nonlocal stream_started
+            self.start_stream("text/event-stream")
+            stream_started = True
+            started = response_body(
+                response_id=request_id,
+                model=prepared.model,
+                text="",
+                tool_calls=(),
+                usage={"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+                metadata={},
+                status="in_progress",
+            )
+            event("response.created", response=started, sequence_number=0)
+            event("response.in_progress", response=started, sequence_number=1)
+
+        def start_text() -> None:
+            nonlocal text_started
+            if text_started:
+                return
+            text_started = True
+            item = response_message_item(request_id, "", status="in_progress")
+            event(
+                "response.output_item.added",
+                output_index=0,
+                item=item,
+            )
+            event(
+                "response.content_part.added",
+                item_id=message_item_id,
+                output_index=0,
+                content_index=0,
+                part={"type": "output_text", "text": "", "annotations": [], "logprobs": []},
+            )
+
+        def emit(text: str) -> None:
+            nonlocal streamed_text
+            start_text()
+            streamed_text += text
+            event(
+                "response.output_text.delta",
+                item_id=message_item_id,
+                output_index=0,
+                content_index=0,
+                delta=text,
+                logprobs=[],
+            )
+
+        try:
+            result = self.run_traced_operation(
+                request_id,
+                "responses",
+                prepared.model,
+                lambda cancel_event: self.runtime.chat(
+                    prepared.runtime_model,
+                    prepared.messages,
+                    options=prepared.options,
+                    context=prepared.context,
+                    emit=None if prepared.options.get("_tools") else emit,
+                    on_admitted=on_admitted,
+                    cancel_event=cancel_event,
+                ),
+                input_data=prepared.messages,
+            )
+        except RequestCancelled:
+            if not stream_started:
+                raise
+            event(
+                "response.failed",
+                response={"id": request_id, "object": "response", "status": "failed", "error": {"code": "cancelled", "message": "request cancelled"}},
+            )
+            return
+        except Exception as exc:
+            if not stream_started:
+                raise
+            event(
+                "response.failed",
+                response={"id": request_id, "object": "response", "status": "failed", "error": {"code": "server_error", "message": str(exc)}},
+            )
+            return
+
+        content, tool_calls = result_content_and_tool_calls(result)
+        if content and not streamed_text:
+            emit(content)
+        completed = response_body(
+            response_id=request_id,
+            model=prepared.model,
+            text=content,
+            tool_calls=tool_calls,
+            usage=usage_from_result(result),
+            metadata=openai_machboost_result(
+                result,
+                workspace=prepared.workspace,
+                memory=prepared.memory,
+            ),
+        )
+        output_index = 0
+        if content:
+            item = completed["output"][0]
+            event(
+                "response.output_text.done",
+                item_id=message_item_id,
+                output_index=0,
+                content_index=0,
+                text=content,
+                logprobs=[],
+            )
+            event(
+                "response.content_part.done",
+                item_id=message_item_id,
+                output_index=0,
+                content_index=0,
+                part=item["content"][0],
+            )
+            event("response.output_item.done", output_index=0, item=item)
+            output_index = 1
+        for item in completed["output"][output_index:]:
+            index = output_index
+            event("response.output_item.added", output_index=index, item={**item, "status": "in_progress", "arguments": ""})
+            event(
+                "response.function_call_arguments.delta",
+                item_id=item["id"],
+                output_index=index,
+                delta=item["arguments"],
+            )
+            event(
+                "response.function_call_arguments.done",
+                item_id=item["id"],
+                output_index=index,
+                arguments=item["arguments"],
+            )
+            event("response.output_item.done", output_index=index, item=item)
+            output_index += 1
+        self.remember_exchange(
+            prepared.memory,
+            prepared.workspace,
+            user_text=prepared.user_query,
+            assistant_text=result.text,
+        )
+        event("response.completed", response=completed)
+
+    def handle_anthropic_message(self, payload: dict[str, Any]) -> None:
+        translated = dict(payload)
+        translated["max_tokens"] = int(payload.get("max_tokens") or 1024)
+        if "stop_sequences" in payload:
+            translated["stop"] = payload["stop_sequences"]
+        tools = anthropic_tools(payload.get("tools"))
+        if tools:
+            translated["tools"] = tools
+            translated["tool_choice"] = compatibility_tool_choice(payload.get("tool_choice"))
+        thinking = payload.get("thinking")
+        if isinstance(thinking, dict) and thinking.get("type") == "enabled":
+            translated["reasoning_effort"] = "high"
+        prepared = self.prepare_compat_chat(
+            payload,
+            normalize_messages(anthropic_messages(payload)),
+            openai_options(translated),
+        )
+        request_id = request_identifier(payload, "msg")
+
+        if not bool(payload.get("stream", False)):
+            result = self.run_traced_operation(
+                request_id,
+                "messages",
+                prepared.model,
+                lambda cancel_event: self.runtime.chat(
+                    prepared.runtime_model,
+                    prepared.messages,
+                    options=prepared.options,
+                    context=prepared.context,
+                    cancel_event=cancel_event,
+                ),
+                input_data=prepared.messages,
+            )
+            content, tool_calls = result_content_and_tool_calls(result)
+            self.remember_exchange(
+                prepared.memory,
+                prepared.workspace,
+                user_text=prepared.user_query,
+                assistant_text=result.text,
+            )
+            self.send_json(
+                anthropic_body(
+                    message_id=request_id,
+                    model=prepared.model,
+                    text=content,
+                    thinking=result.thinking,
+                    tool_calls=tool_calls,
+                    usage=usage_from_result(result),
+                    metadata=openai_machboost_result(
+                        result,
+                        workspace=prepared.workspace,
+                        memory=prepared.memory,
+                    ),
+                )
+            )
+            return
+
+        stream_started = False
+        next_block_index = 0
+        thinking_index: Optional[int] = None
+        text_index: Optional[int] = None
+        streamed_thinking = ""
+        streamed_text = ""
+
+        def event(event_type: str, **values: Any) -> None:
+            self.write_named_sse(event_type, {"type": event_type, **values})
+
+        def on_admitted() -> None:
+            nonlocal stream_started
+            self.start_stream("text/event-stream")
+            stream_started = True
+            event(
+                "message_start",
+                message={
+                    "id": request_id,
+                    "type": "message",
+                    "role": "assistant",
+                    "model": prepared.model,
+                    "content": [],
+                    "stop_reason": None,
+                    "stop_sequence": None,
+                    "usage": {"input_tokens": 0, "output_tokens": 0},
+                },
+            )
+
+        def emit_thinking(text: str) -> None:
+            nonlocal thinking_index, next_block_index, streamed_thinking
+            if thinking_index is None:
+                thinking_index = next_block_index
+                next_block_index += 1
+                event(
+                    "content_block_start",
+                    index=thinking_index,
+                    content_block={"type": "thinking", "thinking": "", "signature": ""},
+                )
+            streamed_thinking += text
+            event(
+                "content_block_delta",
+                index=thinking_index,
+                delta={"type": "thinking_delta", "thinking": text},
+            )
+
+        def emit(text: str) -> None:
+            nonlocal text_index, next_block_index, streamed_text
+            if text_index is None:
+                text_index = next_block_index
+                next_block_index += 1
+                event(
+                    "content_block_start",
+                    index=text_index,
+                    content_block={"type": "text", "text": ""},
+                )
+            streamed_text += text
+            event(
+                "content_block_delta",
+                index=text_index,
+                delta={"type": "text_delta", "text": text},
+            )
+
+        try:
+            result = self.run_traced_operation(
+                request_id,
+                "messages",
+                prepared.model,
+                lambda cancel_event: self.runtime.chat(
+                    prepared.runtime_model,
+                    prepared.messages,
+                    options=prepared.options,
+                    context=prepared.context,
+                    emit=None if prepared.options.get("_tools") else emit,
+                    emit_thinking=emit_thinking,
+                    on_admitted=on_admitted,
+                    cancel_event=cancel_event,
+                ),
+                input_data=prepared.messages,
+            )
+        except RequestCancelled:
+            if not stream_started:
+                raise
+            event("error", error={"type": "request_aborted_error", "message": "request cancelled"})
+            return
+        except Exception as exc:
+            if not stream_started:
+                raise
+            event("error", error={"type": "api_error", "message": str(exc)})
+            return
+
+        content, tool_calls = result_content_and_tool_calls(result)
+        if result.thinking and not streamed_thinking:
+            emit_thinking(result.thinking)
+        if content and not streamed_text:
+            emit(content)
+        if thinking_index is not None:
+            event("content_block_stop", index=thinking_index)
+        if text_index is not None:
+            event("content_block_stop", index=text_index)
+        for call in tool_calls:
+            function = dict(call.get("function") or {})
+            arguments = str(function.get("arguments") or "{}")
+            index = next_block_index
+            next_block_index += 1
+            event(
+                "content_block_start",
+                index=index,
+                content_block={
+                    "type": "tool_use",
+                    "id": str(call.get("id") or f"call_{uuid.uuid4().hex[:24]}"),
+                    "name": str(function.get("name") or ""),
+                    "input": {},
+                },
+            )
+            event(
+                "content_block_delta",
+                index=index,
+                delta={"type": "input_json_delta", "partial_json": arguments},
+            )
+            event("content_block_stop", index=index)
+        usage = usage_from_result(result)
+        event(
+            "message_delta",
+            delta={"stop_reason": "tool_use" if tool_calls else "end_turn", "stop_sequence": None},
+            usage={"output_tokens": usage["completion_tokens"]},
+        )
+        self.remember_exchange(
+            prepared.memory,
+            prepared.workspace,
+            user_text=prepared.user_query,
+            assistant_text=result.text,
+        )
+        event("message_stop")
 
     def handle_openai_chat(self, payload: dict[str, Any]) -> None:
         model = required_string(payload, "model")
@@ -3559,6 +4030,11 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
         self.wfile.write(b"data: " + json.dumps(payload, separators=(",", ":")).encode("utf-8") + b"\n\n")
         self.wfile.flush()
 
+    def write_named_sse(self, event: str, payload: dict[str, Any]) -> None:
+        encoded = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        self.wfile.write(f"event: {event}\n".encode("ascii") + b"data: " + encoded + b"\n\n")
+        self.wfile.flush()
+
     def log_message(self, format: str, *args: Any) -> None:
         return
 
@@ -4007,6 +4483,21 @@ def openai_options(payload: dict[str, Any]) -> dict[str, Any]:
         options["_think"] = True
         options["_reasoning_strength"] = str(reasoning_effort)
     return options
+
+
+def compatibility_tool_choice(choice: Any) -> Any:
+    if not isinstance(choice, dict):
+        return choice or "auto"
+    choice_type = str(choice.get("type") or "auto")
+    if choice_type in {"any", "required"}:
+        return "required"
+    if choice_type == "none":
+        return "none"
+    if choice_type in {"tool", "function"}:
+        name = str(choice.get("name") or "").strip()
+        if name:
+            return {"type": "function", "function": {"name": name}}
+    return "auto"
 
 
 def normalize_tools(tools: Any) -> list[dict[str, Any]]:
