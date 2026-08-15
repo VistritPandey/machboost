@@ -18,6 +18,9 @@ public final class Conversation {
     public var title: String
     public var model: String
     public var workspaceID: String?
+    public var contextSummary: String?
+    public var summarizedThrough: Date?
+    public var summaryUpdatedAt: Date?
     public var createdAt: Date
     public var updatedAt: Date
     @Relationship(deleteRule: .cascade, inverse: \ChatMessage.conversation)
@@ -36,6 +39,9 @@ public final class Conversation {
         self.title = title
         self.model = model
         self.workspaceID = workspaceID
+        self.contextSummary = nil
+        self.summarizedThrough = nil
+        self.summaryUpdatedAt = nil
         self.createdAt = createdAt
         self.updatedAt = createdAt
         self.messages = []
