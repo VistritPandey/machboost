@@ -17,11 +17,17 @@ struct ChatView: View {
     @State private var isImporting = false
     @State private var isAddingWorkspace = false
     @State private var showsGenerationControls = false
+    @State private var showsModelBrowser = false
+    @State private var modelSearch = ""
+    @State private var pendingModelDownload: CatalogModel?
+    @State private var isCompactingContext = false
     @FocusState private var composerIsFocused: Bool
     @AppStorage("machboost.chat.maxTokens") private var maxTokens = 512
     @AppStorage("machboost.chat.temperature") private var temperature = 0.2
     @AppStorage("machboost.chat.reasoningStrength") private var reasoningStrength = "medium"
     @AppStorage("machboost.chat.showReasoning") private var showReasoning = true
+    @AppStorage("machboost.chat.autoSummarize") private var autoSummarize = true
+    @AppStorage("machboost.chat.summaryThreshold") private var summaryThreshold = 90
 
     var body: some View {
         VStack(spacing: 0) {
@@ -38,6 +44,26 @@ struct ChatView: View {
             allowsMultipleSelection: true,
             onCompletion: importAttachments
         )
+        .confirmationDialog(
+            "Download model?",
+            isPresented: Binding(
+                get: { pendingModelDownload != nil },
+                set: { if !$0 { pendingModelDownload = nil } }
+            )
+        ) {
+            Button("Download") {
+                guard let model = pendingModelDownload else { return }
+                pendingModelDownload = nil
+                Task { await appState.pull(model: model.name) }
+            }
+            Button("Cancel", role: .cancel) {
+                pendingModelDownload = nil
+            }
+        } message: {
+            if let model = pendingModelDownload {
+                Text(downloadMessage(for: model))
+            }
+        }
         .onAppear {
             selectAvailableModelIfNeeded()
         }
@@ -51,26 +77,42 @@ struct ChatView: View {
 
     private var header: some View {
         HStack(spacing: 12) {
-            Picker("Model", selection: $conversation.model) {
-                ForEach(selectableModels) { model in
-                    Label(
-                        model.displayName,
-                        systemImage: model.supportsVision ? "eye" : "text.bubble"
-                    )
-                    .tag(model.name)
+            Button {
+                showsModelBrowser.toggle()
+            } label: {
+                HStack(spacing: 9) {
+                    Image(systemName: modelIcon(selectedModel))
+                        .foregroundStyle(.green)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(selectedModel?.displayName ?? conversation.model)
+                            .font(.body.weight(.medium))
+                            .lineLimit(1)
+                        if let selectedModel {
+                            Text(modelSubtitle(selectedModel))
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                    }
+                    Spacer(minLength: 8)
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
                 }
-                if !selectableModels.contains(where: { $0.name == conversation.model }) {
-                    Text(conversation.model).tag(conversation.model)
-                }
+                .contentShape(Rectangle())
             }
-            .labelsHidden()
-            .frame(maxWidth: 280)
-
-            if let model = appState.model(named: conversation.model) {
-                Text(model.backend.uppercased())
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                capabilityIcons(for: model)
+            .buttonStyle(.plain)
+            .padding(.horizontal, 10)
+            .frame(width: 330, height: 36)
+            .background(Color(nsColor: .controlBackgroundColor))
+            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
+            }
+            .accessibilityIdentifier("chat-model-picker")
+            .popover(isPresented: $showsModelBrowser, arrowEdge: .bottom) {
+                modelBrowser
             }
 
             workspaceMenu
@@ -89,7 +131,11 @@ struct ChatView: View {
                 generationControls
             }
 
-            if let activeRequestID {
+            if isCompactingContext {
+                Label("Summarizing", systemImage: "text.append")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.green)
+            } else if let activeRequestID {
                 Text(activeRequestID.suffix(8))
                     .font(.caption.monospaced())
                     .foregroundStyle(.secondary)
@@ -97,6 +143,138 @@ struct ChatView: View {
         }
         .padding(.horizontal, 16)
         .frame(height: 48)
+    }
+
+    private var modelBrowser: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.secondary)
+                TextField("Search models", text: $modelSearch)
+                    .textFieldStyle(.plain)
+                Button {
+                    Task { await appState.refreshAll() }
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .buttonStyle(.borderless)
+                .help("Refresh model catalog")
+            }
+            .padding(12)
+
+            Divider()
+
+            if browsableModels.isEmpty {
+                ContentUnavailableView.search(text: modelSearch)
+                    .frame(maxWidth: .infinity, minHeight: 260)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(browsableModels) { model in
+                            modelBrowserRow(model)
+                            Divider()
+                                .padding(.leading, 54)
+                        }
+                    }
+                }
+            }
+
+            Divider()
+            HStack {
+                Label(
+                    "\(browsableModels.filter(\.cached).count) ready on this Mac",
+                    systemImage: "checkmark.circle"
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                Spacer()
+                Text("MLX native models")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.green)
+            }
+            .padding(.horizontal, 12)
+            .frame(height: 38)
+        }
+        .frame(width: 500, height: 470)
+    }
+
+    private func modelBrowserRow(_ model: CatalogModel) -> some View {
+        let loaded = appState.loadedModels.contains {
+            $0.model == model.name || $0.model == model.repository
+        }
+        let downloading = appState.downloads[model.name] != nil
+        let selected = model.name == conversation.model || model.repository == conversation.model
+
+        return Button {
+            if model.cached {
+                conversation.model = model.name
+                conversation.updatedAt = .now
+                try? modelContext.save()
+                showsModelBrowser = false
+            } else if !downloading {
+                pendingModelDownload = model
+            }
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: modelIcon(model))
+                    .font(.title3)
+                    .foregroundStyle(model.supportsReasoning ? Color.green : Color.accentColor)
+                    .frame(width: 30)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 7) {
+                        Text(model.displayName)
+                            .font(.body.weight(.medium))
+                            .lineLimit(1)
+                        if model.recommended {
+                            Text("Recommended")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(.green)
+                        }
+                    }
+                    Text(modelSubtitle(model))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    HStack(spacing: 8) {
+                        ForEach(model.capabilities, id: \.self) { capability in
+                            Text(capability.capitalized)
+                        }
+                        if let contextLength = model.contextLength {
+                            Text("\(contextLength.formatted()) ctx")
+                        }
+                    }
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                }
+
+                Spacer(minLength: 8)
+
+                if downloading {
+                    ProgressView()
+                        .controlSize(.small)
+                } else if loaded {
+                    Label("Loaded", systemImage: "memorychip.fill")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.green)
+                } else if selected {
+                    Image(systemName: "checkmark")
+                        .foregroundStyle(.green)
+                } else if model.cached {
+                    Text("Ready")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Image(systemName: "arrow.down.circle")
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(model.displayName), \(model.cached ? "ready" : "download")")
     }
 
     private var workspaceMenu: some View {
@@ -170,6 +348,7 @@ struct ChatView: View {
             }
         }
         .menuStyle(.borderlessButton)
+        .accessibilityLabel("Repository picker")
         .accessibilityIdentifier("repository-picker")
         .fixedSize(horizontal: true, vertical: false)
         .help(workspaceHelp)
@@ -201,6 +380,23 @@ struct ChatView: View {
             if let contextLength = selectedModel?.contextLength {
                 LabeledContent("Context window", value: contextLength.formatted())
             }
+            Divider()
+            Toggle("Summarize older turns automatically", isOn: $autoSummarize)
+            if autoSummarize {
+                Stepper(value: $summaryThreshold, in: 70...95, step: 5) {
+                    LabeledContent("Summarize at", value: "\(summaryThreshold)%")
+                }
+                LabeledContent(
+                    "Estimated use",
+                    value: contextUsageRatio.formatted(.percent.precision(.fractionLength(0)))
+                )
+            }
+            Button {
+                summarizeNow()
+            } label: {
+                Label("Summarize Now", systemImage: "text.append")
+            }
+            .disabled(isGenerating || compactionCandidates.isEmpty)
         }
         .formStyle(.grouped)
         .frame(width: 300)
@@ -270,9 +466,22 @@ struct ChatView: View {
 
     @ViewBuilder
     private var contextStrip: some View {
-        if !conversation.orderedAttachments.isEmpty {
+        if !conversation.orderedAttachments.isEmpty || conversation.contextSummary != nil {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
+                    if let summaryUpdatedAt = conversation.summaryUpdatedAt {
+                        Label(
+                            "Context summarized \(summaryUpdatedAt.formatted(date: .omitted, time: .shortened))",
+                            systemImage: "text.append"
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.green)
+                        .padding(.horizontal, 8)
+                        .frame(height: 28)
+                        .background(Color.green.opacity(0.1))
+                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                        .help("Older messages remain in chat history but the model receives this summary instead")
+                    }
                     ForEach(conversation.orderedAttachments) { attachment in
                         HStack(spacing: 6) {
                             Image(systemName: attachment.kind == .image ? "photo" : "doc.text")
@@ -371,10 +580,37 @@ struct ChatView: View {
 
     private var selectableModels: [CatalogModel] {
         appState.catalog
-            .filter { $0.cached && $0.support == "ready" }
+            .filter {
+                $0.cached
+                    && $0.support == "ready"
+                    && ($0.backend.hasPrefix("mlx") || $0.backend == "dflash")
+            }
             .sorted { lhs, rhs in
                 if lhs.recommended != rhs.recommended { return lhs.recommended }
                 return lhs.displayName < rhs.displayName
+            }
+    }
+
+    private var browsableModels: [CatalogModel] {
+        let query = modelSearch.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return appState.catalog
+            .filter { model in
+                guard
+                    model.support == "ready",
+                    model.backend.hasPrefix("mlx") || model.backend == "dflash"
+                else {
+                    return false
+                }
+                return query.isEmpty
+                    || model.name.lowercased().contains(query)
+                    || model.displayName.lowercased().contains(query)
+                    || (model.repository?.lowercased().contains(query) ?? false)
+            }
+            .sorted { lhs, rhs in
+                if lhs.cached != rhs.cached { return lhs.cached }
+                if lhs.recommended != rhs.recommended { return lhs.recommended }
+                return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName)
+                    == .orderedAscending
             }
     }
 
@@ -408,6 +644,36 @@ struct ChatView: View {
         conversation.model = model.name
         conversation.updatedAt = .now
         try? modelContext.save()
+    }
+
+    private func modelIcon(_ model: CatalogModel?) -> String {
+        guard let model else { return "cpu" }
+        if model.supportsReasoning { return "brain" }
+        if model.supportsVision { return "eye" }
+        if model.supportsTools { return "wrench.and.screwdriver" }
+        return "text.bubble"
+    }
+
+    private func modelSubtitle(_ model: CatalogModel) -> String {
+        var parts = [model.backend.uppercased()]
+        if let memory = model.minimumMemoryGB {
+            parts.append("\(Int(memory)) GB memory")
+        } else if let size = model.diskSizeGB ?? model.downloadSizeGB {
+            parts.append("\(size.formatted(.number.precision(.fractionLength(1)))) GB")
+        }
+        if !model.cached {
+            parts.append("Download required")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    private func downloadMessage(for model: CatalogModel) -> String {
+        var message = "Download \(model.displayName) from Hugging Face?"
+        if let size = model.downloadSizeGB {
+            message += " The estimated download is \(size.formatted(.number.precision(.fractionLength(1)))) GB."
+        }
+        message += " Weights remain in the local Hugging Face cache."
+        return message
     }
 
     private func chooseWorkspace() {
@@ -461,17 +727,11 @@ struct ChatView: View {
 
         let requestID = "chat-\(UUID().uuidString.lowercased())"
         activeRequestID = requestID
-        let apiMessages = conversation.orderedMessages.compactMap { message -> APIChatMessage? in
-            guard message.id != assistant.id else { return nil }
-            let isLastUser = message.id == user.id
-            return APIChatMessage(
-                role: message.role.rawValue,
-                content: message.content,
-                images: isLastUser && !images.isEmpty
-                    ? images.map(\.importedPath)
-                    : nil
-            )
-        }
+        let apiMessages = requestMessages(
+            currentUser: user,
+            excluding: assistant,
+            images: images
+        )
         let request = ChatRequest(
             requestID: requestID,
             model: conversation.model,
@@ -515,6 +775,9 @@ struct ChatView: View {
                     }
                 }
                 try? modelContext.save()
+                if autoSummarize {
+                    await compactContextIfNeeded(force: false)
+                }
             } catch is CancellationError {
                 assistant.wasCancelled = true
             } catch {
@@ -539,6 +802,134 @@ struct ChatView: View {
         Task { @MainActor in
             _ = try? await appState.api.cancel(requestID: activeRequestID)
             generationTask?.cancel()
+        }
+    }
+
+    private func requestMessages(
+        currentUser: ChatMessage,
+        excluding assistant: ChatMessage,
+        images: [ChatAttachment]
+    ) -> [APIChatMessage] {
+        var messages: [APIChatMessage] = []
+        if let summary = conversation.contextSummary, !summary.isEmpty {
+            messages.append(
+                APIChatMessage(
+                    role: MessageRole.system.rawValue,
+                    content: "Conversation summary from earlier turns:\n\n\(summary)"
+                )
+            )
+        }
+        messages.append(contentsOf: conversation.orderedMessages.compactMap { message in
+            guard
+                message.id != assistant.id,
+                conversation.summarizedThrough.map({ message.createdAt > $0 }) ?? true
+            else {
+                return nil
+            }
+            let isCurrentUser = message.id == currentUser.id
+            return APIChatMessage(
+                role: message.role.rawValue,
+                content: message.content,
+                images: isCurrentUser && !images.isEmpty ? images.map(\.importedPath) : nil
+            )
+        })
+        return messages
+    }
+
+    private var contextUsageRatio: Double {
+        let capacity = max(1, (selectedModel?.contextLength ?? 32_768) - maxTokens)
+        return min(
+            1,
+            Double(
+                ConversationCompaction.estimatedTokens(
+                    summary: conversation.contextSummary,
+                    messages: effectiveContextMessages
+                )
+            ) / Double(capacity)
+        )
+    }
+
+    private var effectiveContextMessages: [ChatMessage] {
+        conversation.orderedMessages.filter { message in
+            conversation.summarizedThrough.map({ message.createdAt > $0 }) ?? true
+        }
+    }
+
+    private var compactionCandidates: [ChatMessage] {
+        ConversationCompaction.candidates(
+            messages: effectiveContextMessages,
+            keepRecent: 8
+        )
+    }
+
+    private func summarizeNow() {
+        guard !isGenerating, !compactionCandidates.isEmpty else { return }
+        generationTask = Task { @MainActor in
+            await compactContextIfNeeded(force: true)
+            activeRequestID = nil
+            generationTask = nil
+        }
+    }
+
+    private func compactContextIfNeeded(force: Bool) async {
+        let threshold = Double(summaryThreshold) / 100
+        guard force || contextUsageRatio >= threshold else { return }
+        let candidates = compactionCandidates
+        guard let cutoff = candidates.last?.createdAt else { return }
+
+        let requestID = "summary-\(UUID().uuidString.lowercased())"
+        activeRequestID = requestID
+        isCompactingContext = true
+        defer { isCompactingContext = false }
+
+        let transcript = candidates.map {
+            "\($0.role.rawValue.uppercased()):\n\($0.content)"
+        }.joined(separator: "\n\n")
+        let prior = conversation.contextSummary.map {
+            "Existing summary:\n\($0)\n\n"
+        } ?? ""
+        let request = ChatRequest(
+            requestID: requestID,
+            model: conversation.model,
+            messages: [
+                APIChatMessage(
+                    role: MessageRole.system.rawValue,
+                    content: """
+                    Compress the supplied conversation into durable working context. Preserve decisions, constraints, file paths, APIs, errors, completed work, unresolved questions, and exact identifiers that future turns may need. Remove repetition and conversational filler. Return only the summary.
+                    """
+                ),
+                APIChatMessage(
+                    role: MessageRole.user.rawValue,
+                    content: prior + transcript
+                ),
+            ],
+            context: [],
+            options: .init(
+                maxTokens: min(1_024, maxTokens),
+                temperature: 0,
+                affinityKey: conversation.workspaceID.map { "workspace:\($0)" }
+                    ?? conversation.id.uuidString
+            ),
+            reasoningStrength: nil
+        )
+
+        var summary = ""
+        do {
+            for try await event in appState.api.streamChat(request) {
+                if let error = event.error { throw MachBoostAPIError.stream(error) }
+                summary += event.message?.content ?? ""
+            }
+            summary = summary.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !summary.isEmpty else { return }
+            conversation.contextSummary = summary
+            conversation.summarizedThrough = cutoff
+            conversation.summaryUpdatedAt = .now
+            conversation.updatedAt = .now
+            try? modelContext.save()
+        } catch is CancellationError {
+            return
+        } catch {
+            appState.presentedError = "The reply completed, but context summarization failed: \(error.localizedDescription)"
         }
     }
 
@@ -631,6 +1022,27 @@ struct ChatView: View {
         }
         .font(.caption)
         .foregroundStyle(.secondary)
+    }
+}
+
+enum ConversationCompaction {
+    static func estimatedTokens(summary: String?, messages: [ChatMessage]) -> Int {
+        let summaryCharacters = summary?.count ?? 0
+        let messageCharacters = messages.reduce(0) { total, message in
+            total + message.content.count + 24
+        }
+        // Local chat tokenizers vary; three characters per token is intentionally
+        // conservative so compaction runs before the backend must truncate.
+        return Int(ceil(Double(summaryCharacters + messageCharacters) / 3))
+    }
+
+    static func candidates(
+        messages: [ChatMessage],
+        keepRecent: Int
+    ) -> [ChatMessage] {
+        let completed = messages.filter { !$0.content.isEmpty && !$0.wasCancelled }
+        guard completed.count > keepRecent else { return [] }
+        return Array(completed.dropLast(keepRecent))
     }
 }
 
