@@ -19,14 +19,16 @@ a separate MachBoost installation.
 - repository workspaces with local indexing, per-conversation selection,
   query-specific code retrieval, file and line citations, and manual reindexing
 - one resident daemon for several models, bounded queues, optional replicas,
-  OpenAI-compatible and Ollama-compatible routes, and live queue, latency,
-  throughput, and memory metrics
+  OpenAI Chat/Responses, Anthropic Messages, and Ollama-compatible routes, plus
+  live queue, latency, throughput, and memory metrics
 - Team and Logs & evals views for scoped employee keys, model allowlists,
   per-key concurrency/rate limits, trace retention, and local evaluations
 - Memory & fallback view for private/shared workspace memory, exact-reuse
   savings, external OpenAI-compatible providers, monthly budgets, and Keychain
   secrets
-- menu-bar lifecycle, optional launch at login, and Sparkle 2 updates
+- automatic conversation compaction near a configurable context threshold
+- menu-bar lifecycle, optional launch at login, automatic update checks, and a
+  manual **Check Now** action
 - localhost serving by default; authenticated LAN serving is opt-in
 
 Chat history and imported attachment copies stay under MachBoost Application
@@ -35,27 +37,27 @@ account, cloud sync, telemetry upload, or automatic model-weight download.
 
 ## Muse Glimmer 30B MLX
 
-MachBoost 0.11 adds a tested catalog entry for Meta's
-`muse-glimmer:30b-mlx`. This model combines text, image input, reasoning, and
-native function-tool output behind the same resident MachBoost endpoint. The
-app can display reasoning separately from the final Markdown response and
-renders returned tool calls as structured data. Tool execution remains the
-responsibility of the connected coding agent or API client.
+`muse-glimmer:30b` resolves to the native Hugging Face conversion
+`mlx-community/Muse-Glimmer-30B-4bit` and runs through the bundled MLX-VLM
+runtime. No Ollama installation is needed. The catalog also recognizes the
+5-bit, 6-bit, 8-bit, BF16, MXFP4, MXFP8, and NVFP4 conversions. Model weights
+are downloaded only after confirmation, and an incomplete cache snapshot is
+not presented as runnable.
 
-Unlike the app's ordinary MLX and MLX-VLM catalog entries, Muse Glimmer uses
-Ollama's native MLX runner. A current Ollama installation is therefore required
-for this model. MachBoost locates both command-line installations and
-`/Applications/Ollama.app`; it does not bundle or modify Ollama. The Models view
-checks that dependency before enabling the download, shows the approximately
-21 GB artifact size, and asks for confirmation. Apple Silicon with at least
-32 GB of unified memory is the conservative supported configuration.
+Muse Glimmer supports text, images, reasoning, and structured function-tool
+output. The app displays reasoning separately from final Markdown and renders
+tool calls as structured data; the connected coding agent or API client remains
+responsible for executing tools. Apple Silicon with at least 32 GB unified
+memory is the conservative recommendation for the 4-bit conversion.
 
-After installation, Muse Glimmer can be used in the app's chat window or by
-OpenAI- and Ollama-compatible clients connected to the app server. Images stay
-attached within the current conversation until removed. Reasoning strength is
-selected per request; the supported levels are low, medium, high, and maximum.
-The model advertises a 131,072-token context window, but practical capacity also
-depends on available unified memory and concurrent workload.
+After installation, Muse Glimmer can be used from chat or through OpenAI Chat,
+OpenAI Responses, Anthropic Messages, and Ollama-compatible endpoints. Images
+remain attached only within the current conversation. The model advertises a
+131,072-token context window, while practical capacity depends on quantization,
+available unified memory, attachments, and concurrent workload.
+
+The legacy alias `muse-glimmer:30b-mlx` remains an explicit compatibility route
+for the older Ollama artifact. It is not selected by the native default alias.
 
 ## Local Development
 
@@ -192,8 +194,9 @@ and stored only as hashes. Request traces default to metadata-only with bounded
 retention; prompt and response content is saved only after the operator selects
 redacted or full mode. The database stays in MachBoost Application Support.
 
-The app uses these stable discovery and control routes in addition to existing
-MachBoost APIs:
+The app uses these stable discovery and control routes in addition to inference
+through `POST /v1/responses`, `POST /v1/messages`, `POST
+/v1/chat/completions`, `POST /api/chat`, and `POST /api/generate`:
 
 - `GET /api/catalog`
 - `GET /api/metrics`
@@ -225,8 +228,8 @@ Build an ad-hoc signed DMG for local packaging and runtime tests without Apple
 credentials:
 
 ```sh
-./scripts/release_macos.sh 0.11.0-local --local
-open dist/macos/MachBoost-0.11.0-local-arm64.dmg
+./scripts/release_macos.sh 0.12.0-local --local
+open dist/macos/MachBoost-0.12.0-local-arm64.dmg
 ```
 
 Local mode builds the locked runtime, archives the arm64 app, embeds and signs
@@ -245,14 +248,14 @@ export MACHBOOST_DEVELOPER_ID='Developer ID Application: ...'
 export MACHBOOST_NOTARY_PROFILE=...
 export SPARKLE_PUBLIC_ED_KEY=...
 export SPARKLE_PRIVATE_KEY=/secure/path/to/sparkle-private-key
-./scripts/release_macos.sh 0.11.0
-./scripts/publish_macos_release.sh 0.11.0 ./release-notes/0.11.0.md
+./scripts/release_macos.sh 0.12.0
+./scripts/publish_macos_release.sh 0.12.0 ./release-notes/0.12.0.md
 ```
 
 The release script builds the embedded runtime, archives the arm64 app, signs
 nested Mach-O files and the app, creates and notarizes a DMG, staples the
 ticket, runs Gatekeeper verification, writes a SHA-256 checksum, and produces a
-signed Sparkle appcast. The publisher requires an existing `v0.11.0` tag, an
+signed Sparkle appcast. The publisher requires an existing `v0.12.0` tag, an
 authenticated GitHub CLI session, and an explicit release-notes file. It refuses
 to overwrite an existing release and uploads the DMG, checksum, and appcast to
 the matching GitHub release.
