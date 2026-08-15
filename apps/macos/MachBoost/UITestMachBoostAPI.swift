@@ -127,7 +127,7 @@ final class UITestMachBoostAPI: MachBoostAPIProtocol, @unchecked Sendable {
                         return
                     }
                     if
-                        request.model == "muse-glimmer:30b-mlx",
+                        request.model == "muse-glimmer:30b",
                         request.messages.last?.content == "Use Muse tools"
                     {
                         continuation.yield(
@@ -286,14 +286,14 @@ final class UITestMachBoostAPI: MachBoostAPIProtocol, @unchecked Sendable {
                 memory: 4
             ),
             model(
-                name: "muse-glimmer:30b-mlx",
-                displayName: "Muse Glimmer 30B MLX",
-                repository: nil,
-                backend: "ollama-mlx",
+                name: "muse-glimmer:30b",
+                displayName: "Muse Glimmer 30B",
+                repository: "mlx-community/Muse-Glimmer-30B-4bit",
+                backend: "mlx-vlm",
                 capabilities: ["chat", "completion", "vision", "reasoning", "tools"],
-                cached: !startsEmpty || downloadedModels.contains("muse-glimmer:30b-mlx"),
+                cached: !startsEmpty || downloadedModels.contains("muse-glimmer:30b"),
                 recommended: true,
-                size: 21,
+                size: 6,
                 memory: 32,
                 contextLength: 131_072,
                 sourceRepository: "meta-models/Muse-Glimmer-30B"
