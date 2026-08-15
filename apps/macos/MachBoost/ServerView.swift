@@ -322,6 +322,8 @@ struct ServerView: View {
                 .font(.caption)
                 .foregroundStyle(appState.configuration.lanEnabled ? Color.green : Color.secondary)
             }
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("developer-endpoint-section")
 
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
@@ -367,7 +369,15 @@ struct ServerView: View {
 
             modelLoader
 
-            SnippetView(title: "OpenAI Python", code: openAISnippet)
+            HStack(spacing: 8) {
+                ProtocolBadge(title: "OpenAI Responses", systemImage: "sparkles")
+                ProtocolBadge(title: "Anthropic Messages", systemImage: "hammer.fill")
+                ProtocolBadge(title: "Ollama API", systemImage: "terminal.fill")
+            }
+
+            SnippetView(title: "OpenAI Responses", code: openAISnippet)
+            SnippetView(title: "Codex custom provider", code: codexSnippet)
+            SnippetView(title: "Claude Code gateway", code: claudeCodeSnippet)
             SnippetView(title: "Ollama-compatible curl", code: ollamaSnippet)
         }
     }
@@ -421,6 +431,8 @@ struct ServerView: View {
                     .disabled(newKeyName.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
             }
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("team-key-section")
 
             if let token = appState.lastCreatedTeamToken {
                 VStack(alignment: .leading, spacing: 8) {
@@ -479,7 +491,29 @@ struct ServerView: View {
                 }
             }
 
-            SnippetView(title: "Coding agent environment", code: teamEnvironmentSnippet)
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Coding fleet readiness")
+                    .font(.headline)
+                HStack(spacing: 16) {
+                    ReadinessItem(
+                        title: "LAN endpoint",
+                        ready: appState.configuration.lanEnabled
+                    )
+                    ReadinessItem(
+                        title: "Native model",
+                        ready: !appState.loadedModels.filter { $0.backend != "ollama-mlx" }.isEmpty
+                    )
+                    ReadinessItem(
+                        title: "Employee keys",
+                        ready: !appState.teamKeys.isEmpty
+                    )
+                    Spacer()
+                }
+            }
+
+            SnippetView(title: "Team environment", code: teamEnvironmentSnippet)
+            SnippetView(title: "Codex config.toml", code: codexSnippet)
+            SnippetView(title: "Claude Code", code: claudeCodeSnippet)
         }
     }
 
@@ -768,14 +802,20 @@ struct ServerView: View {
     }
 
     private var teamEnvironmentSnippet: String {
-        let endpoint = appState.configuration.lanEnabled
+        return """
+        export OPENAI_BASE_URL="\(teamEndpoint)/v1"
+        export OPENAI_API_KEY="YOUR_MACHBOOST_KEY"
+        export OLLAMA_HOST="\(teamEndpoint)"
+        export ANTHROPIC_BASE_URL="\(teamEndpoint)"
+        export ANTHROPIC_AUTH_TOKEN="YOUR_MACHBOOST_KEY"
+        export ANTHROPIC_MODEL="\(preferredServerModel)"
+        """
+    }
+
+    private var teamEndpoint: String {
+        appState.configuration.lanEnabled
             ? appState.configuration.advertisedEndpoint.absoluteString
             : "http://YOUR_MACHBOOST_MAC_IP:\(appState.configuration.port)"
-        return """
-        export OPENAI_BASE_URL="\(endpoint)/v1"
-        export OPENAI_API_KEY="YOUR_MACHBOOST_KEY"
-        export OLLAMA_HOST="\(endpoint)"
-        """
     }
 
     private var filteredMemories: [MemorySummary] {
@@ -799,7 +839,11 @@ struct ServerView: View {
 
     private var loadableModels: [CatalogModel] {
         appState.catalog
-            .filter { $0.cached && $0.support == "ready" }
+            .filter {
+                $0.cached
+                    && $0.support == "ready"
+                    && ($0.backend.hasPrefix("mlx") || $0.backend == "dflash")
+            }
             .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
     }
 
@@ -823,12 +867,52 @@ struct ServerView: View {
                     .foregroundStyle(.secondary)
             } else {
                 HStack(spacing: 12) {
-                    Picker("Model", selection: $loadModel) {
+                    Menu {
                         ForEach(loadableModels) { model in
-                            Text(model.displayName).tag(model.name)
+                            Button {
+                                loadModel = model.name
+                            } label: {
+                                Label(
+                                    model.displayName,
+                                    systemImage: model.capabilities.contains("vision")
+                                        ? "eye.fill"
+                                        : "text.bubble.fill"
+                                )
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(
+                                systemName: selectedLoadModel?.capabilities.contains("vision") == true
+                                    ? "eye.fill"
+                                    : "memorychip.fill"
+                            )
+                            .foregroundStyle(.green)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(selectedLoadModel?.displayName ?? "Select model")
+                                    .font(.body.weight(.medium))
+                                    .lineLimit(1)
+                                if let model = selectedLoadModel {
+                                    Text(modelLoaderSubtitle(model))
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                }
+                            }
+                            Spacer(minLength: 8)
+                            Image(systemName: "chevron.up.chevron.down")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.horizontal, 10)
+                        .frame(width: 340, height: 48)
+                        .background(Color(nsColor: .textBackgroundColor))
+                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
                         }
                     }
-                    .frame(maxWidth: 340)
                     .accessibilityIdentifier("resident-model-picker")
 
                     Picker("Keep loaded", selection: $loadKeepAlive) {
@@ -887,6 +971,12 @@ struct ServerView: View {
         }
     }
 
+    private func modelLoaderSubtitle(_ model: CatalogModel) -> String {
+        let size = model.diskSizeGB ?? model.downloadSizeGB
+        let sizeText = size.map { "\($0.formatted(.number.precision(.fractionLength(1)))) GB" }
+        return ([model.backend.uppercased(), sizeText].compactMap { $0 }).joined(separator: " · ")
+    }
+
     private func traceSelection(_ id: String) -> Binding<Bool> {
         Binding(
             get: { selectedTraceIDs.contains(id) },
@@ -917,12 +1007,47 @@ struct ServerView: View {
             base_url="\(appState.configuration.advertisedEndpoint.absoluteString)/v1",
             api_key="\(token)",
         )
-        response = client.chat.completions.create(
-            model="llama3.2:3b",
-            messages=[{"role": "user", "content": "Hello"}],
+        response = client.responses.create(
+            model="\(preferredServerModel)",
+            input="Inspect this repository and propose the smallest fix.",
         )
-        print(response.choices[0].message.content)
+        print(response.output_text)
         """
+    }
+
+    private var codexSnippet: String {
+        """
+        model = "\(preferredServerModel)"
+        model_provider = "machboost"
+
+        [model_providers.machboost]
+        name = "MachBoost"
+        base_url = "\(teamEndpoint)/v1"
+        env_key = "MACHBOOST_API_KEY"
+        wire_api = "responses"
+
+        # In the employee shell:
+        # export MACHBOOST_API_KEY="YOUR_MACHBOOST_KEY"
+        """
+    }
+
+    private var claudeCodeSnippet: String {
+        """
+        export ANTHROPIC_BASE_URL="\(teamEndpoint)"
+        export ANTHROPIC_AUTH_TOKEN="YOUR_MACHBOOST_KEY"
+        export ANTHROPIC_MODEL="\(preferredServerModel)"
+        claude
+        """
+    }
+
+    private var preferredServerModel: String {
+        if let loaded = appState.loadedModels.first(where: { $0.backend != "ollama-mlx" }) {
+            return loaded.model
+        }
+        if let selectedLoadModel {
+            return selectedLoadModel.name
+        }
+        return "qwen2.5-coder:7b"
     }
 
     private var ollamaSnippet: String {
@@ -932,7 +1057,7 @@ struct ServerView: View {
         return """
         curl \(appState.configuration.advertisedEndpoint.absoluteString)/api/chat \\
         \(authorization)  -H 'Content-Type: application/json' \\
-          -d '{"model":"llama3.2:3b","messages":[{"role":"user","content":"Hello"}]}'
+          -d '{"model":"\(preferredServerModel)","messages":[{"role":"user","content":"Hello"}]}'
         """
     }
 
@@ -973,6 +1098,32 @@ private struct MetricTile: View {
         .frame(minWidth: 150, minHeight: 64)
         .background(Color(nsColor: .controlBackgroundColor))
         .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+    }
+}
+
+private struct ProtocolBadge: View {
+    let title: String
+    let systemImage: String
+
+    var body: some View {
+        Label(title, systemImage: systemImage)
+            .font(.caption.weight(.medium))
+            .foregroundStyle(.green)
+            .padding(.horizontal, 9)
+            .frame(height: 28)
+            .background(Color.green.opacity(0.1))
+            .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+    }
+}
+
+private struct ReadinessItem: View {
+    let title: String
+    let ready: Bool
+
+    var body: some View {
+        Label(title, systemImage: ready ? "checkmark.circle.fill" : "circle")
+            .font(.callout.weight(.medium))
+            .foregroundStyle(ready ? Color.green : Color.secondary)
     }
 }
 
