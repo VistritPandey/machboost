@@ -32,9 +32,13 @@ final class AppState {
     var presentedError: String?
 
     init() {
+        let environment = ProcessInfo.processInfo.environment
         let configuration = Self.loadConfiguration()
-        let token = KeychainStore.token()
-        let usesUITestAPI = ProcessInfo.processInfo.environment["MACHBOOST_UI_TESTING"] == "1"
+        let usesUITestAPI = environment["MACHBOOST_UI_TESTING"] == "1"
+        let isTesting = usesUITestAPI
+            || environment["MACHBOOST_TESTING"] == "1"
+            || environment["XCTestConfigurationFilePath"] != nil
+        let token = isTesting ? nil : KeychainStore.token()
         self.usesUITestAPI = usesUITestAPI
         self.configuration = configuration
         self.apiToken = token
