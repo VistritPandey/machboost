@@ -391,7 +391,26 @@ class FakeClock:
 class RuntimeManagerTests(unittest.TestCase):
     def test_download_progress_survives_tqdm_initialization_updates(self):
         events = []
-        progress_type = download_progress_class(events.append, None)
+
+        class DisabledProgress:
+            def __init__(self, *_args, **kwargs):
+                self.disable = bool(kwargs.get("disable"))
+
+            def update(self, _amount=1):
+                return None
+
+            def close(self):
+                return None
+
+        fake_tqdm = types.ModuleType("tqdm")
+        fake_auto = types.ModuleType("tqdm.auto")
+        fake_auto.tqdm = DisabledProgress
+        fake_tqdm.auto = fake_auto
+        with patch.dict(
+            sys.modules,
+            {"tqdm": fake_tqdm, "tqdm.auto": fake_auto},
+        ):
+            progress_type = download_progress_class(events.append, None)
 
         progress = progress_type(total=10, desc="weights.safetensors")
         progress.update(1)
