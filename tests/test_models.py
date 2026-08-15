@@ -104,26 +104,37 @@ class ModelCatalogTests(unittest.TestCase):
             ),
         )
 
-    def test_muse_glimmer_alias_selects_official_ollama_mlx_backend(self):
-        for alias in ("muse-glimmer:30b", "muse-glimmer:30b-mlx"):
-            with self.subTest(alias=alias):
-                resolution = resolve_model(alias)
-                self.assertEqual(resolution.backend, "ollama-mlx")
-                self.assertEqual(resolution.model, "muse-glimmer:30b-mlx")
-                self.assertEqual(resolution.alias, "muse-glimmer:30b-mlx")
+    def test_muse_glimmer_alias_prefers_native_mlx_vlm(self):
+        with patch("machboost.models.native_mlx_vlm_available", return_value=True):
+            resolution = resolve_model("muse-glimmer:30b")
+
+        self.assertEqual(resolution.backend, "mlx-vlm")
+        self.assertEqual(
+            resolution.model,
+            "mlx-community/Muse-Glimmer-30B-4bit",
+        )
+        self.assertEqual(resolution.alias, "muse-glimmer:30b")
+
+    def test_muse_glimmer_keeps_explicit_ollama_mlx_fallback(self):
+        resolution = resolve_model("muse-glimmer:30b-mlx")
+        self.assertEqual(resolution.backend, "ollama-mlx")
+        self.assertEqual(resolution.model, "muse-glimmer:30b-mlx")
 
     def test_muse_glimmer_rejects_incompatible_backend_override(self):
         with self.assertRaisesRegex(ValueError, "requires Ollama's MLX backend"):
             resolve_model("muse-glimmer:30b-mlx", backend="mlx-vlm")
 
-    def test_muse_glimmer_lists_ollama_model_as_lifecycle_target(self):
+    def test_muse_glimmer_lists_native_repository_as_lifecycle_target(self):
         self.assertEqual(
             model_repositories("muse-glimmer:30b"),
-            ("muse-glimmer:30b-mlx",),
+            ("mlx-community/Muse-Glimmer-30B-4bit",),
         )
         self.assertEqual(
             model_targets("muse-glimmer:30b"),
-            {"muse-glimmer:30b-mlx"},
+            {
+                "mlx-community/Muse-Glimmer-30B-4bit",
+                "meta-models/Muse-Glimmer-30B",
+            },
         )
 
     def test_catalog_rows_are_stable_and_sorted(self):
@@ -177,16 +188,19 @@ class ModelCatalogTests(unittest.TestCase):
                 rows = catalog_rows(include_cached_repositories=False)
                 preflight = preflight_model("muse-glimmer:30b-mlx")
 
-        muse = next(row for row in rows if row["name"] == "muse-glimmer:30b-mlx")
-        self.assertEqual(muse["backend"], "ollama-mlx")
+        muse = next(row for row in rows if row["name"] == "muse-glimmer:30b")
+        ollama_fallback = next(
+            row for row in rows if row["name"] == "muse-glimmer:30b-mlx"
+        )
+        self.assertEqual(muse["backend"], "mlx-vlm")
         self.assertEqual(
             muse["capabilities"],
             ["chat", "completion", "vision", "reasoning", "tools"],
         )
         self.assertEqual(muse["context_length"], 131_072)
-        self.assertEqual(muse["disk_size_gb"], 21.0)
-        self.assertTrue(muse["cached"])
         self.assertTrue(muse["recommended"])
+        self.assertEqual(ollama_fallback["disk_size_gb"], 21.0)
+        self.assertTrue(ollama_fallback["cached"])
         self.assertTrue(preflight["supported"])
         self.assertEqual(preflight["model_type"], "muse_glimmer")
 
@@ -263,6 +277,7 @@ class ModelCatalogTests(unittest.TestCase):
                 json.dumps({"model_type": "future_model"}),
                 encoding="utf-8",
             )
+            Path(snapshot, "weights.safetensors").write_bytes(b"weights")
             with (
                 patch("machboost.models.cached_repo_path", return_value=None),
                 patch("machboost.models.backend_available", return_value=True),
@@ -319,12 +334,31 @@ class ModelCatalogTests(unittest.TestCase):
             snapshot = Path(directory, "snapshots", "revision")
             snapshot.mkdir(parents=True)
             Path(snapshot, "config.json").write_text("{}", encoding="utf-8")
+            Path(snapshot, "weights.safetensors").write_bytes(b"weights")
             hub = types.ModuleType("huggingface_hub")
             hub.snapshot_download = lambda **_: str(snapshot)
             with patch.dict(sys.modules, {"huggingface_hub": hub}):
                 result = cached_repo_path("organization/model")
 
         self.assertEqual(result, snapshot.resolve())
+
+    def test_cached_repo_path_rejects_partial_index_without_weight_shards(self):
+        with tempfile.TemporaryDirectory() as directory:
+            snapshot = Path(directory, "snapshots", "revision")
+            snapshot.mkdir(parents=True)
+            Path(snapshot, "config.json").write_text("{}", encoding="utf-8")
+            Path(snapshot, "model.safetensors.index.json").write_text(
+                json.dumps(
+                    {"weight_map": {"layer": "model-00001-of-00002.safetensors"}}
+                ),
+                encoding="utf-8",
+            )
+            hub = types.ModuleType("huggingface_hub")
+            hub.snapshot_download = lambda **_: str(snapshot)
+            with patch.dict(sys.modules, {"huggingface_hub": hub}):
+                result = cached_repo_path("organization/model")
+
+        self.assertIsNone(result)
 
     def test_alias_targets_include_both_native_backends(self):
         self.assertEqual(
