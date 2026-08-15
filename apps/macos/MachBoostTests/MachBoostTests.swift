@@ -71,18 +71,18 @@ final class MachBoostTests: XCTestCase {
             {
               "schema":"machboost.catalog.v1",
               "models":[{
-                "name":"muse-glimmer:30b-mlx",
-                "display_name":"Muse Glimmer 30B MLX",
-                "repository":null,
+                "name":"muse-glimmer:30b",
+                "display_name":"Muse Glimmer 30B",
+                "repository":"mlx-community/Muse-Glimmer-30B-4bit",
                 "source_repository":"meta-models/Muse-Glimmer-30B",
-                "backend":"ollama-mlx",
+                "backend":"mlx-vlm",
                 "capabilities":["chat","completion","vision","reasoning","tools"],
                 "cached":true,
-                "cached_path":"/tmp/manifest",
+                "cached_path":"/tmp/model",
                 "recommended":true,
                 "tested":true,
                 "download_size_gb":21.0,
-                "disk_size_gb":21.0,
+                "disk_size_gb":6.0,
                 "minimum_memory_gb":32.0,
                 "context_length":131072,
                 "support":"ready",
@@ -119,7 +119,7 @@ final class MachBoostTests: XCTestCase {
         )
         let request = ChatRequest(
             requestID: "muse-chat-1",
-            model: "muse-glimmer:30b-mlx",
+            model: "muse-glimmer:30b",
             messages: [.init(role: "user", content: "Find cancellation.")],
             context: [],
             options: .init(maxTokens: 256, temperature: 1, affinityKey: "repo-1"),
@@ -167,8 +167,67 @@ final class MachBoostTests: XCTestCase {
         XCTAssertEqual(workspace.languages.first?.name, "Python")
     }
 
+    func testConversationCompactionKeepsRecentCompletedTurns() {
+        let conversation = Conversation(model: "qwen2.5:3b")
+        let messages = (0..<12).map { index in
+            ChatMessage(
+                role: index.isMultiple(of: 2) ? .user : .assistant,
+                content: "message-\(index)",
+                createdAt: Date(timeIntervalSince1970: Double(index)),
+                conversation: conversation
+            )
+        }
+        conversation.messages = messages
+
+        let candidates = ConversationCompaction.candidates(
+            messages: conversation.orderedMessages,
+            keepRecent: 8
+        )
+
+        XCTAssertEqual(candidates.map(\.content), ["message-0", "message-1", "message-2", "message-3"])
+        XCTAssertEqual(candidates.last?.createdAt, Date(timeIntervalSince1970: 3))
+    }
+
+    func testConversationCompactionSkipsEmptyAndCancelledMessages() {
+        let completed = ChatMessage(role: .user, content: "keep")
+        let empty = ChatMessage(role: .assistant, content: "")
+        let cancelled = ChatMessage(role: .assistant, content: "cancelled")
+        cancelled.wasCancelled = true
+
+        let candidates = ConversationCompaction.candidates(
+            messages: [completed, empty, cancelled],
+            keepRecent: 0
+        )
+
+        XCTAssertEqual(candidates.map(\.content), ["keep"])
+        XCTAssertGreaterThan(
+            ConversationCompaction.estimatedTokens(
+                summary: "prior summary",
+                messages: [completed]
+            ),
+            0
+        )
+    }
+
+    func testConversationCompactionEstimatesConservatively() {
+        let conversation = Conversation()
+        let message = ChatMessage(
+            role: .user,
+            content: String(repeating: "a", count: 276),
+            conversation: conversation
+        )
+
+        XCTAssertEqual(
+            ConversationCompaction.estimatedTokens(
+                summary: String(repeating: "b", count: 24),
+                messages: [message]
+            ),
+            108
+        )
+    }
+
     @MainActor
-    func testCommunityUpdaterRejectsPlaceholderKeyAndOpensReleases() {
+    func testCommunityUpdaterRejectsPlaceholderKeyAndDefaultsToReleaseChecks() {
         let releasesURL = URL(string: "https://example.com/releases/latest")!
         let defaultsName = "MachBoostTests.community-updates.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: defaultsName)!
@@ -185,7 +244,7 @@ final class MachBoostTests: XCTestCase {
         XCTAssertTrue(updates.isAvailable)
         XCTAssertTrue(updates.supportsAutomaticUpdates)
         XCTAssertTrue(updates.automaticallyChecksForUpdates)
-        XCTAssertEqual(updates.actionTitle, "View latest release")
+        XCTAssertEqual(updates.actionTitle, "Check Now")
         XCTAssertEqual(
             updates.deliveryDescription,
             "Checks GitHub Releases; community installation is manual"
@@ -194,9 +253,8 @@ final class MachBoostTests: XCTestCase {
         updates.automaticallyChecksForUpdates = false
         XCTAssertFalse(updates.automaticallyChecksForUpdates)
 
-        updates.checkForUpdates()
-
-        XCTAssertEqual(openedURL, releasesURL)
+        updates.downloadUpdate()
+        XCTAssertNil(openedURL)
     }
 
     @MainActor
@@ -217,6 +275,10 @@ final class MachBoostTests: XCTestCase {
         XCTAssertTrue(updates.communityCheckCompleted)
         XCTAssertFalse(updates.communityCheckFailed)
         XCTAssertEqual(updates.latestCommunityVersion, "v0.12.0")
+        XCTAssertTrue(updates.updateAvailable)
+        XCTAssertTrue(updates.canDownloadUpdate)
+        XCTAssertEqual(updates.downloadTitle, "Download v0.12.0")
+        XCTAssertNotNil(updates.lastCheckedAt)
         XCTAssertEqual(
             updates.deliveryDescription,
             "v0.12.0 is available on GitHub; installation is manual"
@@ -265,7 +327,7 @@ final class MachBoostTests: XCTestCase {
             ChatAttachment.self,
             configurations: configuration
         )
-        let conversation = Conversation(model: "muse-glimmer:30b-mlx")
+        let conversation = Conversation(model: "muse-glimmer:30b")
         let message = ChatMessage(
             role: .assistant,
             content: "Checking now.",
@@ -655,7 +717,7 @@ final class MachBoostTests: XCTestCase {
         )
         let request = ChatRequest(
             requestID: "muse-stream-1",
-            model: "muse-glimmer:30b-mlx",
+            model: "muse-glimmer:30b",
             messages: [.init(role: "user", content: "Find cancellation.")],
             context: [],
             options: .init(maxTokens: 64, temperature: 1, affinityKey: nil),
@@ -730,13 +792,57 @@ final class MachBoostTests: XCTestCase {
     }
 
     @MainActor
-    func testDaemonStartsAndShutsDownFromSourceRuntime() async throws {
-        let sourceRoot = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-        let manager = DaemonManager(sourceRootOverride: sourceRoot)
+    func testDaemonStartsAndShutsDownFromIsolatedSourceRuntime() async throws {
+        let temporaryRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("machboost-source-\(UUID().uuidString)", isDirectory: true)
+        let packageRoot = temporaryRoot.appendingPathComponent("machboost", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: packageRoot,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: temporaryRoot) }
+        try "".write(
+            to: packageRoot.appendingPathComponent("__init__.py"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try """
+        import argparse
+        import json
+        import threading
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, format, *args):
+                pass
+
+            def send_json(self, payload):
+                body = json.dumps(payload).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_GET(self):
+                self.send_json({"status": "ok"})
+
+            def do_POST(self):
+                self.send_json({"status": "stopping"})
+                threading.Thread(target=self.server.shutdown, daemon=True).start()
+
+        parser = argparse.ArgumentParser(add_help=False)
+        parser.add_argument("command")
+        parser.add_argument("--host", default="127.0.0.1")
+        parser.add_argument("--port", type=int, required=True)
+        args, _ = parser.parse_known_args()
+        HTTPServer((args.host, args.port), Handler).serve_forever()
+        """.write(
+            to: packageRoot.appendingPathComponent("cli.py"),
+            atomically: true,
+            encoding: .utf8
+        )
+        let manager = DaemonManager(sourceRootOverride: temporaryRoot)
         var configuration = ServerConfiguration()
         configuration.port = 19_435
         do {
