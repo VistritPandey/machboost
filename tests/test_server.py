@@ -22,6 +22,7 @@ from machboost.server import (
     OperationRegistry,
     RequestCancelled,
     RuntimeManager,
+    download_progress_class,
     load_accelerator,
     model_config,
     parse_keep_alive,
@@ -388,6 +389,18 @@ class FakeClock:
 
 
 class RuntimeManagerTests(unittest.TestCase):
+    def test_download_progress_survives_tqdm_initialization_updates(self):
+        events = []
+        progress_type = download_progress_class(events.append, None)
+
+        progress = progress_type(total=10, desc="weights.safetensors")
+        progress.update(1)
+        progress.close()
+
+        self.assertEqual(events[-1]["file"], "weights.safetensors")
+        self.assertEqual(events[-1]["completed"], 1)
+        self.assertEqual(events[-1]["total"], 10)
+
     def test_muse_glimmer_uses_ollama_mlx_backend_and_loader(self):
         config = model_config("muse-glimmer:30b-mlx", {})
         sentinel = object()
