@@ -1,0 +1,70 @@
+{
+  "schema": "machboost.native-workspace-team-benchmark.v1",
+  "recorded_at": "2026-08-15T19:16:35.768557+00:00",
+  "model": "mlx-community/Qwen2.5-3B-Instruct-4bit",
+  "hardware": {
+    "processor": "Apple M5 Pro",
+    "memory_bytes": 51539607552,
+    "cpu_count": 18,
+    "machine": "arm64",
+    "macos": "26.6.1"
+  },
+  "runtime": {
+    "python": "3.13.3",
+    "machboost": "0.11.0",
+    "mlx": "0.31.2",
+    "mlx_lm": "0.31.3"
+  },
+  "workspace": {
+    "visibility": "private",
+    "eligible_files": 8843,
+    "indexed_chunks": 26394,
+    "source_paths_prompts_outputs_omitted": true
+  },
+  "paired_same_model": {
+    "questions": 10,
+    "different_question_rows": 9,
+    "generation": "greedy",
+    "max_tokens": 48,
+    "retrieval_top_k": 12,
+    "retrieval_max_chars": 48000,
+    "median_prompt_tokens": 10265.0,
+    "median_cached_prompt_tokens": 8409.5,
+    "median_native_wall_seconds": 3.5007170625030994,
+    "median_machboost_wall_seconds": 1.1861045205005212,
+    "median_paired_speedup": 2.893826758486437,
+    "median_different_question_speedup": 2.890888065084883,
+    "exact_token_pairs": 10,
+    "valid": true
+  },
+  "hosted_ten_client_diagnostic": {
+    "clients": 10,
+    "measured_requests_per_mode": 20,
+    "replicas": 1,
+    "max_tokens": 48,
+    "cache_off": {
+      "requests_per_second": 0.2673213406397708,
+      "median_latency_seconds": 20.47368131300027,
+      "median_time_to_first_token_seconds": 19.821061624999857,
+      "median_queue_wait_seconds": 16.646441395496367
+    },
+    "cache_on": {
+      "requests_per_second": 1.3514828127328598,
+      "median_latency_seconds": 4.120708750517224,
+      "median_time_to_first_token_seconds": 3.342388375007431,
+      "median_queue_wait_seconds": 3.1576300419983454
+    },
+    "throughput_ratio": 5.055648791444796,
+    "median_latency_ratio": 4.968485411746329,
+    "median_time_to_first_token_ratio": 5.93020900060897,
+    "byte_identical_control_pairs": 16,
+    "total_control_pairs": 20,
+    "valid_exactness_claim": false
+  },
+  "limitations": [
+    "The paired result measures reusable repository-prefix prefill, not output-token decode.",
+    "The first workspace request and a changed workspace revision must rebuild reusable state.",
+    "The hosted diagnostic is reported separately because four of twenty outputs differed from the uncached control.",
+    "This is a single-machine, single-model measurement and is not a universal speedup claim."
+  ]
+}
