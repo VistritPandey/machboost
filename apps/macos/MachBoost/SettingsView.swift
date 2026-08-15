@@ -15,26 +15,58 @@ struct SettingsView: View {
                     Toggle("Launch MachBoost at login", isOn: $launchAtLogin)
                         .accessibilityIdentifier("launch-at-login")
                         .onChange(of: launchAtLogin, updateLoginItem)
-                    Toggle("Automatically check for updates", isOn: $automaticUpdates)
+                }
+
+                Section("Updates") {
+                    HStack(alignment: .top, spacing: 12) {
+                        Image(systemName: updateIcon)
+                            .font(.title2)
+                            .foregroundStyle(updateColor)
+                            .frame(width: 28)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(updates.deliveryDescription)
+                                .font(.body.weight(.medium))
+                            Text(updateDetail)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Text("v\(version)")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Toggle("Check for new releases automatically", isOn: $automaticUpdates)
                         .accessibilityIdentifier("automatic-updates")
                         .onChange(of: automaticUpdates) {
                             updates.automaticallyChecksForUpdates = automaticUpdates
                         }
                         .disabled(!updates.supportsAutomaticUpdates)
-                    LabeledContent("Updates") {
-                        Text(updates.deliveryDescription)
-                            .foregroundStyle(.secondary)
+
+                    HStack {
+                        Button {
+                            updates.checkForUpdates()
+                        } label: {
+                            if updates.isChecking {
+                                ProgressView()
+                                    .controlSize(.small)
+                            } else {
+                                Label(updates.actionTitle, systemImage: "arrow.clockwise")
+                            }
+                        }
+                        .disabled(!updates.isAvailable || updates.isChecking)
+                        .accessibilityIdentifier("check-for-updates")
+
+                        if updates.canDownloadUpdate {
+                            Button {
+                                updates.downloadUpdate()
+                            } label: {
+                                Label(updates.downloadTitle, systemImage: "arrow.down.circle")
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .accessibilityIdentifier("download-update")
+                        }
                     }
-                    LabeledContent("Version") {
-                        Text(version)
-                            .foregroundStyle(.secondary)
-                    }
-                    Button {
-                        updates.checkForUpdates()
-                    } label: {
-                        Label(updates.actionTitle, systemImage: "arrow.down.circle")
-                    }
-                    .disabled(!updates.isAvailable)
                 }
 
                 Section("Storage") {
@@ -79,6 +111,32 @@ struct SettingsView: View {
     private var version: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
             ?? "Development"
+    }
+
+    private var updateIcon: String {
+        if updates.isChecking { return "arrow.triangle.2.circlepath" }
+        if updates.updateAvailable { return "arrow.down.circle.fill" }
+        if updates.communityCheckFailed { return "exclamationmark.triangle.fill" }
+        return "checkmark.circle.fill"
+    }
+
+    private var updateColor: Color {
+        if updates.updateAvailable { return .green }
+        if updates.communityCheckFailed { return .orange }
+        return .secondary
+    }
+
+    private var updateDetail: String {
+        if updates.supportsAutomaticUpdates {
+            if updates.canDownloadUpdate {
+                return "Community builds check automatically; download and approval remain manual."
+            }
+            if let date = updates.lastCheckedAt {
+                return "Last checked \(date.formatted(date: .abbreviated, time: .shortened))."
+            }
+            return "Automatic checks are enabled by default. Signed builds install with Sparkle."
+        }
+        return "Update checks are unavailable in this build."
     }
 
     private var applicationSupportURL: URL {
