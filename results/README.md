@@ -15,6 +15,30 @@ The artifacts measure different mechanisms and should not be combined into one h
 
 Results below are single-machine experiments unless stated otherwise. Ratios of medians and medians of paired ratios are different statistics and are labeled separately.
 
+## Native Workspace And Team Serving, August 15 2026
+
+Artifact: `native_workspace_team_qwen25_3b_20260815.json`
+
+Model: `mlx-community/Qwen2.5-3B-Instruct-4bit`
+
+Hardware: Apple M5 Pro, 48 GB unified memory
+
+A same-loaded-model audit asked ten questions over an 8,843-file private
+repository. Baseline and MachBoost used identical weights, tokenizer, complete
+prompts, greedy generation, and 48 output tokens. Only native MLX prefix reuse
+differed. Median wall time fell from 3.501 to 1.186 seconds (`2.894x`), and all
+ten token sequences matched exactly. The median request reused 8,409.5 of
+10,265 prompt tokens. This is reusable-prefix prefill evidence, not faster
+output decoding or a first-request claim.
+
+A separate hosted diagnostic issued twenty measured requests from ten
+simultaneous clients to one model replica. Enabling workspace prefix reuse
+raised throughput from 0.267 to 1.351 requests/s (`5.06x`) and reduced median
+time to first token from 19.821 to 3.342 seconds. Only 16/20 outputs were
+byte-identical to the uncached control. That observation is useful for finding
+the next concurrency gate, but it is not accepted as exact-path performance or
+quality-equivalence evidence.
+
 ## Muse Glimmer 30B MLX, August 11 2026
 
 Artifact: `muse_glimmer_30b_mlx_20260811.json`
