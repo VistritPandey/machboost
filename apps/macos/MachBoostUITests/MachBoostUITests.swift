@@ -22,7 +22,7 @@ final class MachBoostUITests: XCTestCase {
         let repository = app.descendants(matching: .any)["repository-picker"]
 
         XCTAssertTrue(repository.waitForExistence(timeout: 20))
-        repository.click()
+        focus(repository)
 
         XCTAssertTrue(app.menuItems["No Repository"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.menuItems["Open Repository..."].exists)
@@ -36,10 +36,20 @@ final class MachBoostUITests: XCTestCase {
         let developerTab = app.radioButtons["Developer"]
         XCTAssertTrue(developerTab.waitForExistence(timeout: 3))
         developerTab.click()
-        XCTAssertTrue(app.staticTexts["Local endpoint"].exists)
-        XCTAssertTrue(app.staticTexts["127.0.0.1 is reachable only from this Mac."].exists)
-        XCTAssertTrue(app.buttons["Enable authenticated LAN access"].exists)
-        XCTAssertTrue(app.staticTexts["OpenAI Python"].exists)
+        XCTAssertTrue(
+            app.descendants(matching: .any)["developer-endpoint-section"]
+                .waitForExistence(timeout: 3)
+        )
+        XCTAssertTrue(app.staticTexts["Local endpoint"].waitForExistence(timeout: 3))
+        XCTAssertTrue(
+            app.staticTexts["127.0.0.1 is reachable only from this Mac."]
+                .waitForExistence(timeout: 3)
+        )
+        XCTAssertTrue(
+            app.buttons["Enable authenticated LAN access"].waitForExistence(timeout: 3)
+        )
+        XCTAssertTrue(app.staticTexts["OpenAI Responses"].exists)
+        XCTAssertTrue(app.staticTexts["Anthropic Messages"].exists)
         XCTAssertTrue(app.staticTexts["P50 latency"].exists)
         XCTAssertTrue(app.staticTexts["240 ms"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["P95 latency"].exists)
@@ -71,9 +81,14 @@ final class MachBoostUITests: XCTestCase {
         let teamTab = app.radioButtons["Team"]
         XCTAssertTrue(teamTab.waitForExistence(timeout: 3))
         teamTab.click()
-        XCTAssertTrue(app.staticTexts["Create employee key"].exists)
+        XCTAssertTrue(
+            app.descendants(matching: .any)["team-key-section"]
+                .waitForExistence(timeout: 3)
+        )
+        XCTAssertTrue(app.staticTexts["Create employee key"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.textFields["Name"].exists)
-        XCTAssertTrue(app.staticTexts["Coding agent environment"].exists)
+        XCTAssertTrue(app.staticTexts["Coding fleet readiness"].exists)
+        XCTAssertTrue(app.staticTexts["Team environment"].exists)
 
         let logsTab = app.radioButtons["Logs & evals"]
         XCTAssertTrue(logsTab.exists)
@@ -101,7 +116,7 @@ final class MachBoostUITests: XCTestCase {
     @MainActor
     func testMuseChatShowsReasoningControlsAndToolCalls() {
         let app = launchApp(environment: [
-            "MACHBOOST_UI_TEST_MODEL": "muse-glimmer:30b-mlx"
+            "MACHBOOST_UI_TEST_MODEL": "muse-glimmer:30b"
         ])
         let controls = app.buttons["Generation controls"]
         XCTAssertTrue(controls.waitForExistence(timeout: 10))
@@ -175,6 +190,22 @@ final class MachBoostUITests: XCTestCase {
         )
         XCTAssertEqual(XCTWaiter.wait(for: [finished], timeout: 5), .completed)
         XCTAssertTrue(app.staticTexts["Downloaded"].firstMatch.exists)
+    }
+
+    @MainActor
+    func testChatModelBrowserSearchesNativeModels() {
+        let app = launchApp()
+        let picker = app.buttons["chat-model-picker"]
+        XCTAssertTrue(picker.waitForExistence(timeout: 10))
+        picker.click()
+
+        let search = app.textFields["Search models"]
+        XCTAssertTrue(search.waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["MLX native models"].exists)
+        search.typeText("Muse")
+
+        XCTAssertTrue(app.buttons["Muse Glimmer 30B, ready"].waitForExistence(timeout: 3))
+        XCTAssertFalse(app.buttons["Qwen2.5 3B, ready"].exists)
     }
 
     @MainActor
@@ -255,7 +286,7 @@ final class MachBoostUITests: XCTestCase {
         let automaticUpdates = app.switches["automatic-updates"]
         XCTAssertTrue(automaticUpdates.exists)
         XCTAssertEqual(String(describing: automaticUpdates.value ?? ""), "1")
-        XCTAssertTrue(app.buttons["View latest release"].exists)
+        XCTAssertTrue(app.buttons["check-for-updates"].exists)
         XCTAssertTrue(
             app.staticTexts[
                 "Checks GitHub Releases; community installation is manual"
