@@ -1297,17 +1297,34 @@ def download_progress_class(
 
     class MachBoostDownloadProgress(tqdm):
         def __init__(self, *args, **kwargs):
+            self._machboost_desc = kwargs.get("desc") or "model files"
+            self._machboost_completed = int(kwargs.get("initial") or 0)
+            self._machboost_total = kwargs.get("total")
+            self._machboost_unit = kwargs.get("unit") or "B"
             if progress is not None:
                 kwargs["disable"] = True
             super().__init__(*args, **kwargs)
+            self._sync_progress_state()
             self._report()
 
         def update(self, amount=1):
             check_cancelled(cancel_event)
             result = super().update(amount)
+            if getattr(self, "disable", False):
+                self._machboost_completed += int(amount or 0)
+            else:
+                self._sync_progress_state()
             self._report()
             check_cancelled(cancel_event)
             return result
+
+        def _sync_progress_state(self) -> None:
+            self._machboost_desc = getattr(self, "desc", None) or self._machboost_desc
+            self._machboost_completed = int(
+                getattr(self, "n", self._machboost_completed) or 0
+            )
+            self._machboost_total = getattr(self, "total", self._machboost_total)
+            self._machboost_unit = getattr(self, "unit", None) or self._machboost_unit
 
         def _report(self) -> None:
             if progress is None:
@@ -1315,10 +1332,14 @@ def download_progress_class(
             progress(
                 {
                     "status": "downloading",
-                    "file": str(self.desc or "model files"),
-                    "completed": int(self.n),
-                    "total": int(self.total) if self.total is not None else None,
-                    "unit": str(self.unit or "B"),
+                    "file": str(self._machboost_desc),
+                    "completed": self._machboost_completed,
+                    "total": (
+                        int(self._machboost_total)
+                        if self._machboost_total is not None
+                        else None
+                    ),
+                    "unit": str(self._machboost_unit),
                 }
             )
 
