@@ -102,6 +102,8 @@ def run_request(
             "num_predict": args.max_tokens,
             "temperature": args.temperature,
         }
+        if args.workspace_id:
+            options["workspace_prefix_cache"] = args.prompt_cache_enabled
         if args.mode == "chat":
             response = client.chat(
                 args.model,
@@ -111,6 +113,10 @@ def run_request(
                 affinity_key=affinity_key,
                 queue_timeout=args.queue_timeout,
                 stream=False,
+                workspace_id=args.workspace_id,
+                workspace_query=(args.workspace_query or prompt) if args.workspace_id else None,
+                workspace_top_k=args.workspace_top_k,
+                workspace_max_chars=args.workspace_max_chars,
             )
             output = str((response.get("message") or {}).get("content") or "")
         else:
@@ -161,6 +167,10 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
     endpoint = args.endpoint.rstrip("/")
     client_factory = lambda: MachBoostClient(endpoint, timeout=args.timeout)
     preload_started = time.perf_counter()
+    if args.workspace_prefix_cache is not None:
+        args.prompt_cache_enabled = args.workspace_prefix_cache == "on"
+    else:
+        args.prompt_cache_enabled = bool(args.workspace_id)
     preload = client_factory().load(
         args.model,
         options={"backend": args.backend},
@@ -230,6 +240,11 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
             "temperature": args.temperature,
             "queue_timeout_seconds": args.queue_timeout,
             "affinity_prefix": args.affinity_prefix,
+            "workspace_id": args.workspace_id,
+            "workspace_query": args.workspace_query,
+            "workspace_top_k": args.workspace_top_k,
+            "workspace_max_chars": args.workspace_max_chars,
+            "workspace_prefix_cache": args.prompt_cache_enabled,
         },
         "preload": {
             "wall_seconds": preload_wall,
@@ -287,6 +302,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--timeout", type=float, default=300.0)
     parser.add_argument("--keep-alive", default="forever")
     parser.add_argument("--affinity-prefix")
+    parser.add_argument("--workspace-id")
+    parser.add_argument(
+        "--workspace-query",
+        help="Use one stable repository retrieval query while request prompts remain unique.",
+    )
+    parser.add_argument("--workspace-top-k", type=int, default=12)
+    parser.add_argument("--workspace-max-chars", type=int, default=48_000)
+    parser.add_argument(
+        "--workspace-prefix-cache",
+        choices=["on", "off"],
+        help="Explicitly enable or disable native repository-prefix reuse.",
+    )
     parser.add_argument("--prompt", default=DEFAULT_PROMPT)
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--output", type=Path)
