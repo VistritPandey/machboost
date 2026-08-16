@@ -161,6 +161,10 @@ enum CodingWorkspace {
         mutatingTools.contains(call.function.name)
     }
 
+    static func supports(_ call: APIToolCall) -> Bool {
+        tools.contains { $0.function.name == call.function.name }
+    }
+
     static func tools(for mode: CodingPermissionMode) -> [APIToolDefinition] {
         guard mode == .plan else { return tools }
         return tools.filter { !mutatingTools.contains($0.function.name) }
