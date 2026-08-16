@@ -4,9 +4,24 @@ import MachBoostPersistence
 
 enum SidebarDestination: Hashable {
     case conversation(UUID)
+    case connections
     case models
     case server
     case settings
+}
+
+enum InferenceMode: String, Codable, CaseIterable, Sendable {
+    case local
+    case team
+}
+
+struct TeamHostProfile: Codable, Identifiable, Equatable, Sendable {
+    let id: UUID
+    var endpoint: URL
+    var hostName: String
+    var hostVersion: String
+    var principalName: String
+    var connectedAt: Date
 }
 
 typealias MessageRole = MachBoostPersistence.MessageRole
@@ -35,6 +50,9 @@ typealias ServerMetrics = MachBoostDaemonClient.ServerMetrics
 typealias TeamStatus = MachBoostDaemonClient.TeamStatus
 typealias TeamSettings = MachBoostDaemonClient.TeamSettings
 typealias TeamKey = MachBoostDaemonClient.TeamKey
+typealias TeamConnectResponse = MachBoostDaemonClient.TeamConnectResponse
+typealias TeamClient = MachBoostDaemonClient.TeamClient
+typealias TeamModelRequest = MachBoostDaemonClient.TeamModelRequest
 typealias TraceSummary = MachBoostDaemonClient.TraceSummary
 typealias TraceEvaluation = MachBoostDaemonClient.TraceEvaluation
 typealias MemorySummary = MachBoostDaemonClient.MemorySummary
