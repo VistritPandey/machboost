@@ -4843,27 +4843,29 @@ def extract_tool_calls(text: str) -> tuple[str, list[dict[str, Any]]]:
     if direct_payload:
         return "", calls
     content = _TOOL_CALL_TAG.sub("", raw)
+    content = re.sub(
+        r"<\|(?:start|message|end|call|channel)\|>",
+        "",
+        content,
+        flags=re.I,
+    )
     if calls:
-        content = re.sub(
-            r"<\|(?:start|message|end|call|channel)\|>",
-            "",
-            content,
-            flags=re.I,
-        )
         content = re.sub(
             r"^\s*assistant\s+to\s*=\s*[A-Za-z_][\w.-]*\s*",
             "",
             content,
             flags=re.I,
         )
+    content = re.sub(r"<tool_call\b[^>]*(?:>.*)?$", "", content, flags=re.S | re.I)
     return content.strip(), calls
 
 
 def result_content_and_tool_calls(
     result: GenerationResult,
 ) -> tuple[str, list[dict[str, Any]]]:
+    content, extracted_calls = extract_tool_calls(result.text)
     if not result.tool_calls:
-        return extract_tool_calls(result.text)
+        return content, extracted_calls
     calls: list[dict[str, Any]] = []
     for raw_call in result.tool_calls:
         function = dict(raw_call.get("function") or {})
@@ -4880,7 +4882,7 @@ def result_content_and_tool_calls(
                 "function": {"name": name, "arguments": arguments},
             }
         )
-    return result.text, calls
+    return content, calls
 
 
 def ollama_tool_calls(calls: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
