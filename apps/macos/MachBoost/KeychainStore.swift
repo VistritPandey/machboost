@@ -17,6 +17,18 @@ enum KeychainStore {
         value(account: "team-host-\(profileID.uuidString.lowercased())")
     }
 
+    static func providerSecretAsync(id: String) async -> String? {
+        await Task.detached(priority: .userInitiated) {
+            providerSecret(id: id)
+        }.value
+    }
+
+    static func teamTokenAsync(profileID: UUID) async -> String? {
+        await Task.detached(priority: .userInitiated) {
+            teamToken(profileID: profileID)
+        }.value
+    }
+
     private static func value(account: String) -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -57,12 +69,30 @@ enum KeychainStore {
         return try generateToken()
     }
 
+    static func tokenOrCreateAsync() async throws -> String {
+        try await Task.detached(priority: .userInitiated) {
+            try tokenOrCreate()
+        }.value
+    }
+
+    static func generateTokenAsync() async throws -> String {
+        try await Task.detached(priority: .userInitiated) {
+            try generateToken()
+        }.value
+    }
+
     static func save(token: String) throws {
         try save(value: token, account: account)
     }
 
     static func saveProviderSecret(_ secret: String, id: String) throws {
         try save(value: secret, account: "provider-\(id)")
+    }
+
+    static func saveProviderSecretAsync(_ secret: String, id: String) async throws {
+        try await Task.detached(priority: .userInitiated) {
+            try saveProviderSecret(secret, id: id)
+        }.value
     }
 
     static func saveTeamToken(_ token: String, profileID: UUID) throws {
@@ -72,12 +102,30 @@ enum KeychainStore {
         )
     }
 
+    static func saveTeamTokenAsync(_ token: String, profileID: UUID) async throws {
+        try await Task.detached(priority: .userInitiated) {
+            try saveTeamToken(token, profileID: profileID)
+        }.value
+    }
+
     static func deleteProviderSecret(id: String) throws {
         try delete(account: "provider-\(id)")
     }
 
+    static func deleteProviderSecretAsync(id: String) async throws {
+        try await Task.detached(priority: .userInitiated) {
+            try deleteProviderSecret(id: id)
+        }.value
+    }
+
     static func deleteTeamToken(profileID: UUID) throws {
         try delete(account: "team-host-\(profileID.uuidString.lowercased())")
+    }
+
+    static func deleteTeamTokenAsync(profileID: UUID) async throws {
+        try await Task.detached(priority: .userInitiated) {
+            try deleteTeamToken(profileID: profileID)
+        }.value
     }
 
     private static func delete(account: String) throws {
