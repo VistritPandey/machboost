@@ -31,6 +31,7 @@ struct CodingToolResult: Sendable {
 }
 
 enum CodingToolState: String, Codable, Hashable, Sendable {
+    case requested
     case queued
     case running
     case succeeded
