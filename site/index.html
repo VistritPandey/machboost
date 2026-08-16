@@ -42,6 +42,7 @@
         <div class="nav-links">
           <a href="#product">Product</a>
           <a href="#team">Teams</a>
+          <a href="#architecture">Architecture</a>
           <a href="#benchmarks">Benchmarks</a>
           <a href="#install">Install</a>
           <a
@@ -62,6 +63,7 @@
       <nav id="mobile-nav" class="mobile-nav shell" aria-label="Mobile navigation" hidden>
         <a href="#product">Product</a>
         <a href="#team">Teams</a>
+        <a href="#architecture">Architecture</a>
         <a href="#benchmarks">Benchmarks</a>
         <a href="#install">Install</a>
         <a href="https://github.com/VistritPandey/machboost">GitHub</a>
@@ -152,8 +154,8 @@
               <i data-lucide="folder-git-2" aria-hidden="true"></i>
               <h3>Repository intelligence</h3>
               <p>
-                Index tracked source once, retrieve focused evidence per question, and
-                share the reusable repository prefix across independent team threads.
+                Keep repository access on the developer's Mac. Bounded read, search,
+                and approved write tools send only the evidence needed for each turn.
               </p>
             </li>
             <li>
@@ -196,9 +198,9 @@
               resident while MachBoost enforces model access, concurrency, request
               rates, and fair queueing between employees. Revision-aware memory can
               reuse validated repository knowledge without exposing private work,
-              while a shared workspace prefix avoids repeating the same repository
-              prefill in every employee thread. Budgeted external providers remain an
-              explicit fallback.
+              while exact reusable prefixes can avoid repeated prefill when requests
+              genuinely overlap. Budgeted external providers remain an explicit
+              fallback.
             </p>
             <a
               class="text-link"
@@ -227,8 +229,8 @@ export OPENAI_API_KEY="mbk_employee_key"</code></pre>
         <div class="shell team-capabilities">
           <div>
             <i data-lucide="users" aria-hidden="true"></i>
-            <h3>Govern access</h3>
-            <p>Model allowlists, scoped keys, per-minute limits, and revocation from the native app.</p>
+            <h3>Connect the desktop fleet</h3>
+            <p>Employees use the same MachBoost chat and coding UI while inference runs on the host.</p>
           </div>
           <div>
             <i data-lucide="brain-circuit" aria-hidden="true"></i>
@@ -240,6 +242,91 @@ export OPENAI_API_KEY="mbk_employee_key"</code></pre>
             <h3>Route, inspect, evaluate</h3>
             <p>Apply provider budgets and transient fallback, inspect local traces, then evaluate selected requests.</p>
           </div>
+        </div>
+      </section>
+
+      <section id="architecture" class="architecture-section section">
+        <div class="shell">
+          <div class="section-heading section-heading-light">
+            <p class="kicker">Architecture</p>
+            <h2>Repos stay with developers. Models stay with the host.</h2>
+            <p>
+              MachBoost uses a hub-and-spoke design. Client apps execute scoped
+              repository tools locally; the host receives chat context and tool
+              results, then schedules generation across resident native MLX models.
+            </p>
+          </div>
+
+          <div class="architecture-diagram" role="img" aria-label="MachBoost team architecture with developer clients connected through an authenticated gateway to resident MLX models">
+            <div class="architecture-layer architecture-clients">
+              <div class="architecture-layer-title">
+                <span>Developer Macs</span>
+                <small>Local workspace boundary</small>
+              </div>
+              <div class="architecture-nodes architecture-nodes-three">
+                <div class="architecture-node">
+                  <i data-lucide="laptop" aria-hidden="true"></i>
+                  <strong>MachBoost app</strong>
+                  <span>Chat, coding mode, approvals</span>
+                </div>
+                <div class="architecture-node">
+                  <i data-lucide="folder-search" aria-hidden="true"></i>
+                  <strong>Repository tools</strong>
+                  <span>Bounded list, read, search, edit</span>
+                </div>
+                <div class="architecture-node">
+                  <i data-lucide="square-terminal" aria-hidden="true"></i>
+                  <strong>Existing agents</strong>
+                  <span>OpenAI, Anthropic, Ollama APIs</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="architecture-link">
+              <span><i data-lucide="shield-check" aria-hidden="true"></i> Scoped key · streaming · cancellation · selected context</span>
+            </div>
+
+            <div class="architecture-layer architecture-host">
+              <div class="architecture-layer-title">
+                <span>Team host Mac</span>
+                <small>One authenticated endpoint</small>
+              </div>
+              <div class="architecture-nodes architecture-nodes-four">
+                <div class="architecture-node architecture-node-accent">
+                  <i data-lucide="route" aria-hidden="true"></i>
+                  <strong>Smart gateway</strong>
+                  <span>Keys, allowlists, protocol adapters</span>
+                </div>
+                <div class="architecture-node">
+                  <i data-lucide="list-ordered" aria-hidden="true"></i>
+                  <strong>Admission</strong>
+                  <span>Limits, bounded queue, replicas</span>
+                </div>
+                <div class="architecture-node">
+                  <i data-lucide="database-zap" aria-hidden="true"></i>
+                  <strong>Reusable state</strong>
+                  <span>Exact prefixes and reviewed memory</span>
+                </div>
+                <div class="architecture-node architecture-node-model">
+                  <i data-lucide="memory-stick" aria-hidden="true"></i>
+                  <strong>Resident MLX pool</strong>
+                  <span>Text, vision, reasoning, tools</span>
+                </div>
+              </div>
+              <div class="architecture-observability">
+                <span><i data-lucide="monitor-dot" aria-hidden="true"></i> Device presence</span>
+                <span><i data-lucide="activity" aria-hidden="true"></i> Queue and throughput</span>
+                <span><i data-lucide="clipboard-check" aria-hidden="true"></i> Optional traces and evals</span>
+                <span><i data-lucide="package-plus" aria-hidden="true"></i> Host-approved model requests</span>
+              </div>
+            </div>
+          </div>
+
+          <p class="architecture-note">
+            Repository paths and credentials are not sent as host presence metadata.
+            Writes are applied on the client only after approval. Cache acceleration
+            requires reusable work; a fully unique request still runs the target model.
+          </p>
         </div>
       </section>
 
