@@ -121,7 +121,7 @@ final class AppState {
     }
 
     var teamIsConnected: Bool {
-        inferenceMode == .team && teamHost != nil && !teamCatalog.isEmpty
+        inferenceMode == .team && teamHost != nil && teamClient != nil
     }
 
     func connectToTeamHost(endpoint rawEndpoint: String, token: String) async {
@@ -138,11 +138,6 @@ final class AppState {
                 deviceID: deviceID
             )
             let connected = try await remote.teamConnect()
-            guard !connected.models.isEmpty else {
-                throw AppStateError.invalidTeamHost(
-                    "The host has no compatible cached model available for this key."
-                )
-            }
             let profile = TeamHostProfile(
                 id: profileID,
                 endpoint: endpoint,
