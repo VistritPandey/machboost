@@ -95,7 +95,7 @@ final class MachBoostTests: XCTestCase {
 
     func testCodingWorkspaceRejectsMalformedLegacyToolNames() {
         let valid = APIToolCall(
-            function: .init(name: "list_files", arguments: .object([:]))
+            function: .init(name: "search_repository", arguments: .object([:]))
         )
         let malformed = APIToolCall(
             function: .init(name: "list_files<|message|", arguments: .object([:]))
