@@ -167,13 +167,22 @@ final class MachBoostUITests: XCTestCase {
 
         send("Exercise coding agent", in: app)
 
-        XCTAssertTrue(app.staticTexts["Listed files in Sources"].waitForExistence(timeout: 15))
-        XCTAssertTrue(app.staticTexts["Read Sources/App.swift"].waitForExistence(timeout: 10))
+        XCTAssertTrue(
+            app.descendants(matching: .any)["tool-call-list_files"]
+                .waitForExistence(timeout: 15)
+        )
+        XCTAssertTrue(
+            app.descendants(matching: .any)["tool-call-read_file"]
+                .waitForExistence(timeout: 10)
+        )
         let approval = app.sheets.buttons["Apply Change"]
         XCTAssertTrue(approval.waitForExistence(timeout: 10))
         approval.click()
 
-        XCTAssertTrue(app.staticTexts["Edited Sources/App.swift"].waitForExistence(timeout: 10))
+        XCTAssertTrue(
+            app.descendants(matching: .any)["tool-call-replace_in_file"]
+                .waitForExistence(timeout: 10)
+        )
         XCTAssertTrue(
             app.staticTexts["Reviewed the repository after three tool results."]
                 .waitForExistence(timeout: 10)
