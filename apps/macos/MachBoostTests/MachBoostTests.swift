@@ -328,11 +328,28 @@ final class MachBoostTests: XCTestCase {
             configurations: configuration
         )
         let conversation = Conversation(model: "muse-glimmer:30b")
+        var activity = CodingToolActivity(
+            call: APIToolCall(
+                id: "search-1",
+                type: "function",
+                function: .init(
+                    name: "search_code",
+                    arguments: .object(["query": .string("repository")])
+                )
+            )
+        )
+        activity.state = .succeeded
+        activity.output = #"{"matches":[]}"#
+        let activityJSON = String(
+            decoding: try JSONEncoder().encode([activity]),
+            as: UTF8.self
+        )
         let message = ChatMessage(
             role: .assistant,
             content: "Checking now.",
             reasoningContent: "I should search the repository.",
             toolCallsJSON: "[{\"function\":{\"name\":\"search_repository\"}}]",
+            toolActivityJSON: activityJSON,
             conversation: conversation
         )
         conversation.messages.append(message)
@@ -342,6 +359,12 @@ final class MachBoostTests: XCTestCase {
         let stored = try XCTUnwrap(conversation.orderedMessages.first)
         XCTAssertEqual(stored.reasoningContent, "I should search the repository.")
         XCTAssertTrue(stored.toolCallsJSON?.contains("search_repository") ?? false)
+        let storedActivities = try JSONDecoder().decode(
+            [CodingToolActivity].self,
+            from: Data(try XCTUnwrap(stored.toolActivityJSON).utf8)
+        )
+        XCTAssertEqual(storedActivities.first?.state, .succeeded)
+        XCTAssertEqual(storedActivities.first?.call.function.name, "search_code")
     }
 
     @MainActor
@@ -668,8 +691,18 @@ final class MachBoostTests: XCTestCase {
             )
         )
         XCTAssertTrue(CodingWorkspace.isMutating(replace))
-        _ = try CodingWorkspace.execute(replace, workspaceRoot: root.path)
+        let replaceResult = try CodingWorkspace.execute(replace, workspaceRoot: root.path)
         XCTAssertTrue(try String(contentsOf: source, encoding: .utf8).contains("hello team"))
+        XCTAssertEqual(replaceResult.changedPath, "Sources/App.swift")
+        XCTAssertTrue(replaceResult.changePatch?.contains("-hello") ?? false)
+        XCTAssertTrue(replaceResult.changePatch?.contains("+hello team") ?? false)
+        XCTAssertEqual(
+            CodingWorkspace.fileURL(
+                relativePath: "Sources/App.swift",
+                workspaceRoot: root.path
+            ),
+            source
+        )
 
         let escape = APIToolCall(
             function: .init(
@@ -678,6 +711,47 @@ final class MachBoostTests: XCTestCase {
             )
         )
         XCTAssertThrowsError(try CodingWorkspace.execute(escape, workspaceRoot: root.path))
+    }
+
+    func testCodingToolActivitiesRoundTripMultipleCallsAndFormatResults() throws {
+        let calls = [
+            APIToolCall(
+                id: "list-1",
+                type: "function",
+                function: .init(
+                    name: "list_files",
+                    arguments: .object(["path": .string("Sources")])
+                )
+            ),
+            APIToolCall(
+                id: "read-1",
+                type: "function",
+                function: .init(
+                    name: "read_file",
+                    arguments: .object(["path": .string("Sources/App.swift")])
+                )
+            ),
+        ]
+        var activities = calls.map { CodingToolActivity(call: $0) }
+        activities[0].state = .succeeded
+        activities[0].output = #"{"files":["Sources/App.swift"],"truncated":false}"#
+        activities[1].state = .running
+
+        let decoded = try JSONDecoder().decode(
+            [CodingToolActivity].self,
+            from: JSONEncoder().encode(activities)
+        )
+
+        XCTAssertEqual(decoded.map(\.call.function.name), ["list_files", "read_file"])
+        XCTAssertEqual(decoded.map(\.state), [.succeeded, .running])
+        XCTAssertEqual(
+            CodingWorkspace.displayResult(try XCTUnwrap(decoded[0].output)),
+            "Sources/App.swift"
+        )
+        XCTAssertEqual(
+            CodingWorkspace.activitySummary(of: decoded[1].call),
+            "Read Sources/App.swift"
+        )
     }
 
     func testCodingWorkspaceRejectsSymlinkEscapesAndAmbiguousWrites() throws {
