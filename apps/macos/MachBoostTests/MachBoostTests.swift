@@ -39,6 +39,7 @@ final class MachBoostTests: XCTestCase {
         )
 
         let message = ChatMessage(role: .assistant, content: "Done")
+        message.wasCancelled = true
         metrics.apply(to: message)
 
         XCTAssertEqual(metrics.rounds, 2)
@@ -46,6 +47,7 @@ final class MachBoostTests: XCTestCase {
         XCTAssertEqual(message.tokensPerSecond ?? 0, 20, accuracy: 0.001)
         XCTAssertEqual(message.durationSeconds ?? 0, 3, accuracy: 0.001)
         XCTAssertEqual(message.timeToFirstTokenSeconds, 0.25)
+        XCTAssertTrue(message.wasCancelled)
     }
 
     func testCodingPermissionModesApplyDistinctWritePolicies() {
