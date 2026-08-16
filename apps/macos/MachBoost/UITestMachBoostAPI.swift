@@ -200,7 +200,10 @@ final class UITestMachBoostAPI: MachBoostAPIProtocol, @unchecked Sendable {
     }
 
     private func isCodingFixture(_ request: ChatRequest) -> Bool {
-        request.messages.contains {
+        let explicitlyEnabled = ProcessInfo.processInfo.environment[
+            "MACHBOOST_UI_TEST_CODING"
+        ] == "1"
+        return (explicitlyEnabled && request.tools?.isEmpty == false) || request.messages.contains {
             $0.role == "user" && $0.content == "Exercise coding agent"
         }
     }
