@@ -161,6 +161,70 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(post.call_args_list[0].args[1]["max_concurrent"], 3)
         self.assertEqual(get.call_args_list[0].args[0], "/api/traces?limit=25")
 
+    def test_client_exposes_team_desktop_and_model_request_helpers(self):
+        client = MachBoostClient(
+            self.client.endpoint,
+            api_token="mbk_team",
+            device_id="device-42",
+        )
+        with (
+            patch.object(
+                client,
+                "get",
+                side_effect=[
+                    {"schema": "machboost.team-connect.v1", "models": []},
+                    {"clients": [{"device_id": "device-42"}]},
+                    {"requests": [{"id": "modelreq_1", "status": "pending"}]},
+                ],
+            ) as get,
+            patch.object(
+                client,
+                "post",
+                side_effect=[
+                    {"client": {"device_id": "device-42", "online": True}},
+                    {"request": {"id": "modelreq_1", "status": "pending"}},
+                    {"request": {"id": "modelreq_1", "status": "downloaded"}},
+                ],
+            ) as post,
+        ):
+            connection = client.team_connect()
+            clients = client.team_clients(active_within_seconds=90)
+            requests = client.team_model_requests(status="pending", limit=20)
+            presence = client.report_team_presence(
+                "Developer Mac",
+                "0.13.0",
+                workspace_name="checkout-service",
+                workspace_fingerprint="abc123",
+            )
+            requested = client.request_team_model(
+                "mlx-community/Muse-Glimmer-30B-4bit",
+                note="Vision work",
+            )
+            resolved = client.resolve_team_model_request(
+                "modelreq_1",
+                status="downloaded",
+            )
+
+        self.assertEqual(connection["schema"], "machboost.team-connect.v1")
+        self.assertEqual(clients[0]["device_id"], "device-42")
+        self.assertEqual(requests[0]["status"], "pending")
+        self.assertTrue(presence["online"])
+        self.assertEqual(requested["status"], "pending")
+        self.assertEqual(resolved["status"], "downloaded")
+        self.assertIn("active_within_seconds=90.0", get.call_args_list[1].args[0])
+        self.assertIn("status=pending", get.call_args_list[2].args[0])
+        self.assertEqual(post.call_args_list[0].args[1]["device_id"], "device-42")
+        self.assertNotIn("workspace_path", post.call_args_list[0].args[1])
+        self.assertEqual(post.call_args_list[1].args[1]["device_id"], "device-42")
+
+    def test_client_adds_device_header_to_inference_requests(self):
+        client = MachBoostClient(self.client.endpoint, device_id="device-42")
+
+        self.assertEqual(
+            client._headers()["X-MachBoost-Device-ID"],
+            "device-42",
+        )
+
     def test_client_forwards_workspace_chat_options(self):
         with patch.object(self.client, "post", return_value={"done": True}) as post:
             self.client.chat(
