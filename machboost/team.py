@@ -208,6 +208,199 @@ class TeamStore:
             )
         return cursor.rowcount > 0
 
+    def record_client_presence(
+        self,
+        *,
+        principal: TeamPrincipal,
+        device_id: str,
+        device_name: str,
+        app_version: str,
+        mode: str = "connect",
+        workspace_name: Optional[str] = None,
+        workspace_fingerprint: Optional[str] = None,
+        model: Optional[str] = None,
+    ) -> dict[str, Any]:
+        device_id = _bounded_text(device_id, "device_id", 128)
+        device_name = _bounded_text(device_name, "device_name", 160)
+        app_version = _bounded_text(app_version, "app_version", 64)
+        mode = _bounded_text(mode, "mode", 32)
+        if mode not in {"connect", "local", "host"}:
+            raise ValueError("mode must be connect, local, or host")
+        workspace_name = _optional_bounded_text(workspace_name, "workspace_name", 256)
+        workspace_fingerprint = _optional_bounded_text(
+            workspace_fingerprint, "workspace_fingerprint", 128
+        )
+        model = _optional_bounded_text(model, "model", 512)
+        now = self.clock()
+        timestamp = _timestamp(now)
+        with self._lock, self._connection:
+            self._connection.execute(
+                """
+                INSERT INTO team_clients (
+                    device_id, principal_id, principal_name, device_name,
+                    app_version, mode, workspace_name, workspace_fingerprint,
+                    model, first_seen_at, last_seen_at, last_seen_epoch,
+                    request_count, last_request_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL)
+                ON CONFLICT(device_id) DO UPDATE SET
+                    principal_id = excluded.principal_id,
+                    principal_name = excluded.principal_name,
+                    device_name = excluded.device_name,
+                    app_version = excluded.app_version,
+                    mode = excluded.mode,
+                    workspace_name = excluded.workspace_name,
+                    workspace_fingerprint = excluded.workspace_fingerprint,
+                    model = excluded.model,
+                    last_seen_at = excluded.last_seen_at,
+                    last_seen_epoch = excluded.last_seen_epoch
+                """,
+                (
+                    device_id,
+                    principal.id,
+                    principal.name,
+                    device_name,
+                    app_version,
+                    mode,
+                    workspace_name,
+                    workspace_fingerprint,
+                    model,
+                    timestamp,
+                    timestamp,
+                    now,
+                ),
+            )
+            row = self._connection.execute(
+                "SELECT * FROM team_clients WHERE device_id = ?", (device_id,)
+            ).fetchone()
+        return _client_from_row(row, now=now, active_within=120.0)
+
+    def record_client_request(
+        self,
+        *,
+        principal: TeamPrincipal,
+        device_id: str,
+    ) -> bool:
+        device_id = str(device_id).strip()
+        if not device_id or len(device_id) > 128:
+            return False
+        now = self.clock()
+        with self._lock, self._connection:
+            cursor = self._connection.execute(
+                """
+                UPDATE team_clients
+                SET request_count = request_count + 1,
+                    last_request_at = ?, last_seen_at = ?, last_seen_epoch = ?
+                WHERE device_id = ? AND principal_id = ?
+                """,
+                (_timestamp(now), _timestamp(now), now, device_id, principal.id),
+            )
+        return cursor.rowcount > 0
+
+    def list_clients(self, *, active_within: float = 120.0) -> list[dict[str, Any]]:
+        active_within = max(1.0, float(active_within))
+        now = self.clock()
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT * FROM team_clients ORDER BY last_seen_epoch DESC"
+            ).fetchall()
+        return [
+            _client_from_row(row, now=now, active_within=active_within)
+            for row in rows
+        ]
+
+    def create_model_request(
+        self,
+        *,
+        principal: TeamPrincipal,
+        model: str,
+        device_id: Optional[str] = None,
+        note: Optional[str] = None,
+    ) -> dict[str, Any]:
+        model = _bounded_text(model, "model", 512)
+        device_id = _optional_bounded_text(device_id, "device_id", 128)
+        note = _optional_bounded_text(note, "note", 1_000)
+        now = self.clock()
+        with self._lock, self._connection:
+            existing = self._connection.execute(
+                """
+                SELECT * FROM model_requests
+                WHERE principal_id = ? AND model = ? AND status = 'pending'
+                ORDER BY requested_epoch DESC LIMIT 1
+                """,
+                (principal.id, model),
+            ).fetchone()
+            if existing is not None:
+                return _model_request_from_row(existing)
+            request_id = "modelreq_" + uuid.uuid4().hex
+            requested_at = _timestamp(now)
+            self._connection.execute(
+                """
+                INSERT INTO model_requests (
+                    id, principal_id, principal_name, device_id, model, note,
+                    status, requested_at, requested_epoch, resolved_at,
+                    resolution_note
+                ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, NULL, NULL)
+                """,
+                (
+                    request_id,
+                    principal.id,
+                    principal.name,
+                    device_id,
+                    model,
+                    note,
+                    requested_at,
+                    now,
+                ),
+            )
+            row = self._connection.execute(
+                "SELECT * FROM model_requests WHERE id = ?", (request_id,)
+            ).fetchone()
+        return _model_request_from_row(row)
+
+    def list_model_requests(
+        self, *, status: Optional[str] = None, limit: int = 100
+    ) -> list[dict[str, Any]]:
+        values: list[Any] = []
+        where = ""
+        if status:
+            status = _model_request_status(status, allow_pending=True)
+            where = " WHERE status = ?"
+            values.append(status)
+        values.append(max(1, min(int(limit), 500)))
+        with self._lock:
+            rows = self._connection.execute(
+                f"SELECT * FROM model_requests{where} "
+                "ORDER BY requested_epoch DESC LIMIT ?",
+                values,
+            ).fetchall()
+        return [_model_request_from_row(row) for row in rows]
+
+    def resolve_model_request(
+        self,
+        request_id: str,
+        *,
+        status: str,
+        note: Optional[str] = None,
+    ) -> Optional[dict[str, Any]]:
+        request_id = _bounded_text(request_id, "request_id", 128)
+        status = _model_request_status(status, allow_pending=False)
+        note = _optional_bounded_text(note, "note", 1_000)
+        with self._lock, self._connection:
+            cursor = self._connection.execute(
+                """
+                UPDATE model_requests
+                SET status = ?, resolved_at = ?, resolution_note = ?
+                WHERE id = ? AND status = 'pending'
+                """,
+                (status, _timestamp(self.clock()), note, request_id),
+            )
+            if cursor.rowcount == 0:
+                return None
+            row = self._connection.execute(
+                "SELECT * FROM model_requests WHERE id = ?", (request_id,)
+            ).fetchone()
+        return _model_request_from_row(row)
+
     def settings(self) -> TeamSettings:
         with self._lock:
             rows = self._connection.execute(
@@ -436,6 +629,7 @@ class TeamStore:
         return removed
 
     def status(self) -> dict[str, Any]:
+        active_cutoff = self.clock() - 120.0
         with self._lock:
             key_count = int(
                 self._connection.execute(
@@ -450,11 +644,24 @@ class TeamStore:
                     "SELECT count(*) FROM evaluations"
                 ).fetchone()[0]
             )
+            online_clients = int(
+                self._connection.execute(
+                    "SELECT count(*) FROM team_clients WHERE last_seen_epoch >= ?",
+                    (active_cutoff,),
+                ).fetchone()[0]
+            )
+            pending_model_requests = int(
+                self._connection.execute(
+                    "SELECT count(*) FROM model_requests WHERE status = 'pending'"
+                ).fetchone()[0]
+            )
         return {
             "schema": "machboost.team-status.v1",
             "keys": key_count,
             "traces": trace_count,
             "evaluations": evaluation_count,
+            "online_clients": online_clients,
+            "pending_model_requests": pending_model_requests,
             "settings": self.settings().to_dict(),
         }
 
@@ -508,6 +715,41 @@ class TeamStore:
                     scores_json TEXT NOT NULL,
                     created_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS team_clients (
+                    device_id TEXT PRIMARY KEY,
+                    principal_id TEXT NOT NULL,
+                    principal_name TEXT NOT NULL,
+                    device_name TEXT NOT NULL,
+                    app_version TEXT NOT NULL,
+                    mode TEXT NOT NULL,
+                    workspace_name TEXT,
+                    workspace_fingerprint TEXT,
+                    model TEXT,
+                    first_seen_at TEXT NOT NULL,
+                    last_seen_at TEXT NOT NULL,
+                    last_seen_epoch REAL NOT NULL,
+                    request_count INTEGER NOT NULL DEFAULT 0,
+                    last_request_at TEXT
+                );
+                CREATE INDEX IF NOT EXISTS team_clients_principal
+                    ON team_clients(principal_id);
+                CREATE INDEX IF NOT EXISTS team_clients_last_seen
+                    ON team_clients(last_seen_epoch);
+                CREATE TABLE IF NOT EXISTS model_requests (
+                    id TEXT PRIMARY KEY,
+                    principal_id TEXT NOT NULL,
+                    principal_name TEXT NOT NULL,
+                    device_id TEXT,
+                    model TEXT NOT NULL,
+                    note TEXT,
+                    status TEXT NOT NULL,
+                    requested_at TEXT NOT NULL,
+                    requested_epoch REAL NOT NULL,
+                    resolved_at TEXT,
+                    resolution_note TEXT
+                );
+                CREATE INDEX IF NOT EXISTS model_requests_status
+                    ON model_requests(status, requested_epoch);
                 """
             )
 
@@ -637,6 +879,73 @@ def _evaluation_from_row(row: sqlite3.Row) -> dict[str, Any]:
         "scores": json.loads(row["scores_json"]),
         "created_at": row["created_at"],
     }
+
+
+def _client_from_row(
+    row: sqlite3.Row, *, now: float, active_within: float
+) -> dict[str, Any]:
+    last_seen_epoch = float(row["last_seen_epoch"])
+    return {
+        "device_id": row["device_id"],
+        "principal": {"id": row["principal_id"], "name": row["principal_name"]},
+        "device_name": row["device_name"],
+        "app_version": row["app_version"],
+        "mode": row["mode"],
+        "workspace_name": row["workspace_name"],
+        "workspace_fingerprint": row["workspace_fingerprint"],
+        "model": row["model"],
+        "first_seen_at": row["first_seen_at"],
+        "last_seen_at": row["last_seen_at"],
+        "last_request_at": row["last_request_at"],
+        "request_count": int(row["request_count"]),
+        "online": now - last_seen_epoch <= active_within,
+    }
+
+
+def _model_request_from_row(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "principal": {"id": row["principal_id"], "name": row["principal_name"]},
+        "device_id": row["device_id"],
+        "model": row["model"],
+        "note": row["note"],
+        "status": row["status"],
+        "requested_at": row["requested_at"],
+        "resolved_at": row["resolved_at"],
+        "resolution_note": row["resolution_note"],
+    }
+
+
+def _bounded_text(value: Any, name: str, maximum: int) -> str:
+    normalized = str(value or "").strip()
+    if not normalized:
+        raise ValueError(f"{name} is required")
+    if len(normalized) > maximum:
+        raise ValueError(f"{name} must be at most {maximum} characters")
+    return normalized
+
+
+def _optional_bounded_text(
+    value: Any, name: str, maximum: int
+) -> Optional[str]:
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    if not normalized:
+        return None
+    if len(normalized) > maximum:
+        raise ValueError(f"{name} must be at most {maximum} characters")
+    return normalized
+
+
+def _model_request_status(value: Any, *, allow_pending: bool) -> str:
+    status = str(value or "").strip().lower()
+    allowed = {"downloaded", "declined", "cancelled"}
+    if allow_pending:
+        allowed.add("pending")
+    if status not in allowed:
+        raise ValueError(f"status must be one of: {', '.join(sorted(allowed))}")
+    return status
 
 
 def _redact(value: Any) -> Any:
