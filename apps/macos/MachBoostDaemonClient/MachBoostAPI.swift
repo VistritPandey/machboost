@@ -249,6 +249,24 @@ public final class MachBoostAPI: MachBoostAPIProtocol, @unchecked Sendable {
         return health.status == "ok"
     }
 
+    public func serverVersion(timeoutInterval: TimeInterval = 1) async throws -> String {
+        struct Health: Decodable {
+            let status: String
+            let version: String
+        }
+        var request = try request(
+            path: "/healthz",
+            method: "GET",
+            authenticated: false
+        )
+        request.timeoutInterval = timeoutInterval
+        let health: Health = try await perform(request)
+        guard health.status == "ok" else {
+            throw MachBoostAPIError.invalidResponse
+        }
+        return health.version
+    }
+
     public func catalog() async throws -> [CatalogModel] {
         let response: CatalogResponse = try await get("/api/catalog")
         return response.models
