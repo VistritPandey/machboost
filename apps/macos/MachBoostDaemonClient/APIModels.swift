@@ -108,7 +108,105 @@ public struct TeamStatus: Decodable, Sendable {
     public let keys: Int
     public let traces: Int
     public let evaluations: Int
+    public let onlineClients: Int?
+    public let pendingModelRequests: Int?
     public let settings: TeamSettings
+
+    enum CodingKeys: String, CodingKey {
+        case schema, keys, traces, evaluations, settings
+        case onlineClients = "online_clients"
+        case pendingModelRequests = "pending_model_requests"
+    }
+}
+
+public struct TeamHost: Codable, Hashable, Sendable {
+    public let name: String
+    public let version: String
+}
+
+public struct TeamConnectResponse: Decodable, Sendable {
+    public let schema: String
+    public let host: TeamHost
+    public let principal: TeamKey
+    public let models: [CatalogModel]
+    public let loadedModels: [ModelInstance]
+    public let capabilities: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case schema, host, principal, models, capabilities
+        case loadedModels = "loaded_models"
+    }
+}
+
+public struct TeamClient: Codable, Identifiable, Hashable, Sendable {
+    public let deviceID: String
+    public let principal: TracePrincipal
+    public let deviceName: String
+    public let appVersion: String
+    public let mode: String
+    public let workspaceName: String?
+    public let workspaceFingerprint: String?
+    public let model: String?
+    public let firstSeenAt: String
+    public let lastSeenAt: String
+    public let lastRequestAt: String?
+    public let requestCount: Int
+    public let online: Bool
+
+    public var id: String { deviceID }
+
+    enum CodingKeys: String, CodingKey {
+        case principal, mode, model, online
+        case deviceID = "device_id"
+        case deviceName = "device_name"
+        case appVersion = "app_version"
+        case workspaceName = "workspace_name"
+        case workspaceFingerprint = "workspace_fingerprint"
+        case firstSeenAt = "first_seen_at"
+        case lastSeenAt = "last_seen_at"
+        case lastRequestAt = "last_request_at"
+        case requestCount = "request_count"
+    }
+}
+
+public struct TeamClientsResponse: Decodable, Sendable {
+    public let schema: String
+    public let clients: [TeamClient]
+}
+
+public struct TeamPresenceResponse: Decodable, Sendable {
+    public let schema: String
+    public let client: TeamClient
+}
+
+public struct TeamModelRequest: Codable, Identifiable, Hashable, Sendable {
+    public let id: String
+    public let principal: TracePrincipal
+    public let deviceID: String?
+    public let model: String
+    public let note: String?
+    public let status: String
+    public let requestedAt: String
+    public let resolvedAt: String?
+    public let resolutionNote: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id, principal, model, note, status
+        case deviceID = "device_id"
+        case requestedAt = "requested_at"
+        case resolvedAt = "resolved_at"
+        case resolutionNote = "resolution_note"
+    }
+}
+
+public struct TeamModelRequestsResponse: Decodable, Sendable {
+    public let schema: String
+    public let requests: [TeamModelRequest]
+}
+
+public struct TeamModelRequestResponse: Decodable, Sendable {
+    public let schema: String
+    public let request: TeamModelRequest
 }
 
 public struct TeamKey: Codable, Identifiable, Hashable, Sendable {
@@ -375,19 +473,22 @@ public struct APIChatMessage: Encodable, Sendable {
     public let images: [String]?
     public let toolCalls: [APIToolCall]?
     public let toolName: String?
+    public let toolCallID: String?
 
     public init(
         role: String,
         content: String,
         images: [String]? = nil,
         toolCalls: [APIToolCall]? = nil,
-        toolName: String? = nil
+        toolName: String? = nil,
+        toolCallID: String? = nil
     ) {
         self.role = role
         self.content = content
         self.images = images
         self.toolCalls = toolCalls
         self.toolName = toolName
+        self.toolCallID = toolCallID
     }
 
     enum CodingKeys: String, CodingKey {
@@ -396,6 +497,7 @@ public struct APIChatMessage: Encodable, Sendable {
         case images
         case toolCalls = "tool_calls"
         case toolName = "tool_name"
+        case toolCallID = "tool_call_id"
     }
 }
 
