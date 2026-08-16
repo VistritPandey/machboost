@@ -13,6 +13,10 @@ enum KeychainStore {
         value(account: "provider-\(id)")
     }
 
+    static func teamToken(profileID: UUID) -> String? {
+        value(account: "team-host-\(profileID.uuidString.lowercased())")
+    }
+
     private static func value(account: String) -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -61,11 +65,26 @@ enum KeychainStore {
         try save(value: secret, account: "provider-\(id)")
     }
 
+    static func saveTeamToken(_ token: String, profileID: UUID) throws {
+        try save(
+            value: token,
+            account: "team-host-\(profileID.uuidString.lowercased())"
+        )
+    }
+
     static func deleteProviderSecret(id: String) throws {
+        try delete(account: "provider-\(id)")
+    }
+
+    static func deleteTeamToken(profileID: UUID) throws {
+        try delete(account: "team-host-\(profileID.uuidString.lowercased())")
+    }
+
+    private static func delete(account: String) throws {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: "provider-\(id)",
+            kSecAttrAccount as String: account,
         ]
         let status = SecItemDelete(query as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else {
