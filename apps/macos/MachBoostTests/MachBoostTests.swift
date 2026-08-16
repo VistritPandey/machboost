@@ -94,7 +94,14 @@ final class MachBoostTests: XCTestCase {
     func testAssistantProtocolSanitizerHidesRecipientAndToolMarkup() {
         let visible = CodingWorkspace.visibleAssistantText(
             "<|start|>assistant to=user<|message|>to=user\n"
-                + "<atem:function_calls><atem:invoke name=\"read_file\"></atem:invoke></atem:function_calls>\n"
+                + "<atem:function_calls>\n"
+                + "<atem:invoke name=\"read_file\">\n"
+                + "<atem:parameter name=\"path\">src/App.swift</atem:parameter>\n"
+                + "</atem:invoke>\n"
+                + "</atem:function_calls>\n"
+                + "<tool_call name=\"search_files\">\n"
+                + "{\"arguments\":{\"query\":\"hello\"}}\n"
+                + "</tool_call>\n"
                 + "Here is the result.<|eot|>"
         )
 
