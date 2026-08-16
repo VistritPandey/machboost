@@ -870,12 +870,14 @@ struct ChatView: View {
                 }
                 if event.done { apply(event: event, to: assistant) }
             }
+            if !roundToolCalls.isEmpty {
+                allToolCalls.append(contentsOf: roundToolCalls)
+                if let data = try? JSONEncoder().encode(allToolCalls) {
+                    assistant.toolCallsJSON = String(decoding: data, as: UTF8.self)
+                }
+            }
             guard codingActive, !roundToolCalls.isEmpty, let workspace else { return }
 
-            allToolCalls.append(contentsOf: roundToolCalls)
-            if let data = try? JSONEncoder().encode(allToolCalls) {
-                assistant.toolCallsJSON = String(decoding: data, as: UTF8.self)
-            }
             transcript.append(
                 APIChatMessage(
                     role: MessageRole.assistant.rawValue,
