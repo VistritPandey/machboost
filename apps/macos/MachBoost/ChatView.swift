@@ -1588,7 +1588,8 @@ private struct MessageRow: View {
         else {
             return []
         }
-        return (try? JSONDecoder().decode([APIToolCall].self, from: data)) ?? []
+        let decoded = (try? JSONDecoder().decode([APIToolCall].self, from: data)) ?? []
+        return decoded.filter(CodingWorkspace.supports)
     }
 
     private var toolActivities: [CodingToolActivity] {
@@ -1597,7 +1598,7 @@ private struct MessageRow: View {
             let data = json.data(using: .utf8),
             let activities = try? JSONDecoder().decode([CodingToolActivity].self, from: data)
         {
-            return activities
+            return activities.filter { CodingWorkspace.supports($0.call) }
         }
         return toolCalls.map { CodingToolActivity(call: $0, state: .requested) }
     }
