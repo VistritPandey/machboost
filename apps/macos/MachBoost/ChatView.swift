@@ -1385,6 +1385,7 @@ private struct MessageRow: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Label(call.function.name, systemImage: "wrench.and.screwdriver")
                         .font(.caption.weight(.semibold))
+                        .accessibilityIdentifier("tool-call-\(call.function.name)")
                     if let arguments = call.function.arguments {
                         Text(prettyJSON(arguments))
                             .font(.caption.monospaced())
