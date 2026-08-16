@@ -4739,10 +4739,86 @@ def inject_system_instruction(
     return result
 
 
+_TOOL_CALL_TAG = re.compile(
+    r"<tool_call\b(?P<attributes>[^>]*)>(?P<body>.*?)</tool_call>",
+    flags=re.S | re.I,
+)
+
+
+def _tool_call_attribute(attributes: str, name: str) -> Any:
+    match = re.search(
+        rf"\b{re.escape(name)}\s*=\s*([\"'])(.*?)\1",
+        attributes,
+        flags=re.S | re.I,
+    )
+    if match:
+        return match.group(2)
+    match = re.search(rf"\b{re.escape(name)}\s*=\s*", attributes, flags=re.I)
+    if not match:
+        return None
+    candidate = attributes[match.end() :].strip()
+    if not candidate:
+        return None
+    try:
+        value, _ = json.JSONDecoder().raw_decode(candidate)
+        return value
+    except json.JSONDecodeError:
+        return candidate.split()[0]
+
+
+def _normalized_tool_call(value: Any, *, fallback_name: str = "") -> dict[str, Any] | None:
+    function = value.get("function") if isinstance(value, dict) else None
+    function = function if isinstance(function, dict) else value
+    if not isinstance(function, dict):
+        return None
+    name = str(function.get("name") or fallback_name).strip()
+    if not name:
+        return None
+    arguments = function.get("arguments") or {}
+    if isinstance(arguments, str):
+        argument_text = arguments
+    else:
+        argument_text = json.dumps(arguments, separators=(",", ":"), ensure_ascii=True)
+    identifier = value.get("id") if isinstance(value, dict) else None
+    return {
+        "id": str(identifier or f"call_{uuid.uuid4().hex[:24]}"),
+        "type": "function",
+        "function": {"name": name, "arguments": argument_text},
+    }
+
+
 def extract_tool_calls(text: str) -> tuple[str, list[dict[str, Any]]]:
     raw = str(text or "")
-    matches = re.findall(r"<tool_call>\s*(.*?)\s*</tool_call>", raw, flags=re.S | re.I)
-    if not matches:
+    tagged = list(_TOOL_CALL_TAG.finditer(raw))
+    wrapper_names = re.findall(
+        r"\bassistant\s+to\s*=\s*([A-Za-z_][\w.-]*)",
+        raw,
+        flags=re.I,
+    )
+    calls: list[dict[str, Any]] = []
+
+    for index, match in enumerate(tagged):
+        attributes = match.group("attributes") or ""
+        body = (match.group("body") or "").strip()
+        attribute_name = str(_tool_call_attribute(attributes, "name") or "").strip()
+        fallback_name = attribute_name or (
+            wrapper_names[index] if index < len(wrapper_names) else ""
+        )
+        attribute_arguments = _tool_call_attribute(attributes, "arguments")
+        value: Any = None
+        if body:
+            try:
+                value = json.loads(body)
+            except json.JSONDecodeError:
+                value = None
+        if value is None and fallback_name:
+            value = {"name": fallback_name, "arguments": attribute_arguments or {}}
+        call = _normalized_tool_call(value, fallback_name=fallback_name)
+        if call is not None:
+            calls.append(call)
+
+    direct_payload = False
+    if not tagged:
         candidate = raw.strip()
         if candidate.startswith("```"):
             candidate = re.sub(r"^```(?:json)?\s*|\s*```$", "", candidate, flags=re.I)
@@ -4750,44 +4826,37 @@ def extract_tool_calls(text: str) -> tuple[str, list[dict[str, Any]]]:
             value = json.loads(candidate)
         except json.JSONDecodeError:
             value = None
+        values: list[Any] = []
         if isinstance(value, dict) and ("name" in value or "function" in value):
-            matches = [candidate]
+            values = [value]
         elif isinstance(value, list) and all(
             isinstance(item, dict) and ("name" in item or "function" in item)
             for item in value
         ):
-            matches = [json.dumps(item) for item in value]
-    calls: list[dict[str, Any]] = []
-    for candidate in matches:
-        try:
-            value = json.loads(candidate)
-        except json.JSONDecodeError:
-            continue
-        function = value.get("function") if isinstance(value, dict) else None
-        function = function if isinstance(function, dict) else value
-        if not isinstance(function, dict):
-            continue
-        name = str(function.get("name") or "").strip()
-        if not name:
-            continue
-        arguments = function.get("arguments") or {}
-        if isinstance(arguments, str):
-            argument_text = arguments
-        else:
-            argument_text = json.dumps(arguments, separators=(",", ":"), ensure_ascii=True)
-        calls.append(
-            {
-                "id": str(value.get("id") or f"call_{uuid.uuid4().hex[:24]}"),
-                "type": "function",
-                "function": {"name": name, "arguments": argument_text},
-            }
+            values = value
+        for item in values:
+            call = _normalized_tool_call(item)
+            if call is not None:
+                calls.append(call)
+        direct_payload = bool(calls)
+
+    if direct_payload:
+        return "", calls
+    content = _TOOL_CALL_TAG.sub("", raw)
+    if calls:
+        content = re.sub(
+            r"<\|(?:start|message|end|call|channel)\|>",
+            "",
+            content,
+            flags=re.I,
         )
-    content = re.sub(r"<tool_call>\s*.*?\s*</tool_call>", "", raw, flags=re.S | re.I).strip()
-    if calls and not matches[0].startswith("<tool_call>") and not re.search(
-        r"<tool_call>", raw, flags=re.I
-    ):
-        content = ""
-    return content, calls
+        content = re.sub(
+            r"^\s*assistant\s+to\s*=\s*[A-Za-z_][\w.-]*\s*",
+            "",
+            content,
+            flags=re.I,
+        )
+    return content.strip(), calls
 
 
 def result_content_and_tool_calls(
