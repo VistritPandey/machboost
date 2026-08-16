@@ -321,10 +321,12 @@ final class AppState {
             self.memories = values.0
             cacheMetrics = values.1
             self.providers = values.2
-            for provider in values.2 where !provider.hasSecret {
-                guard let secret = await KeychainStore.providerSecretAsync(id: provider.id)
-                else { continue }
-                try await api.setProviderSecret(id: provider.id, apiKey: secret)
+            if !usesUITestAPI {
+                for provider in values.2 where !provider.hasSecret {
+                    guard let secret = await KeychainStore.providerSecretAsync(id: provider.id)
+                    else { continue }
+                    try await api.setProviderSecret(id: provider.id, apiKey: secret)
+                }
             }
         } catch MachBoostAPIError.server(status: 404, message: _) {
             memories = []
