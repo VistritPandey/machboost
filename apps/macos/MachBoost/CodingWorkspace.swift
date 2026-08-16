@@ -290,12 +290,12 @@ enum CodingWorkspace {
 
     static func visibleAssistantText(_ text: String) -> String {
         var value = text.replacingOccurrences(
-            of: #"<atem:function_calls>.*?</atem:function_calls>"#,
+            of: #"(?s)<atem:function_calls>.*?</atem:function_calls>"#,
             with: "",
             options: [.regularExpression, .caseInsensitive]
         )
         value = value.replacingOccurrences(
-            of: #"<tool_call\b[^>]*>.*?</tool_call>"#,
+            of: #"(?s)<tool_call\b[^>]*>.*?</tool_call>"#,
             with: "",
             options: [.regularExpression, .caseInsensitive]
         )
