@@ -43,10 +43,12 @@ class MachBoostClient:
         *,
         timeout: float = 300.0,
         api_token: Optional[str] = None,
+        device_id: Optional[str] = None,
     ) -> None:
         self.endpoint = (endpoint or default_endpoint()).rstrip("/")
         self.timeout = float(timeout)
         self.api_token = api_token if api_token is not None else os.environ.get("MACHBOOST_API_TOKEN")
+        self.device_id = str(device_id or "").strip() or None
 
     def health(self) -> dict[str, Any]:
         return self.get("/healthz")
@@ -74,6 +76,91 @@ class MachBoostClient:
 
     def team_keys(self) -> list[dict[str, Any]]:
         return list(self.get("/api/team/keys").get("keys") or ())
+
+    def team_connect(self) -> dict[str, Any]:
+        return self.get("/api/team/connect")
+
+    def team_clients(self, *, active_within_seconds: float = 120.0) -> list[dict[str, Any]]:
+        query = urlencode({"active_within_seconds": float(active_within_seconds)})
+        return list(self.get(f"/api/team/clients?{query}").get("clients") or ())
+
+    def report_team_presence(
+        self,
+        device_name: str,
+        app_version: str,
+        *,
+        device_id: Optional[str] = None,
+        workspace_name: Optional[str] = None,
+        workspace_fingerprint: Optional[str] = None,
+        model: Optional[str] = None,
+    ) -> dict[str, Any]:
+        resolved_device_id = str(device_id or self.device_id or "").strip()
+        if not resolved_device_id:
+            raise ValueError("device_id is required")
+        payload: dict[str, Any] = {
+            "device_id": resolved_device_id,
+            "device_name": device_name,
+            "app_version": app_version,
+            "mode": "connect",
+        }
+        payload.update(
+            {
+                key: value
+                for key, value in {
+                    "workspace_name": workspace_name,
+                    "workspace_fingerprint": workspace_fingerprint,
+                    "model": model,
+                }.items()
+                if value is not None
+            }
+        )
+        return dict(self.post("/api/team/presence", payload).get("client") or {})
+
+    def team_model_requests(
+        self, *, status: Optional[str] = None, limit: int = 100
+    ) -> list[dict[str, Any]]:
+        query = urlencode(
+            {
+                key: value
+                for key, value in {"status": status, "limit": int(limit)}.items()
+                if value is not None
+            }
+        )
+        return list(
+            self.get(f"/api/team/model-requests?{query}").get("requests") or ()
+        )
+
+    def request_team_model(
+        self,
+        model: str,
+        *,
+        device_id: Optional[str] = None,
+        note: Optional[str] = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"model": model}
+        resolved_device_id = str(device_id or self.device_id or "").strip()
+        if resolved_device_id:
+            payload["device_id"] = resolved_device_id
+        if note is not None:
+            payload["note"] = note
+        return dict(
+            self.post("/api/team/model-requests", payload).get("request") or {}
+        )
+
+    def resolve_team_model_request(
+        self,
+        request_id: str,
+        *,
+        status: str,
+        note: Optional[str] = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"request_id": request_id, "status": status}
+        if note is not None:
+            payload["note"] = note
+        return dict(
+            self.post("/api/team/model-requests/resolve", payload).get("request")
+            or {}
+        )
 
     def create_team_key(
         self,
@@ -672,6 +759,8 @@ class MachBoostClient:
             headers["Accept"] = accept
         if self.api_token:
             headers["Authorization"] = f"Bearer {self.api_token}"
+        if self.device_id:
+            headers["X-MachBoost-Device-ID"] = self.device_id
         return headers
 
 
