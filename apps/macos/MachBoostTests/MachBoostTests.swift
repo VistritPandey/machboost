@@ -5,6 +5,138 @@ import XCTest
 @testable import MachBoost
 
 final class MachBoostTests: XCTestCase {
+    func testTurnMetricsAggregateEveryToolRound() {
+        var metrics = GenerationTurnMetrics()
+        metrics.absorb(
+            ChatEvent(
+                requestID: "round-1",
+                message: nil,
+                done: true,
+                doneReason: "tool_calls",
+                totalDuration: 2_000_000_000,
+                evalDuration: 1_000_000_000,
+                evalCount: 20,
+                machboost: .init(
+                    backend: "mlx-vlm",
+                    stats: nil,
+                    timeToFirstTokenSeconds: 0.25
+                ),
+                error: nil
+            )
+        )
+        metrics.absorb(
+            ChatEvent(
+                requestID: "round-2",
+                message: nil,
+                done: true,
+                doneReason: "stop",
+                totalDuration: 1_000_000_000,
+                evalDuration: 500_000_000,
+                evalCount: 10,
+                machboost: nil,
+                error: nil
+            )
+        )
+
+        let message = ChatMessage(role: .assistant, content: "Done")
+        metrics.apply(to: message)
+
+        XCTAssertEqual(metrics.rounds, 2)
+        XCTAssertEqual(message.generatedTokens, 30)
+        XCTAssertEqual(message.tokensPerSecond ?? 0, 20, accuracy: 0.001)
+        XCTAssertEqual(message.durationSeconds ?? 0, 3, accuracy: 0.001)
+        XCTAssertEqual(message.timeToFirstTokenSeconds, 0.25)
+    }
+
+    func testCodingPermissionModesApplyDistinctWritePolicies() {
+        let smallEdit = APIToolCall(
+            function: .init(
+                name: "replace_in_file",
+                arguments: .object([
+                    "path": .string("Sources/App.swift"),
+                    "old_text": .string("let old = true"),
+                    "new_text": .string("let old = false"),
+                ])
+            )
+        )
+        let create = APIToolCall(
+            function: .init(
+                name: "create_file",
+                arguments: .object([
+                    "path": .string("Sources/New.swift"),
+                    "content": .string("let value = 1"),
+                ])
+            )
+        )
+
+        XCTAssertEqual(
+            CodingWorkspace.permissionDecision(for: smallEdit, mode: .automatic),
+            .allow
+        )
+        XCTAssertEqual(
+            CodingWorkspace.permissionDecision(for: create, mode: .automatic),
+            .ask
+        )
+        XCTAssertEqual(
+            CodingWorkspace.permissionDecision(for: smallEdit, mode: .manual),
+            .ask
+        )
+        XCTAssertEqual(
+            CodingWorkspace.permissionDecision(for: create, mode: .acceptEdits),
+            .allow
+        )
+        XCTAssertEqual(CodingWorkspace.tools(for: .plan).count, 3)
+        guard case .deny = CodingWorkspace.permissionDecision(for: create, mode: .plan) else {
+            return XCTFail("Plan mode must deny writes")
+        }
+    }
+
+    func testAssistantProtocolSanitizerHidesRecipientAndToolMarkup() {
+        let visible = CodingWorkspace.visibleAssistantText(
+            "<|start|>assistant to=user<|message|>to=user\n"
+                + "<atem:function_calls><atem:invoke name=\"read_file\"></atem:invoke></atem:function_calls>\n"
+                + "Here is the result.<|eot|>"
+        )
+
+        XCTAssertEqual(visible, "Here is the result.")
+    }
+
+    func testWorkspaceChangesLoadsTrackedAndUntrackedDiffs() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("machboost-changes-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        func git(_ arguments: [String]) throws {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+            process.arguments = ["-C", root.path] + arguments
+            process.standardOutput = Pipe()
+            process.standardError = Pipe()
+            try process.run()
+            process.waitUntilExit()
+            XCTAssertEqual(process.terminationStatus, 0, arguments.joined(separator: " "))
+        }
+
+        try git(["init", "-b", "main"])
+        try git(["config", "user.email", "tests@machboost.local"])
+        try git(["config", "user.name", "MachBoost Tests"])
+        let tracked = root.appendingPathComponent("tracked.txt")
+        try Data("before\n".utf8).write(to: tracked)
+        try git(["add", "tracked.txt"])
+        try git(["commit", "-m", "fixture"])
+        try Data("after\nsecond\n".utf8).write(to: tracked)
+        try Data("new\n".utf8).write(to: root.appendingPathComponent("new.txt"))
+
+        let snapshot = WorkspaceChanges.load(workspaceRoot: root.path)
+
+        XCTAssertNil(snapshot.error)
+        XCTAssertEqual(snapshot.branch, "main")
+        XCTAssertEqual(Set(snapshot.changes.map(\.path)), ["tracked.txt", "new.txt"])
+        XCTAssertTrue(snapshot.changes.first { $0.path == "tracked.txt" }?.patch.contains("+after") == true)
+        XCTAssertEqual(snapshot.changes.first { $0.path == "new.txt" }?.status, "Untracked")
+    }
+
     func testCatalogSchemaDecodesDesktopFields() throws {
         let data = Data(
             """
