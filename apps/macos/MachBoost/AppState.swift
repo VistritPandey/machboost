@@ -5,14 +5,25 @@ import Observation
 @Observable
 final class AppState {
     private static let configurationKey = "machboost.server.configuration.v1"
+    private static let teamProfileKey = "machboost.team.profile.v1"
+    private static let inferenceModeKey = "machboost.inference.mode.v1"
+    private static let deviceIDKey = "machboost.device.id.v1"
 
     let daemon = DaemonManager()
     private let usesUITestAPI: Bool
     private(set) var configuration: ServerConfiguration
     private(set) var api: any MachBoostAPIProtocol
+    private(set) var inferenceAPI: any MachBoostAPIProtocol
     private(set) var apiToken: String?
     private(set) var catalog: [CatalogModel] = []
     private(set) var loadedModels: [ModelInstance] = []
+    private(set) var teamCatalog: [CatalogModel] = []
+    private(set) var teamLoadedModels: [ModelInstance] = []
+    private(set) var teamHost: TeamHostProfile?
+    private(set) var teamClient: TeamClient?
+    private(set) var teamClients: [TeamClient] = []
+    private(set) var teamModelRequests: [TeamModelRequest] = []
+    private(set) var inferenceMode: InferenceMode
     private(set) var workspaces: [WorkspaceSummary] = []
     private(set) var metrics: ServerMetrics?
     private(set) var teamStatus: TeamStatus?
@@ -28,6 +39,8 @@ final class AppState {
     private(set) var lastModelLoad: ModelLoadResponse?
     private(set) var indexingWorkspaces: Set<String> = []
     private(set) var isRefreshing = false
+    private var heartbeatTask: Task<Void, Never>?
+    let deviceID: String
     var showOnboarding = false
     var presentedError: String?
 
@@ -39,24 +52,195 @@ final class AppState {
             || environment["MACHBOOST_TESTING"] == "1"
             || environment["XCTestConfigurationFilePath"] != nil
         let token = isTesting ? nil : KeychainStore.token()
+        let storedProfile = isTesting ? nil : Self.loadTeamProfile()
+        let storedMode = InferenceMode(
+            rawValue: UserDefaults.standard.string(forKey: Self.inferenceModeKey) ?? "local"
+        ) ?? .local
+        let deviceID = Self.loadDeviceID()
         self.usesUITestAPI = usesUITestAPI
         self.configuration = configuration
         self.apiToken = token
+        self.deviceID = deviceID
+        self.teamHost = storedProfile
+        self.inferenceMode = storedProfile == nil ? .local : storedMode
 #if DEBUG
         if usesUITestAPI {
             let fixture = UITestMachBoostAPI()
             self.api = fixture
+            self.inferenceAPI = fixture
             self.catalog = fixture.catalogSnapshot()
         } else {
-            self.api = MachBoostAPI(endpoint: configuration.endpoint, apiToken: token)
+            let local = MachBoostAPI(endpoint: configuration.endpoint, apiToken: token)
+            self.api = local
+            if let storedProfile,
+               let teamToken = KeychainStore.teamToken(profileID: storedProfile.id),
+               storedMode == .team {
+                self.inferenceAPI = MachBoostAPI(
+                    endpoint: storedProfile.endpoint,
+                    apiToken: teamToken,
+                    deviceID: deviceID
+                )
+            } else {
+                self.inferenceAPI = local
+            }
         }
 #else
-        self.api = MachBoostAPI(endpoint: configuration.endpoint, apiToken: token)
+        let local = MachBoostAPI(endpoint: configuration.endpoint, apiToken: token)
+        self.api = local
+        if let storedProfile,
+           let teamToken = KeychainStore.teamToken(profileID: storedProfile.id),
+           storedMode == .team {
+            self.inferenceAPI = MachBoostAPI(
+                endpoint: storedProfile.endpoint,
+                apiToken: teamToken,
+                deviceID: deviceID
+            )
+        } else {
+            self.inferenceAPI = local
+        }
 #endif
     }
 
     var serverIsRunning: Bool {
         usesUITestAPI || daemon.state == .running
+    }
+
+    var activeCatalog: [CatalogModel] {
+        inferenceMode == .team ? teamCatalog : catalog
+    }
+
+    var activeLoadedModels: [ModelInstance] {
+        inferenceMode == .team ? teamLoadedModels : loadedModels
+    }
+
+    var inferenceLabel: String {
+        if inferenceMode == .team, let teamHost {
+            return teamHost.hostName
+        }
+        return "This Mac"
+    }
+
+    var teamIsConnected: Bool {
+        inferenceMode == .team && teamHost != nil && !teamCatalog.isEmpty
+    }
+
+    func connectToTeamHost(endpoint rawEndpoint: String, token: String) async {
+        do {
+            let endpoint = try Self.normalizedTeamEndpoint(rawEndpoint)
+            let normalizedToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !normalizedToken.isEmpty else {
+                throw AppStateError.invalidTeamHost("Enter the API key created by the host.")
+            }
+            let profileID = teamHost?.endpoint == endpoint ? teamHost!.id : UUID()
+            let remote = MachBoostAPI(
+                endpoint: endpoint,
+                apiToken: normalizedToken,
+                deviceID: deviceID
+            )
+            let connected = try await remote.teamConnect()
+            guard !connected.models.isEmpty else {
+                throw AppStateError.invalidTeamHost(
+                    "The host has no compatible cached model available for this key."
+                )
+            }
+            let profile = TeamHostProfile(
+                id: profileID,
+                endpoint: endpoint,
+                hostName: connected.host.name,
+                hostVersion: connected.host.version,
+                principalName: connected.principal.name,
+                connectedAt: .now
+            )
+            try KeychainStore.saveTeamToken(normalizedToken, profileID: profileID)
+            teamHost = profile
+            teamCatalog = connected.models
+            teamLoadedModels = connected.loadedModels
+            inferenceMode = .team
+            inferenceAPI = remote
+            Self.saveTeamProfile(profile)
+            Self.saveInferenceMode(.team)
+            try await reportTeamPresence(workspace: nil, model: teamCatalog.first?.name)
+            startHeartbeat()
+        } catch {
+            presentedError = error.localizedDescription
+        }
+    }
+
+    func useLocalInference() {
+        heartbeatTask?.cancel()
+        heartbeatTask = nil
+        inferenceMode = .local
+        inferenceAPI = api
+        Self.saveInferenceMode(.local)
+    }
+
+    func useTeamInference() async {
+        guard teamHost != nil else {
+            presentedError = "Connect to a Team host first."
+            return
+        }
+        inferenceMode = .team
+        Self.saveInferenceMode(.team)
+        await reconnectTeamHost()
+    }
+
+    func forgetTeamHost() {
+        if let teamHost {
+            try? KeychainStore.deleteTeamToken(profileID: teamHost.id)
+        }
+        heartbeatTask?.cancel()
+        heartbeatTask = nil
+        teamHost = nil
+        teamClient = nil
+        teamCatalog = []
+        teamLoadedModels = []
+        inferenceMode = .local
+        inferenceAPI = api
+        UserDefaults.standard.removeObject(forKey: Self.teamProfileKey)
+        Self.saveInferenceMode(.local)
+    }
+
+    func reportTeamPresence(workspace: WorkspaceSummary?, model: String?) async throws {
+        guard inferenceMode == .team else { return }
+        teamClient = try await inferenceAPI.reportTeamPresence(
+            deviceID: deviceID,
+            deviceName: Host.current().localizedName ?? ProcessInfo.processInfo.hostName,
+            appVersion: Bundle.main.object(
+                forInfoDictionaryKey: "CFBundleShortVersionString"
+            ) as? String ?? "development",
+            workspaceName: workspace?.name,
+            workspaceFingerprint: workspace?.revision,
+            model: model
+        )
+    }
+
+    func requestModelFromHost(_ model: String, note: String?) async {
+        do {
+            _ = try await inferenceAPI.requestTeamModel(
+                model: model,
+                deviceID: deviceID,
+                note: note
+            )
+        } catch {
+            presentedError = error.localizedDescription
+        }
+    }
+
+    func resolveModelRequest(
+        _ request: TeamModelRequest,
+        status: String,
+        note: String? = nil
+    ) async {
+        do {
+            _ = try await api.resolveTeamModelRequest(
+                id: request.id,
+                status: status,
+                note: note
+            )
+            await refreshTeam()
+        } catch {
+            presentedError = error.localizedDescription
+        }
     }
 
     func start() async {
@@ -67,6 +251,9 @@ final class AppState {
             rebuildAPI()
             try await daemon.start(configuration: configuration, apiToken: apiToken)
             await refreshAll()
+            if inferenceMode == .team {
+                await reconnectTeamHost()
+            }
         } catch {
             presentedError = error.localizedDescription
         }
@@ -122,16 +309,24 @@ final class AppState {
             async let keys = api.teamKeys()
             async let traces = api.traces(limit: 100)
             async let evaluations = api.evaluations(limit: 25)
-            let values = try await (status, keys, traces, evaluations)
+            async let clients = api.teamClients()
+            async let modelRequests = api.teamModelRequests(status: nil)
+            let values = try await (
+                status, keys, traces, evaluations, clients, modelRequests
+            )
             teamStatus = values.0
             teamKeys = values.1
             self.traces = values.2
             self.evaluations = values.3
+            teamClients = values.4
+            teamModelRequests = values.5
         } catch MachBoostAPIError.server(status: 404, message: _) {
             teamStatus = nil
             teamKeys = []
             traces = []
             evaluations = []
+            teamClients = []
+            teamModelRequests = []
         } catch {
             presentedError = error.localizedDescription
         }
@@ -438,11 +633,12 @@ final class AppState {
     }
 
     func shutdown() async {
+        heartbeatTask?.cancel()
         await daemon.shutdown(endpoint: configuration.endpoint, apiToken: apiToken)
     }
 
     func model(named name: String) -> CatalogModel? {
-        catalog.first { $0.name == name || $0.repository == name }
+        activeCatalog.first { $0.name == name || $0.repository == name }
     }
 
     func workspace(id: String?) -> WorkspaceSummary? {
@@ -455,6 +651,59 @@ final class AppState {
         guard !usesUITestAPI else { return }
 #endif
         api = MachBoostAPI(endpoint: configuration.endpoint, apiToken: apiToken)
+        if inferenceMode == .local {
+            inferenceAPI = api
+        }
+    }
+
+    private func reconnectTeamHost() async {
+        guard let profile = teamHost,
+              let token = KeychainStore.teamToken(profileID: profile.id) else {
+            useLocalInference()
+            return
+        }
+        do {
+            let remote = MachBoostAPI(
+                endpoint: profile.endpoint,
+                apiToken: token,
+                deviceID: deviceID
+            )
+            let connected = try await remote.teamConnect()
+            teamHost = TeamHostProfile(
+                id: profile.id,
+                endpoint: profile.endpoint,
+                hostName: connected.host.name,
+                hostVersion: connected.host.version,
+                principalName: connected.principal.name,
+                connectedAt: profile.connectedAt
+            )
+            teamCatalog = connected.models
+            teamLoadedModels = connected.loadedModels
+            inferenceAPI = remote
+            try await reportTeamPresence(workspace: nil, model: teamCatalog.first?.name)
+            startHeartbeat()
+        } catch {
+            teamCatalog = []
+            teamLoadedModels = []
+            presentedError = "Could not connect to \(profile.hostName): \(error.localizedDescription)"
+        }
+    }
+
+    private func startHeartbeat() {
+        heartbeatTask?.cancel()
+        heartbeatTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 30_000_000_000)
+                guard let self, !Task.isCancelled, self.inferenceMode == .team else {
+                    return
+                }
+                do {
+                    try await self.reportTeamPresence(workspace: nil, model: nil)
+                } catch {
+                    self.teamClient = nil
+                }
+            }
+        }
     }
 
     private static func loadConfiguration() -> ServerConfiguration {
@@ -471,11 +720,55 @@ final class AppState {
         guard let data = try? JSONEncoder().encode(configuration) else { return }
         UserDefaults.standard.set(data, forKey: configurationKey)
     }
+
+    private static func loadTeamProfile() -> TeamHostProfile? {
+        guard let data = UserDefaults.standard.data(forKey: teamProfileKey) else {
+            return nil
+        }
+        return try? JSONDecoder().decode(TeamHostProfile.self, from: data)
+    }
+
+    private static func saveTeamProfile(_ profile: TeamHostProfile) {
+        guard let data = try? JSONEncoder().encode(profile) else { return }
+        UserDefaults.standard.set(data, forKey: teamProfileKey)
+    }
+
+    private static func saveInferenceMode(_ mode: InferenceMode) {
+        UserDefaults.standard.set(mode.rawValue, forKey: inferenceModeKey)
+    }
+
+    private static func loadDeviceID() -> String {
+        if let existing = UserDefaults.standard.string(forKey: deviceIDKey),
+           !existing.isEmpty {
+            return existing
+        }
+        let created = UUID().uuidString.lowercased()
+        UserDefaults.standard.set(created, forKey: deviceIDKey)
+        return created
+    }
+
+    private static func normalizedTeamEndpoint(_ value: String) throws -> URL {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let candidate = trimmed.contains("://") ? trimmed : "http://\(trimmed)"
+        guard var components = URLComponents(string: candidate),
+              ["http", "https"].contains(components.scheme?.lowercased() ?? ""),
+              components.host != nil else {
+            throw AppStateError.invalidTeamHost("Enter a valid HTTP or HTTPS host URL.")
+        }
+        components.path = ""
+        components.query = nil
+        components.fragment = nil
+        guard let url = components.url else {
+            throw AppStateError.invalidTeamHost("Enter a valid Team host URL.")
+        }
+        return url
+    }
 }
 
 enum AppStateError: LocalizedError {
     case serverNotRunning
     case unsupportedModel(String)
+    case invalidTeamHost(String)
 
     var errorDescription: String? {
         switch self {
@@ -483,6 +776,8 @@ enum AppStateError: LocalizedError {
             "Start the MachBoost server before loading a model."
         case let .unsupportedModel(reason):
             "This model is not compatible with the bundled MLX runtime: \(reason)"
+        case let .invalidTeamHost(reason):
+            reason
         }
     }
 }
