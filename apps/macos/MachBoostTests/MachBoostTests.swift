@@ -93,6 +93,18 @@ final class MachBoostTests: XCTestCase {
         }
     }
 
+    func testCodingWorkspaceRejectsMalformedLegacyToolNames() {
+        let valid = APIToolCall(
+            function: .init(name: "list_files", arguments: .object([:]))
+        )
+        let malformed = APIToolCall(
+            function: .init(name: "list_files<|message|", arguments: .object([:]))
+        )
+
+        XCTAssertTrue(CodingWorkspace.supports(valid))
+        XCTAssertFalse(CodingWorkspace.supports(malformed))
+    }
+
     func testAssistantProtocolSanitizerHidesRecipientAndToolMarkup() {
         let visible = CodingWorkspace.visibleAssistantText(
             "<|start|>assistant to=user<|message|>to=user\n"
