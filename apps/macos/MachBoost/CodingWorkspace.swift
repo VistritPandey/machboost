@@ -57,13 +57,55 @@ struct CodingToolActivity: Codable, Hashable, Identifiable, Sendable {
     }
 }
 
+enum CodingPermissionMode: String, CaseIterable, Identifiable, Sendable {
+    case automatic
+    case manual
+    case acceptEdits
+    case plan
+    case bypass
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .automatic: "Auto"
+        case .manual: "Manual"
+        case .acceptEdits: "Accept edits"
+        case .plan: "Plan"
+        case .bypass: "Bypass permissions"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .automatic: "Approve small edits; ask before broader changes"
+        case .manual: "Always ask before changing files"
+        case .acceptEdits: "Automatically accept repository file edits"
+        case .plan: "Inspect and propose changes without editing"
+        case .bypass: "Approve every tool inside the selected repository"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .automatic: "wand.and.sparkles"
+        case .manual: "hand.raised"
+        case .acceptEdits: "checkmark.square"
+        case .plan: "list.bullet.clipboard"
+        case .bypass: "bolt.shield"
+        }
+    }
+}
+
+enum CodingPermissionDecision: Equatable, Sendable {
+    case allow
+    case ask
+    case deny(String)
+}
+
 enum CodingWorkspace {
     static let maximumToolRounds = 8
     static let mutatingTools: Set<String> = ["replace_in_file", "create_file"]
-
-    static let systemPrompt = """
-    Coding mode is active for a repository selected by the user. Use the repository tools to inspect relevant files before answering questions about the code. Prefer targeted searches and small reads. Never claim a file was changed unless a write tool succeeds. Write tools require user approval. Do not request secrets, dependency caches, build output, or .git data. Keep changes focused and report the paths changed.
-    """
 
     static let tools: [APIToolDefinition] = [
         definition(
@@ -117,6 +159,57 @@ enum CodingWorkspace {
 
     static func isMutating(_ call: APIToolCall) -> Bool {
         mutatingTools.contains(call.function.name)
+    }
+
+    static func tools(for mode: CodingPermissionMode) -> [APIToolDefinition] {
+        guard mode == .plan else { return tools }
+        return tools.filter { !mutatingTools.contains($0.function.name) }
+    }
+
+    static func systemPrompt(for mode: CodingPermissionMode) -> String {
+        let policy: String
+        switch mode {
+        case .plan:
+            policy = "This is a read-only planning session. Inspect the repository and propose a concrete plan, but do not edit files or claim that changes were applied."
+        case .manual:
+            policy = "Every file change requires explicit user approval."
+        case .automatic:
+            policy = "Small exact edits may be approved automatically; broader changes require user approval."
+        case .acceptEdits:
+            policy = "Repository file edits are approved automatically."
+        case .bypass:
+            policy = "Repository tools are approved automatically, but the selected repository boundary remains mandatory."
+        }
+        return """
+        Coding mode is active for a repository selected by the user. Use repository tools to inspect relevant files before answering questions about the code. Prefer targeted searches and small reads. Never claim a file was changed unless a write tool succeeds. \(policy) Do not request secrets, dependency caches, build output, or .git data. Keep changes focused and report the paths changed.
+        """
+    }
+
+    static func permissionDecision(
+        for call: APIToolCall,
+        mode: CodingPermissionMode
+    ) -> CodingPermissionDecision {
+        guard isMutating(call) else { return .allow }
+        switch mode {
+        case .plan:
+            return .deny("Plan mode does not allow repository changes.")
+        case .manual:
+            return .ask
+        case .acceptEdits, .bypass:
+            return .allow
+        case .automatic:
+            guard call.function.name == "replace_in_file" else { return .ask }
+            let arguments = object(call.function.arguments)
+            let oldText = string(arguments["old_text"]) ?? ""
+            let newText = string(arguments["new_text"]) ?? ""
+            let changedLines = max(
+                oldText.components(separatedBy: .newlines).count,
+                newText.components(separatedBy: .newlines).count
+            )
+            return max(oldText.count, newText.count) <= 4_000 && changedLines <= 80
+                ? .allow
+                : .ask
+        }
     }
 
     static func summary(of call: APIToolCall) -> String {
@@ -193,6 +286,30 @@ enum CodingWorkspace {
             return "\(status.capitalized) \(path)"
         }
         return content
+    }
+
+    static func visibleAssistantText(_ text: String) -> String {
+        var value = text.replacingOccurrences(
+            of: #"<atem:function_calls>.*?</atem:function_calls>"#,
+            with: "",
+            options: [.regularExpression, .caseInsensitive]
+        )
+        value = value.replacingOccurrences(
+            of: #"<tool_call\b[^>]*>.*?</tool_call>"#,
+            with: "",
+            options: [.regularExpression, .caseInsensitive]
+        )
+        value = value.replacingOccurrences(
+            of: #"<\|(?:start|message|end|call|channel|eom|eot)\|>"#,
+            with: "",
+            options: [.regularExpression, .caseInsensitive]
+        )
+        value = value.replacingOccurrences(
+            of: #"^\s*(?:(?:assistant\s+)?to\s*=\s*user\s*)+"#,
+            with: "",
+            options: [.regularExpression, .caseInsensitive]
+        )
+        return value.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     static func fileURL(relativePath: String, workspaceRoot: String?) -> URL? {
