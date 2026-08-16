@@ -27,6 +27,7 @@ from machboost.server import (
     load_accelerator,
     model_config,
     parse_keep_alive,
+    result_content_and_tool_calls,
 )
 from machboost.team import TeamStore
 from machboost.workspace import WorkspaceStore
@@ -60,6 +61,30 @@ class ToolCallParsingTests(unittest.TestCase):
             [call["function"]["name"] for call in calls],
             ["read_file", "search_code"],
         )
+
+    def test_hides_control_tokens_and_truncated_tool_calls(self):
+        content, calls = extract_tool_calls(
+            'Visible preface. <|start|><tool_call name="read_file" arguments={'
+        )
+
+        self.assertEqual(content, "Visible preface.")
+        self.assertEqual(calls, [])
+
+    def test_hides_control_tokens_when_backend_supplies_tool_calls(self):
+        content, calls = result_content_and_tool_calls(
+            types.SimpleNamespace(
+                text="<|start|>",
+                tool_calls=(
+                    {
+                        "id": "call-1",
+                        "function": {"name": "list_files", "arguments": {"path": "."}},
+                    },
+                ),
+            )
+        )
+
+        self.assertEqual(content, "")
+        self.assertEqual(calls[0]["function"]["name"], "list_files")
 
 
 @dataclass
