@@ -130,7 +130,8 @@ final class MachBoostUITests: XCTestCase {
     @MainActor
     func testMuseChatShowsReasoningControlsAndToolCalls() {
         let app = launchApp(environment: [
-            "MACHBOOST_UI_TEST_MODEL": "muse-glimmer:30b"
+            "MACHBOOST_UI_TEST_MODEL": "muse-glimmer:30b",
+            "MACHBOOST_UI_TEST_CODING": "1",
         ])
         let controls = app.buttons["Generation controls"]
         XCTAssertTrue(controls.waitForExistence(timeout: 10))
