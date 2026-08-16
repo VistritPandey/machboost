@@ -14,6 +14,7 @@
 		27E688AF9676E42DED5E32D6 /* PersistenceModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = E17FDB86433150ABA6AF28AD /* PersistenceModels.swift */; };
 		2AE014D9F9C0E3D500A7EF6C /* UITestMachBoostAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48709DA45E2A1AFBF0DCD64A /* UITestMachBoostAPI.swift */; };
 		30B2BB9AEE8AFDD0B4CEBBBA /* ConnectionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CBD9A214BE09A2CA78F95549 /* ConnectionsView.swift */; };
+		3D12F0E0FE2E28C6A5468B14 /* GenerationTurnMetrics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 260C7716A7D19DA6CD1CCADE /* GenerationTurnMetrics.swift */; };
 		4850300E156305AF616FE930 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = E284163CFFA3CC2C71B3C1CC /* Sparkle */; };
 		4A7F15708786794B3614BA7F /* AttachmentStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2661046B65C78C18FAFBFED /* AttachmentStore.swift */; };
 		4CABF47F885FDD74C37117E1 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2436F81998E2D43F6056D376 /* RootView.swift */; };
@@ -21,6 +22,7 @@
 		5DD9B55F557ACFA7AAF581A1 /* ModelsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0EFA8AE4D369703004BF4868 /* ModelsView.swift */; };
 		62465861BCFFAEA08CA9DEC6 /* MessageContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C62A9D5540E53785741BB3B /* MessageContentView.swift */; };
 		6C23074F0BD6603DD259ADFC /* MachBoostApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 714090FF416A6EA959EEC39B /* MachBoostApp.swift */; };
+		83071B908AF13ABA8004DA89 /* WorkspaceChangesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 448DB5E42AE60B53412CCC4D /* WorkspaceChangesView.swift */; };
 		A1E629B42E54BCE71D379C2A /* CodingWorkspace.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80E5D278800F3B196C7595E2 /* CodingWorkspace.swift */; };
 		A3ACD221FDF66A145D5980CF /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 880BA16ED1FA2BE113A59AD6 /* ChatView.swift */; };
 		AA476F2527C980D043F52F8A /* ConversationExporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 604DB256210FD0992B5F8A6C /* ConversationExporter.swift */; };
@@ -89,7 +91,9 @@
 		13CE4549CB3CD9BB10752FD5 /* MachBoost.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = MachBoost.entitlements; sourceTree = "<group>"; };
 		1B0DFBEEC996B812905DFC15 /* MachBoost.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MachBoost.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		2436F81998E2D43F6056D376 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
+		260C7716A7D19DA6CD1CCADE /* GenerationTurnMetrics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerationTurnMetrics.swift; sourceTree = "<group>"; };
 		3915A2BFBF1C814FE0FD65D4 /* ServerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerView.swift; sourceTree = "<group>"; };
+		448DB5E42AE60B53412CCC4D /* WorkspaceChangesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceChangesView.swift; sourceTree = "<group>"; };
 		48709DA45E2A1AFBF0DCD64A /* UITestMachBoostAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UITestMachBoostAPI.swift; sourceTree = "<group>"; };
 		5C427B3847622D628B344F16 /* UpdateController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateController.swift; sourceTree = "<group>"; };
 		5C62A9D5540E53785741BB3B /* MessageContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageContentView.swift; sourceTree = "<group>"; };
@@ -168,6 +172,7 @@
 				CBD9A214BE09A2CA78F95549 /* ConnectionsView.swift */,
 				A31E8B16876F4F8C49D2AB38 /* DaemonManager.swift */,
 				EE8900B13B2CE90C7E32FF10 /* DomainModels.swift */,
+				260C7716A7D19DA6CD1CCADE /* GenerationTurnMetrics.swift */,
 				B015F7E4554CB7BDFD22B814 /* Info.plist */,
 				897AC5550FBF95B6362AB6E6 /* KeychainStore.swift */,
 				13CE4549CB3CD9BB10752FD5 /* MachBoost.entitlements */,
@@ -179,6 +184,7 @@
 				87B97748332FB15E03C019A8 /* SettingsView.swift */,
 				48709DA45E2A1AFBF0DCD64A /* UITestMachBoostAPI.swift */,
 				5C427B3847622D628B344F16 /* UpdateController.swift */,
+				448DB5E42AE60B53412CCC4D /* WorkspaceChangesView.swift */,
 			);
 			path = MachBoost;
 			sourceTree = "<group>";
@@ -399,6 +405,7 @@
 				30B2BB9AEE8AFDD0B4CEBBBA /* ConnectionsView.swift in Sources */,
 				B13EB86E24A994C300C7858C /* DaemonManager.swift in Sources */,
 				F3A9FF23F0DBCABCEC4463E9 /* DomainModels.swift in Sources */,
+				3D12F0E0FE2E28C6A5468B14 /* GenerationTurnMetrics.swift in Sources */,
 				B4C476FB19A204404CC5DF12 /* KeychainStore.swift in Sources */,
 				6C23074F0BD6603DD259ADFC /* MachBoostApp.swift in Sources */,
 				62465861BCFFAEA08CA9DEC6 /* MessageContentView.swift in Sources */,
@@ -408,6 +415,7 @@
 				D31D40691C5E9FFEBE04703E /* SettingsView.swift in Sources */,
 				2AE014D9F9C0E3D500A7EF6C /* UITestMachBoostAPI.swift in Sources */,
 				1C9E4E6E69E7F0F84744660E /* UpdateController.swift in Sources */,
+				83071B908AF13ABA8004DA89 /* WorkspaceChangesView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
