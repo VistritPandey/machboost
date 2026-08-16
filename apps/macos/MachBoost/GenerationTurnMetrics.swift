@@ -37,7 +37,7 @@ struct GenerationTurnMetrics: Equatable {
     }
 
     func apply(to message: ChatMessage) {
-        message.wasCancelled = wasCancelled
+        message.wasCancelled = message.wasCancelled || wasCancelled
         message.durationSeconds = totalDurationSeconds > 0 ? totalDurationSeconds : nil
         message.timeToFirstTokenSeconds = timeToFirstTokenSeconds
         message.generatedTokens = generatedTokens > 0 ? generatedTokens : nil
