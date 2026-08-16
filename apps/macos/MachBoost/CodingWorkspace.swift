@@ -441,7 +441,10 @@ enum CodingWorkspace {
 
     private static func json(_ object: Any) -> String {
         guard JSONSerialization.isValidJSONObject(object),
-              let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+              let data = try? JSONSerialization.data(
+                  withJSONObject: object,
+                  options: [.sortedKeys, .withoutEscapingSlashes]
+              )
         else { return #"{"error":"tool result could not be encoded"}"# }
         return String(decoding: data, as: UTF8.self)
     }
