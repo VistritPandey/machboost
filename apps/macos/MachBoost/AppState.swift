@@ -51,7 +51,6 @@ final class AppState {
         let isTesting = usesUITestAPI
             || environment["MACHBOOST_TESTING"] == "1"
             || environment["XCTestConfigurationFilePath"] != nil
-        let token = isTesting ? nil : KeychainStore.token()
         let storedProfile = isTesting ? nil : Self.loadTeamProfile()
         let storedMode = InferenceMode(
             rawValue: UserDefaults.standard.string(forKey: Self.inferenceModeKey) ?? "local"
@@ -59,7 +58,7 @@ final class AppState {
         let deviceID = Self.loadDeviceID()
         self.usesUITestAPI = usesUITestAPI
         self.configuration = configuration
-        self.apiToken = token
+        self.apiToken = nil
         self.deviceID = deviceID
         self.teamHost = storedProfile
         self.inferenceMode = storedProfile == nil ? .local : storedMode
@@ -70,34 +69,14 @@ final class AppState {
             self.inferenceAPI = fixture
             self.catalog = fixture.catalogSnapshot()
         } else {
-            let local = MachBoostAPI(endpoint: configuration.endpoint, apiToken: token)
+            let local = MachBoostAPI(endpoint: configuration.endpoint, apiToken: nil)
             self.api = local
-            if let storedProfile,
-               let teamToken = KeychainStore.teamToken(profileID: storedProfile.id),
-               storedMode == .team {
-                self.inferenceAPI = MachBoostAPI(
-                    endpoint: storedProfile.endpoint,
-                    apiToken: teamToken,
-                    deviceID: deviceID
-                )
-            } else {
-                self.inferenceAPI = local
-            }
-        }
-#else
-        let local = MachBoostAPI(endpoint: configuration.endpoint, apiToken: token)
-        self.api = local
-        if let storedProfile,
-           let teamToken = KeychainStore.teamToken(profileID: storedProfile.id),
-           storedMode == .team {
-            self.inferenceAPI = MachBoostAPI(
-                endpoint: storedProfile.endpoint,
-                apiToken: teamToken,
-                deviceID: deviceID
-            )
-        } else {
             self.inferenceAPI = local
         }
+#else
+        let local = MachBoostAPI(endpoint: configuration.endpoint, apiToken: nil)
+        self.api = local
+        self.inferenceAPI = local
 #endif
     }
 
@@ -146,7 +125,10 @@ final class AppState {
                 principalName: connected.principal.name,
                 connectedAt: .now
             )
-            try KeychainStore.saveTeamToken(normalizedToken, profileID: profileID)
+            try await KeychainStore.saveTeamTokenAsync(
+                normalizedToken,
+                profileID: profileID
+            )
             teamHost = profile
             teamCatalog = connected.models
             teamLoadedModels = connected.loadedModels
@@ -181,7 +163,9 @@ final class AppState {
 
     func forgetTeamHost() {
         if let teamHost {
-            try? KeychainStore.deleteTeamToken(profileID: teamHost.id)
+            Task {
+                try? await KeychainStore.deleteTeamTokenAsync(profileID: teamHost.id)
+            }
         }
         heartbeatTask?.cancel()
         heartbeatTask = nil
@@ -241,7 +225,7 @@ final class AppState {
     func start() async {
         do {
             if configuration.lanEnabled {
-                apiToken = try KeychainStore.tokenOrCreate()
+                apiToken = try await KeychainStore.tokenOrCreateAsync()
             }
             rebuildAPI()
             try await daemon.start(configuration: configuration, apiToken: apiToken)
@@ -338,7 +322,8 @@ final class AppState {
             cacheMetrics = values.1
             self.providers = values.2
             for provider in values.2 where !provider.hasSecret {
-                guard let secret = KeychainStore.providerSecret(id: provider.id) else { continue }
+                guard let secret = await KeychainStore.providerSecretAsync(id: provider.id)
+                else { continue }
                 try await api.setProviderSecret(id: provider.id, apiKey: secret)
             }
         } catch MachBoostAPIError.server(status: 404, message: _) {
@@ -377,7 +362,7 @@ final class AppState {
                 monthlyBudgetUSD: monthlyBudgetUSD
             )
             if !apiKey.isEmpty {
-                try KeychainStore.saveProviderSecret(apiKey, id: provider.id)
+                try await KeychainStore.saveProviderSecretAsync(apiKey, id: provider.id)
             }
             await refreshMemoryAndProviders()
         } catch {
@@ -388,7 +373,7 @@ final class AppState {
     func deleteProvider(id: String) async {
         do {
             try await api.deleteProvider(id: id)
-            try KeychainStore.deleteProviderSecret(id: id)
+            try await KeychainStore.deleteProviderSecretAsync(id: id)
             await refreshMemoryAndProviders()
         } catch {
             presentedError = error.localizedDescription
@@ -477,7 +462,7 @@ final class AppState {
             let previousToken = apiToken
             var nextToken = apiToken
             if configuration.lanEnabled {
-                nextToken = try KeychainStore.tokenOrCreate()
+                nextToken = try await KeychainStore.tokenOrCreateAsync()
             }
             try await daemon.restart(
                 currentEndpoint: previousConfiguration.endpoint,
@@ -498,7 +483,7 @@ final class AppState {
     func rotateToken() async {
         do {
             let previousToken = apiToken
-            let nextToken = try KeychainStore.generateToken()
+            let nextToken = try await KeychainStore.generateTokenAsync()
             if configuration.lanEnabled {
                 try await daemon.restart(
                     currentEndpoint: configuration.endpoint,
@@ -653,7 +638,7 @@ final class AppState {
 
     private func reconnectTeamHost() async {
         guard let profile = teamHost,
-              let token = KeychainStore.teamToken(profileID: profile.id) else {
+              let token = await KeychainStore.teamTokenAsync(profileID: profile.id) else {
             useLocalInference()
             return
         }
