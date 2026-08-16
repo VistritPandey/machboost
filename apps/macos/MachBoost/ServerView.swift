@@ -391,14 +391,14 @@ struct ServerView: View {
                     systemImage: "key.fill"
                 )
                 MetricTile(
-                    title: "Saved traces",
-                    value: "\(appState.teamStatus?.traces ?? 0)",
-                    systemImage: "waveform.path.ecg"
+                    title: "Online clients",
+                    value: "\(appState.teamStatus?.onlineClients ?? 0)",
+                    systemImage: "laptopcomputer.and.iphone"
                 )
                 MetricTile(
-                    title: "Evaluations",
-                    value: "\(appState.teamStatus?.evaluations ?? 0)",
-                    systemImage: "checkmark.seal.fill"
+                    title: "Model requests",
+                    value: "\(appState.teamStatus?.pendingModelRequests ?? 0)",
+                    systemImage: "arrow.down.circle"
                 )
             }
 
@@ -484,6 +484,111 @@ struct ServerView: View {
                             }
                             .help("Revoke key")
                             .disabled(key.enabled == false)
+                        }
+                        .padding(.vertical, 6)
+                        Divider()
+                    }
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Text("Connected devices")
+                        .font(.headline)
+                    Spacer()
+                    Button {
+                        Task { await appState.refreshTeam() }
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .help("Refresh team activity")
+                }
+                if appState.teamClients.isEmpty {
+                    ContentUnavailableView(
+                        "No enrolled devices",
+                        systemImage: "laptopcomputer.slash"
+                    )
+                    .frame(maxWidth: .infinity, minHeight: 120)
+                } else {
+                    ForEach(appState.teamClients) { client in
+                        HStack(spacing: 12) {
+                            Circle()
+                                .fill(client.online ? Color.green : Color.secondary)
+                                .frame(width: 8, height: 8)
+                            Image(systemName: "laptopcomputer")
+                                .frame(width: 24)
+                            VStack(alignment: .leading, spacing: 3) {
+                                HStack(spacing: 7) {
+                                    Text(client.deviceName)
+                                        .font(.body.weight(.medium))
+                                    Text(client.principal.name)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Text(clientDetail(client))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                            Spacer()
+                            VStack(alignment: .trailing, spacing: 3) {
+                                Text("\(client.requestCount) requests")
+                                    .font(.caption.monospacedDigit())
+                                Text(client.online ? "Online" : "Offline")
+                                    .font(.caption2)
+                                    .foregroundStyle(client.online ? Color.green : Color.secondary)
+                            }
+                        }
+                        .padding(.vertical, 6)
+                        Divider()
+                    }
+                }
+            }
+
+            if !pendingModelRequests.isEmpty {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Pending model requests")
+                        .font(.headline)
+                    ForEach(pendingModelRequests) { request in
+                        HStack(spacing: 12) {
+                            Image(systemName: "shippingbox.and.arrow.backward")
+                                .foregroundStyle(.green)
+                                .frame(width: 24)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(request.model)
+                                    .font(.body.weight(.medium))
+                                    .textSelection(.enabled)
+                                Text(modelRequestDetail(request))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Button("Decline", role: .destructive) {
+                                Task {
+                                    await appState.resolveModelRequest(
+                                        request,
+                                        status: "declined"
+                                    )
+                                }
+                            }
+                            Button {
+                                Task {
+                                    await appState.pull(model: request.model)
+                                    if appState.catalog.contains(where: {
+                                        ($0.name == request.model || $0.repository == request.model)
+                                            && $0.cached
+                                    }) {
+                                        await appState.resolveModelRequest(
+                                            request,
+                                            status: "downloaded"
+                                        )
+                                    }
+                                }
+                            } label: {
+                                Label("Download", systemImage: "arrow.down.circle")
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(.green)
                         }
                         .padding(.vertical, 6)
                         Divider()
@@ -988,6 +1093,27 @@ struct ServerView: View {
                 }
             }
         )
+    }
+
+    private var pendingModelRequests: [TeamModelRequest] {
+        appState.teamModelRequests.filter { $0.status == "pending" }
+    }
+
+    private func clientDetail(_ client: TeamClient) -> String {
+        var parts = ["MachBoost \(client.appVersion)"]
+        if let workspace = client.workspaceName, !workspace.isEmpty {
+            parts.append(workspace)
+        }
+        if let model = client.model, !model.isEmpty {
+            parts.append(model)
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    private func modelRequestDetail(_ request: TeamModelRequest) -> String {
+        var parts = [request.principal.name]
+        if let note = request.note, !note.isEmpty { parts.append(note) }
+        return parts.joined(separator: " · ")
     }
 
     private func syncTeamSettings() {
