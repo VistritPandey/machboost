@@ -122,7 +122,8 @@ jobs:
         run: |
           APP="dist/macos/MachBoost.xcarchive/Products/Applications/MachBoost.app"
           PYTHON="$APP/Contents/Resources/runtime/python/bin/python3"
-          "$PYTHON" -I -c 'import machboost, mlx, mlx_lm, mlx_vlm; print(machboost.__version__)'
+          PYTHONDONTWRITEBYTECODE=1 "$PYTHON" -I -B -c \
+            'import machboost, mlx, mlx_lm, mlx_vlm; print(machboost.__version__)'
           codesign --verify --deep --strict --verbose=2 "$APP"
           spctl --assess --type execute --verbose=2 "$APP"
           xcrun stapler validate "dist/macos/MachBoost-${MACHBOOST_RELEASE_VERSION}-arm64.dmg"
