@@ -1271,6 +1271,7 @@ enum ConversationCompaction {
 
 private struct MessageRow: View {
     @Bindable var message: ChatMessage
+    @State private var showsCodeChanges = false
     let showsReasoning: Bool
     let workspaceRoot: String?
     let onEdit: () -> Void
@@ -1484,60 +1485,76 @@ private struct MessageRow: View {
     }
 
     private var codeChanges: some View {
-        DisclosureGroup {
-            VStack(alignment: .leading, spacing: 12) {
-                ForEach(changedActivities) { activity in
-                    if let path = activity.changedPath, let patch = activity.changePatch {
-                        VStack(alignment: .leading, spacing: 8) {
-                            HStack {
-                                Label(path, systemImage: "doc.text")
-                                    .font(.caption.weight(.semibold))
-                                Spacer()
-                                if CodingWorkspace.fileURL(
-                                    relativePath: path,
-                                    workspaceRoot: workspaceRoot
-                                ) != nil {
-                                    Button {
-                                        openFile(path)
-                                    } label: {
-                                        Label("Open File", systemImage: "arrow.up.forward.app")
+        VStack(alignment: .leading, spacing: 8) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.16)) {
+                    showsCodeChanges.toggle()
+                }
+            } label: {
+                HStack {
+                    Label(
+                        "Code changes (\(changedActivities.count))",
+                        systemImage: "doc.badge.gearshape"
+                    )
+                    Spacer()
+                    Image(systemName: showsCodeChanges ? "chevron.down" : "chevron.right")
+                        .font(.caption.weight(.semibold))
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .font(.callout.weight(.semibold))
+            .foregroundStyle(.green)
+            .accessibilityIdentifier("code-changes")
+
+            if showsCodeChanges {
+                VStack(alignment: .leading, spacing: 12) {
+                    ForEach(changedActivities) { activity in
+                        if let path = activity.changedPath, let patch = activity.changePatch {
+                            VStack(alignment: .leading, spacing: 8) {
+                                HStack {
+                                    Label(path, systemImage: "doc.text")
+                                        .font(.caption.weight(.semibold))
+                                    Spacer()
+                                    if CodingWorkspace.fileURL(
+                                        relativePath: path,
+                                        workspaceRoot: workspaceRoot
+                                    ) != nil {
+                                        Button {
+                                            openFile(path)
+                                        } label: {
+                                            Label("Open File", systemImage: "arrow.up.forward.app")
+                                        }
+                                        .buttonStyle(.borderless)
+                                        Button {
+                                            revealFile(path)
+                                        } label: {
+                                            Label("Reveal", systemImage: "folder")
+                                        }
+                                        .buttonStyle(.borderless)
                                     }
-                                    .buttonStyle(.borderless)
-                                    Button {
-                                        revealFile(path)
-                                    } label: {
-                                        Label("Reveal", systemImage: "folder")
-                                    }
-                                    .buttonStyle(.borderless)
                                 }
+                                ScrollView([.horizontal, .vertical]) {
+                                    Text(patch)
+                                        .font(.caption.monospaced())
+                                        .textSelection(.enabled)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .accessibilityIdentifier("change-patch-\(activity.id)")
+                                }
+                                .frame(maxHeight: 280)
+                                .padding(8)
+                                .background(Color(nsColor: .textBackgroundColor))
+                                .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
                             }
-                            ScrollView([.horizontal, .vertical]) {
-                                Text(patch)
-                                    .font(.caption.monospaced())
-                                    .textSelection(.enabled)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                            }
-                            .frame(maxHeight: 280)
-                            .padding(8)
-                            .background(Color(nsColor: .textBackgroundColor))
-                            .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
                         }
                     }
                 }
+                .padding(.top, 4)
             }
-            .padding(.top, 8)
-        } label: {
-            Label(
-                "Code changes (\(changedActivities.count))",
-                systemImage: "doc.badge.gearshape"
-            )
-            .font(.callout.weight(.semibold))
-            .foregroundStyle(.green)
         }
         .padding(10)
         .background(Color.green.opacity(0.08))
         .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-        .accessibilityIdentifier("code-changes")
     }
 
     private func statusIcon(_ state: CodingToolState) -> String {
