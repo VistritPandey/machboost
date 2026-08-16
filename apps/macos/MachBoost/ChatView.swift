@@ -22,7 +22,12 @@ struct ChatView: View {
     @State private var pendingModelDownload: CatalogModel?
     @State private var pendingToolApproval: APIToolCall?
     @State private var toolApprovalContinuation: CheckedContinuation<Bool, Never>?
+    @State private var pendingPermissionMode: CodingPermissionMode?
     @State private var isCompactingContext = false
+    @State private var showsWorkspaceChanges = false
+    @State private var workspaceChanges = WorkspaceChangeSet.empty
+    @State private var isRefreshingWorkspaceChanges = false
+    @State private var workspaceChangesTask: Task<Void, Never>?
     @FocusState private var composerIsFocused: Bool
     @AppStorage("machboost.chat.maxTokens") private var maxTokens = 512
     @AppStorage("machboost.chat.temperature") private var temperature = 0.2
@@ -31,15 +36,23 @@ struct ChatView: View {
     @AppStorage("machboost.chat.autoSummarize") private var autoSummarize = true
     @AppStorage("machboost.chat.summaryThreshold") private var summaryThreshold = 90
     @AppStorage("machboost.chat.codingMode") private var codingMode = true
+    @AppStorage("machboost.chat.permissionMode") private var permissionModeValue =
+        CodingPermissionMode.automatic.rawValue
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            Divider()
-            messageList
-            Divider()
-            contextStrip
-            composer
+        HSplitView {
+            chatSurface
+                .frame(minWidth: 600)
+            if showsWorkspaceChanges, let workspace = selectedWorkspace {
+                WorkspaceChangesView(
+                    snapshot: workspaceChanges,
+                    workspaceRoot: workspace.path,
+                    isRefreshing: isRefreshingWorkspaceChanges,
+                    onRefresh: { refreshWorkspaceChanges() },
+                    onClose: { showsWorkspaceChanges = false }
+                )
+                .frame(minWidth: 340, idealWidth: 440, maxWidth: 620)
+            }
         }
         .fileImporter(
             isPresented: $isImporting,
@@ -81,14 +94,55 @@ struct ChatView: View {
                 Text(CodingWorkspace.summary(of: pendingToolApproval))
             }
         }
+        .confirmationDialog(
+            "Bypass repository permissions?",
+            isPresented: Binding(
+                get: { pendingPermissionMode == .bypass },
+                set: { if !$0 { pendingPermissionMode = nil } }
+            )
+        ) {
+            Button("Enable Bypass", role: .destructive) {
+                permissionModeValue = CodingPermissionMode.bypass.rawValue
+                pendingPermissionMode = nil
+            }
+            Button("Cancel", role: .cancel) {
+                pendingPermissionMode = nil
+            }
+        } message: {
+            Text("MachBoost will approve every repository tool automatically. The model still cannot access files outside the selected repository.")
+        }
         .onAppear {
             selectAvailableModelIfNeeded()
+#if DEBUG
+            if let mode = ProcessInfo.processInfo.environment["MACHBOOST_UI_TEST_PERMISSION_MODE"],
+               CodingPermissionMode(rawValue: mode) != nil {
+                permissionModeValue = mode
+            }
+#endif
         }
         .onChange(of: selectableModels.map(\.name)) {
             selectAvailableModelIfNeeded()
         }
+        .onChange(of: conversation.workspaceID) {
+            workspaceChanges = .empty
+            if showsWorkspaceChanges {
+                refreshWorkspaceChanges()
+            }
+        }
         .onDisappear {
             stop()
+            workspaceChangesTask?.cancel()
+        }
+    }
+
+    private var chatSurface: some View {
+        VStack(spacing: 0) {
+            header
+            Divider()
+            messageList
+            Divider()
+            contextStrip
+            composer
         }
     }
 
@@ -144,6 +198,22 @@ struct ChatView: View {
             .disabled(selectedWorkspace == nil || selectedModel?.supportsTools != true)
             .accessibilityLabel("Coding mode")
             .help("Coding mode")
+
+            if codingSessionAvailable {
+                Button {
+                    showsWorkspaceChanges.toggle()
+                    if showsWorkspaceChanges {
+                        refreshWorkspaceChanges()
+                    }
+                } label: {
+                    Image(systemName: showsWorkspaceChanges ? "sidebar.trailing" : "sidebar.trailing")
+                        .foregroundStyle(showsWorkspaceChanges ? Color.green : Color.secondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Workspace changes")
+                .accessibilityIdentifier("workspace-changes-toggle")
+                .help("Show workspace changes")
+            }
 
             Spacer()
 
@@ -545,73 +615,117 @@ struct ChatView: View {
     }
 
     private var composer: some View {
-        HStack(alignment: .bottom, spacing: 8) {
-            Button {
-                isImporting = true
-            } label: {
-                Image(systemName: "paperclip")
-                    .frame(width: 28, height: 28)
-            }
-            .buttonStyle(.borderless)
-            .accessibilityLabel("Attach files")
-            .help("Attach text, code, folder, or image")
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .bottom, spacing: 8) {
+                Button {
+                    isImporting = true
+                } label: {
+                    Image(systemName: "paperclip")
+                        .frame(width: 28, height: 28)
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("Attach files")
+                .help("Attach text, code, folder, or image")
 
-            TextField("Message MachBoost", text: $draft, axis: .vertical)
-                .focused($composerIsFocused)
-                .textFieldStyle(.plain)
-                .lineLimit(1...8)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
-                .background(Color(nsColor: .textBackgroundColor))
-                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
-                }
-                .onSubmit {
-                    guard !isGenerating else { return }
-                    send()
-                }
-                .onAppear {
-                    if ProcessInfo.processInfo.environment["MACHBOOST_UI_TESTING"] == "1" {
-                        composerIsFocused = true
+                TextField("Message MachBoost", text: $draft, axis: .vertical)
+                    .focused($composerIsFocused)
+                    .textFieldStyle(.plain)
+                    .lineLimit(1...8)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .background(Color(nsColor: .textBackgroundColor))
+                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
                     }
-                }
-
-            Group {
-                if isGenerating {
-                    Button {
-                        stop()
-                    } label: {
-                        Image(systemName: "stop.fill")
-                            .frame(width: 28, height: 28)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.red)
-                    .accessibilityLabel("Stop generation")
-                    .accessibilityIdentifier("stop-generation")
-                    .help("Stop generation")
-                    .keyboardShortcut(.escape, modifiers: [])
-                } else {
-                    Button {
+                    .onSubmit {
+                        guard !isGenerating else { return }
                         send()
-                    } label: {
-                        Image(systemName: "arrow.up")
-                            .frame(width: 28, height: 28)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    .accessibilityLabel("Send message")
-                    .help("Send")
-                    .keyboardShortcut(.return, modifiers: .command)
+                    .onAppear {
+                        if ProcessInfo.processInfo.environment["MACHBOOST_UI_TESTING"] == "1" {
+                            composerIsFocused = true
+                        }
+                    }
+
+                Group {
+                    if isGenerating {
+                        Button {
+                            stop()
+                        } label: {
+                            Image(systemName: "stop.fill")
+                                .frame(width: 28, height: 28)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.red)
+                        .accessibilityLabel("Stop generation")
+                        .accessibilityIdentifier("stop-generation")
+                        .help("Stop generation")
+                        .keyboardShortcut(.escape, modifiers: [])
+                    } else {
+                        Button {
+                            send()
+                        } label: {
+                            Image(systemName: "arrow.up")
+                                .frame(width: 28, height: 28)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .accessibilityLabel("Send message")
+                        .help("Send")
+                        .keyboardShortcut(.return, modifiers: .command)
+                    }
                 }
+                .frame(width: 52, height: 36)
             }
-            .frame(width: 52, height: 36)
+
+            if codingSessionAvailable {
+                HStack(spacing: 8) {
+                    permissionMenu
+                    Text(permissionMode.subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    Spacer()
+                    Label(selectedWorkspace?.name ?? "Repository", systemImage: "folder")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.leading, 36)
+                .padding(.trailing, 52)
+            }
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 14)
         .frame(maxWidth: 980)
         .frame(maxWidth: .infinity)
+    }
+
+    private var permissionMenu: some View {
+        Menu {
+            ForEach(CodingPermissionMode.allCases) { mode in
+                Button {
+                    selectPermissionMode(mode)
+                } label: {
+                    if mode == permissionMode {
+                        Label(mode.title, systemImage: "checkmark")
+                    } else {
+                        Label(mode.title, systemImage: mode.icon)
+                    }
+                }
+            }
+        } label: {
+            Label(permissionMode.title, systemImage: permissionMode.icon)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(permissionMode == .bypass ? Color.orange : Color.green)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .accessibilityLabel("Coding permission mode")
+        .accessibilityValue(permissionMode.title)
+        .accessibilityIdentifier("coding-permission-mode")
+        .help("Choose how repository tool permissions are handled")
     }
 
     private var selectableModels: [CatalogModel] {
@@ -660,6 +774,16 @@ struct ChatView: View {
         appState.workspace(id: conversation.workspaceID)
     }
 
+    private var permissionMode: CodingPermissionMode {
+        CodingPermissionMode(rawValue: permissionModeValue) ?? .automatic
+    }
+
+    private var codingSessionAvailable: Bool {
+        codingMode
+            && selectedWorkspace != nil
+            && (selectedModel?.supportsTools == true || uiTestCodingFixtureEnabled)
+    }
+
     private var workspaceHelp: String {
         guard let workspace = selectedWorkspace else {
             return "Choose a repository for local code search"
@@ -680,6 +804,36 @@ struct ChatView: View {
         conversation.model = model.name
         conversation.updatedAt = .now
         try? modelContext.save()
+    }
+
+    private func selectPermissionMode(_ mode: CodingPermissionMode) {
+        if mode == .bypass, permissionMode != .bypass {
+            pendingPermissionMode = mode
+        } else {
+            permissionModeValue = mode.rawValue
+        }
+    }
+
+    private func refreshWorkspaceChanges(show: Bool = false) {
+        guard let workspace = selectedWorkspace else {
+            workspaceChanges = .empty
+            showsWorkspaceChanges = false
+            return
+        }
+        if show {
+            showsWorkspaceChanges = true
+        }
+        workspaceChangesTask?.cancel()
+        isRefreshingWorkspaceChanges = true
+        let root = workspace.path
+        workspaceChangesTask = Task { @MainActor in
+            let snapshot = await Task.detached(priority: .userInitiated) {
+                WorkspaceChanges.load(workspaceRoot: root)
+            }.value
+            guard !Task.isCancelled else { return }
+            workspaceChanges = snapshot
+            isRefreshingWorkspaceChanges = false
+        }
     }
 
     private func modelIcon(_ model: CatalogModel?) -> String {
@@ -765,9 +919,8 @@ struct ChatView: View {
         activeRequestID = requestPrefix
         let workspace = selectedWorkspace
             ?? (uiTestCodingFixtureEnabled ? appState.workspaces.first : nil)
-        let codingActive = (codingMode || uiTestCodingFixtureEnabled)
+        let codingActive = ((codingMode && codingSessionAvailable) || uiTestCodingFixtureEnabled)
             && workspace != nil
-            && (selectedModel?.supportsTools == true || uiTestCodingFixtureEnabled)
         generationTask = Task { @MainActor in
             do {
                 try? await appState.reportTeamPresence(
@@ -837,6 +990,10 @@ struct ChatView: View {
         var transcript = initialMessages
         var allToolCalls: [APIToolCall] = []
         var activities: [CodingToolActivity] = []
+        var turnMetrics = GenerationTurnMetrics()
+        defer {
+            turnMetrics.apply(to: assistant)
+        }
         for round in 0 ..< (codingActive ? CodingWorkspace.maximumToolRounds : 1) {
             try Task.checkCancellation()
             let requestID = round == 0 ? requestPrefix : "\(requestPrefix)-\(round)"
@@ -863,7 +1020,7 @@ struct ChatView: View {
                     && reasoningStrength != "off"
                     ? reasoningStrength
                     : nil,
-                tools: codingActive ? CodingWorkspace.tools : nil
+                tools: codingActive ? CodingWorkspace.tools(for: permissionMode) : nil
             )
             var roundContent = ""
             var roundToolCalls: [APIToolCall] = []
@@ -879,7 +1036,7 @@ struct ChatView: View {
                 if let calls = event.message?.toolCalls, !calls.isEmpty {
                     roundToolCalls.append(contentsOf: calls)
                 }
-                if event.done { apply(event: event, to: assistant) }
+                if event.done { turnMetrics.absorb(event) }
             }
             if !roundToolCalls.isEmpty {
                 allToolCalls.append(contentsOf: roundToolCalls)
@@ -904,18 +1061,28 @@ struct ChatView: View {
             for (offset, call) in roundToolCalls.enumerated() {
                 try Task.checkCancellation()
                 let activityIndex = activityStart + offset
+                let permission = CodingWorkspace.permissionDecision(
+                    for: call,
+                    mode: permissionMode
+                )
                 let approved: Bool
-                if CodingWorkspace.isMutating(call) {
-                    approved = await requestToolApproval(call)
-                } else {
+                let denialMessage: String
+                switch permission {
+                case .allow:
                     approved = true
+                    denialMessage = ""
+                case .ask:
+                    approved = await requestToolApproval(call)
+                    denialMessage = "The user denied this repository change."
+                case let .deny(reason):
+                    approved = false
+                    denialMessage = reason
                 }
                 let result: String
                 if !approved {
-                    let message = "The user denied this repository change."
-                    result = toolError(message)
+                    result = toolError(denialMessage)
                     activities[activityIndex].state = .denied
-                    activities[activityIndex].output = message
+                    activities[activityIndex].output = denialMessage
                     persist(activities, to: assistant)
                 } else {
                     activities[activityIndex].state = .running
@@ -930,6 +1097,9 @@ struct ChatView: View {
                         activities[activityIndex].output = toolResult.content
                         activities[activityIndex].changedPath = toolResult.changedPath
                         activities[activityIndex].changePatch = toolResult.changePatch
+                        if toolResult.changedPath != nil {
+                            refreshWorkspaceChanges(show: true)
+                        }
                     } catch {
                         result = toolError(error.localizedDescription)
                         activities[activityIndex].state = .failed
@@ -969,7 +1139,10 @@ struct ChatView: View {
         var messages: [APIChatMessage] = []
         if codingActive {
             messages.append(
-                APIChatMessage(role: MessageRole.system.rawValue, content: CodingWorkspace.systemPrompt)
+                APIChatMessage(
+                    role: MessageRole.system.rawValue,
+                    content: CodingWorkspace.systemPrompt(for: permissionMode)
+                )
             )
         }
         if let summary = conversation.contextSummary, !summary.isEmpty {
@@ -998,9 +1171,15 @@ struct ChatView: View {
                 return nil
             }
             let isCurrentUser = message.id == currentUser.id
+            let content = message.role == .assistant
+                ? CodingWorkspace.visibleAssistantText(message.content)
+                : message.content
+            if message.role == .assistant, content.isEmpty {
+                return nil
+            }
             return APIChatMessage(
                 role: message.role.rawValue,
-                content: message.content,
+                content: content,
                 images: isCurrentUser && !imageReferences.isEmpty ? imageReferences : nil
             )
         })
@@ -1202,22 +1381,6 @@ struct ChatView: View {
         try? modelContext.save()
     }
 
-    private func apply(event: ChatEvent, to message: ChatMessage) {
-        message.wasCancelled = event.doneReason == "cancelled"
-        message.durationSeconds = event.totalDuration.map { Double($0) / 1_000_000_000 }
-        message.timeToFirstTokenSeconds = event.machboost?.timeToFirstTokenSeconds
-        message.generatedTokens = event.evalCount ?? event.machboost?.stats?.generatedTokens
-        if let count = message.generatedTokens, let duration = event.evalDuration, duration > 0 {
-            message.tokensPerSecond = Double(count) / (Double(duration) / 1_000_000_000)
-        } else if
-            let count = message.generatedTokens,
-            let duration = event.machboost?.stats?.generationSeconds,
-            duration > 0
-        {
-            message.tokensPerSecond = Double(count) / duration
-        }
-    }
-
     private func importAttachments(_ result: Result<[URL], Error>) {
         do {
             let urls = try result.get()
@@ -1300,7 +1463,7 @@ private struct MessageRow: View {
                     messageActions
                 }
                 if
-                    message.content.isEmpty,
+                    visibleContent.isEmpty,
                     message.reasoningContent?.isEmpty != false,
                     message.toolCallsJSON?.isEmpty != false,
                     message.toolActivityJSON?.isEmpty != false
@@ -1321,8 +1484,8 @@ private struct MessageRow: View {
                         .font(.callout)
                         .accessibilityIdentifier("message-reasoning")
                     }
-                    if !message.content.isEmpty {
-                        MessageContentView(content: message.content)
+                    if !visibleContent.isEmpty {
+                        MessageContentView(content: visibleContent)
                     }
                     if !toolActivities.isEmpty {
                         toolActivityList
@@ -1392,16 +1555,23 @@ private struct MessageRow: View {
             || message.wasCancelled
     }
 
+    private var visibleContent: String {
+        message.role == .assistant
+            ? CodingWorkspace.visibleAssistantText(message.content)
+            : message.content
+    }
+
     private var stats: some View {
         HStack(spacing: 10) {
             if let rate = message.tokensPerSecond {
                 Label("\(rate, specifier: "%.1f") tok/s", systemImage: "gauge.with.dots.needle.50percent")
+                    .help("Generated model tokens per decode second across the complete turn")
             }
             if let ttft = message.timeToFirstTokenSeconds {
                 Label("\(ttft, specifier: "%.2f")s TTFT", systemImage: "timer")
             }
             if let tokens = message.generatedTokens {
-                Text("\(tokens) tokens")
+                Text("\(tokens) generated tokens")
             }
             if message.wasCancelled {
                 Text("Stopped")
@@ -1613,6 +1783,6 @@ private struct MessageRow: View {
 
     private func copyMessage() {
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(message.content, forType: .string)
+        NSPasteboard.general.setString(visibleContent, forType: .string)
     }
 }
