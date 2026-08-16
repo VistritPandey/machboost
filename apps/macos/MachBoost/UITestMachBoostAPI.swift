@@ -22,8 +22,23 @@ final class UITestMachBoostAPI: MachBoostAPIProtocol, @unchecked Sendable {
             atomically: true,
             encoding: .utf8
         )
+        Self.runGit(["init", "-b", "main"], at: root)
+        Self.runGit(["config", "user.email", "ui-tests@machboost.local"], at: root)
+        Self.runGit(["config", "user.name", "MachBoost UI Tests"], at: root)
+        Self.runGit(["add", "Sources/App.swift"], at: root)
+        Self.runGit(["commit", "-m", "fixture"], at: root)
         return root.path
     }()
+
+    private static func runGit(_ arguments: [String], at root: URL) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        process.arguments = ["-C", root.path] + arguments
+        process.standardOutput = Pipe()
+        process.standardError = Pipe()
+        try? process.run()
+        process.waitUntilExit()
+    }
 
     func catalogSnapshot() -> [CatalogModel] {
         lock.withLock { makeCatalog() }
