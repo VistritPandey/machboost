@@ -643,12 +643,6 @@ class RuntimeManager:
                 except OllamaMLXCancelled as exc:
                     raise RequestCancelled(str(exc)) from exc
             elif entry.config.backend.endswith("-vlm"):
-                if options.get("_tools"):
-                    runtime_messages = inject_tool_instructions(
-                        runtime_messages,
-                        options["_tools"],
-                        tool_choice=options.get("_tool_choice"),
-                    )
                 text, stats = accelerator.generate_chat(
                     runtime_messages,
                     max_tokens=max_tokens,
@@ -668,6 +662,11 @@ class RuntimeManager:
                     vision_token_bucket=_optional_int(options.get("vision_token_bucket")),
                     vision_calibration=load_vision_calibration(
                         options.get("vision_calibration")
+                    ),
+                    tools=options.get("_tools"),
+                    tool_choice=options.get("_tool_choice", "auto"),
+                    reasoning_strength=_optional_string(
+                        options.get("_reasoning_strength")
                     ),
                 )
             else:
@@ -2587,13 +2586,13 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                 ),
                 input_data=messages,
             )
+            content, tool_calls = result_content_and_tool_calls(result)
             self.remember_exchange(
                 memory_context,
                 workspace,
                 user_text=user_query,
-                assistant_text=result.text,
+                assistant_text=content,
             )
-            content, tool_calls = result_content_and_tool_calls(result)
             message: dict[str, Any] = {"role": "assistant", "content": content}
             if result.thinking:
                 message["thinking"] = result.thinking
@@ -2695,7 +2694,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
             memory_context,
             workspace,
             user_text=user_query,
-            assistant_text=result.text,
+            assistant_text=content,
         )
         if options.get("_tools"):
             message = {"role": "assistant", "content": content}
@@ -4743,6 +4742,18 @@ _TOOL_CALL_TAG = re.compile(
     r"<tool_call\b(?P<attributes>[^>]*)>(?P<body>.*?)</tool_call>",
     flags=re.S | re.I,
 )
+_ATEM_CALLS_TAG = re.compile(
+    r"<atem:function_calls>(?P<body>.*?)</atem:function_calls>",
+    flags=re.S | re.I,
+)
+_ATEM_INVOKE_TAG = re.compile(
+    r"<atem:invoke\s+name=([\"'])(?P<name>.*?)\1\s*>(?P<body>.*?)</atem:invoke>",
+    flags=re.S | re.I,
+)
+_ATEM_PARAMETER_TAG = re.compile(
+    r"<atem:parameter\s+name=([\"'])(?P<name>.*?)\1\s*>(?P<body>.*?)</atem:parameter>",
+    flags=re.S | re.I,
+)
 
 
 def _tool_call_attribute(attributes: str, name: str) -> Any:
@@ -4771,8 +4782,9 @@ def _normalized_tool_call(value: Any, *, fallback_name: str = "") -> dict[str, A
     function = function if isinstance(function, dict) else value
     if not isinstance(function, dict):
         return None
-    name = str(function.get("name") or fallback_name).strip()
-    if not name:
+    name = str(function.get("name") or fallback_name).strip().strip("\"'")
+    name = name.split("<|", 1)[0].strip()
+    if re.fullmatch(r"[A-Za-z_][\w.-]*", name) is None:
         return None
     arguments = function.get("arguments") or {}
     if isinstance(arguments, str):
@@ -4787,6 +4799,34 @@ def _normalized_tool_call(value: Any, *, fallback_name: str = "") -> dict[str, A
     }
 
 
+def _atem_value(raw: str) -> Any:
+    candidate = raw.strip()
+    if not candidate:
+        return ""
+    try:
+        return json.loads(candidate)
+    except json.JSONDecodeError:
+        return candidate
+
+
+def _atem_tool_calls(raw: str) -> list[dict[str, Any]]:
+    calls: list[dict[str, Any]] = []
+    for block in _ATEM_CALLS_TAG.finditer(raw):
+        for invoke in _ATEM_INVOKE_TAG.finditer(block.group("body") or ""):
+            arguments = {
+                parameter.group("name"): _atem_value(parameter.group("body") or "")
+                for parameter in _ATEM_PARAMETER_TAG.finditer(
+                    invoke.group("body") or ""
+                )
+            }
+            call = _normalized_tool_call(
+                {"name": invoke.group("name"), "arguments": arguments}
+            )
+            if call is not None:
+                calls.append(call)
+    return calls
+
+
 def extract_tool_calls(text: str) -> tuple[str, list[dict[str, Any]]]:
     raw = str(text or "")
     tagged = list(_TOOL_CALL_TAG.finditer(raw))
@@ -4795,7 +4835,7 @@ def extract_tool_calls(text: str) -> tuple[str, list[dict[str, Any]]]:
         raw,
         flags=re.I,
     )
-    calls: list[dict[str, Any]] = []
+    calls = _atem_tool_calls(raw)
 
     for index, match in enumerate(tagged):
         attributes = match.group("attributes") or ""
@@ -4818,7 +4858,7 @@ def extract_tool_calls(text: str) -> tuple[str, list[dict[str, Any]]]:
             calls.append(call)
 
     direct_payload = False
-    if not tagged:
+    if not tagged and not calls:
         candidate = raw.strip()
         if candidate.startswith("```"):
             candidate = re.sub(r"^```(?:json)?\s*|\s*```$", "", candidate, flags=re.I)
@@ -4842,20 +4882,26 @@ def extract_tool_calls(text: str) -> tuple[str, list[dict[str, Any]]]:
 
     if direct_payload:
         return "", calls
-    content = _TOOL_CALL_TAG.sub("", raw)
+    content = _ATEM_CALLS_TAG.sub("", raw)
+    content = _TOOL_CALL_TAG.sub("", content)
     content = re.sub(
-        r"<\|(?:start|message|end|call|channel)\|>",
+        r"<\|start\|>assistant(?:\s+to\s*=\s*[A-Za-z_][\w.-]*)?<\|message\|>",
         "",
         content,
         flags=re.I,
     )
-    if calls:
-        content = re.sub(
-            r"^\s*assistant\s+to\s*=\s*[A-Za-z_][\w.-]*\s*",
-            "",
-            content,
-            flags=re.I,
-        )
+    content = re.sub(
+        r"<\|(?:start|message|end|call|channel|eom|eot)\|>",
+        "",
+        content,
+        flags=re.I,
+    )
+    content = re.sub(
+        r"^\s*(?:assistant\s+)?to\s*=\s*[A-Za-z_][\w.-]*\s*",
+        "",
+        content,
+        flags=re.I,
+    )
     content = re.sub(r"<tool_call\b[^>]*(?:>.*)?$", "", content, flags=re.S | re.I)
     return content.strip(), calls
 
