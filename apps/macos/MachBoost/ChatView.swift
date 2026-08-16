@@ -1420,7 +1420,7 @@ private struct MessageRow: View {
         {
             return activities
         }
-        return toolCalls.map { CodingToolActivity(call: $0, state: .succeeded) }
+        return toolCalls.map { CodingToolActivity(call: $0, state: .requested) }
     }
 
     private var changedActivities: [CodingToolActivity] {
@@ -1559,6 +1559,7 @@ private struct MessageRow: View {
 
     private func statusIcon(_ state: CodingToolState) -> String {
         switch state {
+        case .requested: "wrench.and.screwdriver"
         case .queued: "clock"
         case .running: "arrow.trianglehead.2.clockwise.rotate.90"
         case .succeeded: "checkmark.circle.fill"
@@ -1569,7 +1570,7 @@ private struct MessageRow: View {
 
     private func statusColor(_ state: CodingToolState) -> Color {
         switch state {
-        case .queued, .running: .secondary
+        case .requested, .queued, .running: .secondary
         case .succeeded: .green
         case .denied: .orange
         case .failed: .red
@@ -1578,6 +1579,7 @@ private struct MessageRow: View {
 
     private func statusLabel(_ state: CodingToolState) -> String {
         switch state {
+        case .requested: "Requested"
         case .queued: "Queued"
         case .running: "Running"
         case .succeeded: "Done"
