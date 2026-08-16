@@ -157,6 +157,7 @@ final class MachBoostUITests: XCTestCase {
         let app = launchApp(environment: [
             "MACHBOOST_UI_TEST_MODEL": "muse-glimmer:30b",
             "MACHBOOST_UI_TEST_CODING": "1",
+            "MACHBOOST_UI_TEST_PERMISSION_MODE": "manual",
         ])
         let repository = app.descendants(matching: .any)["repository-picker"]
         XCTAssertTrue(repository.waitForExistence(timeout: 10))
@@ -164,6 +165,9 @@ final class MachBoostUITests: XCTestCase {
         let fixture = app.menuItems["MachBoost fixture"]
         XCTAssertTrue(fixture.waitForExistence(timeout: 3))
         fixture.click()
+        let permissionMode = app.descendants(matching: .any)["coding-permission-mode"]
+        XCTAssertTrue(permissionMode.waitForExistence(timeout: 3))
+        XCTAssertEqual(permissionMode.value as? String, "Manual")
 
         send("Exercise coding agent", in: app)
 
@@ -194,6 +198,12 @@ final class MachBoostUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Reveal"].exists)
         let patch = app.staticTexts["change-patch-edit-1"]
         XCTAssertTrue(patch.waitForExistence(timeout: 3))
+        XCTAssertTrue(
+            app.descendants(matching: .any)["workspace-changes-panel"]
+                .waitForExistence(timeout: 5)
+        )
+        XCTAssertTrue(app.staticTexts["main → working tree"].exists)
+        XCTAssertTrue(app.staticTexts["Sources/App.swift"].exists)
         XCTAssertFalse(
             app.staticTexts.containing(
                 NSPredicate(format: "label CONTAINS %@", "<tool_call")
