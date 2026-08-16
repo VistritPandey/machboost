@@ -20,6 +20,8 @@ struct ChatView: View {
     @State private var showsModelBrowser = false
     @State private var modelSearch = ""
     @State private var pendingModelDownload: CatalogModel?
+    @State private var pendingToolApproval: APIToolCall?
+    @State private var toolApprovalContinuation: CheckedContinuation<Bool, Never>?
     @State private var isCompactingContext = false
     @FocusState private var composerIsFocused: Bool
     @AppStorage("machboost.chat.maxTokens") private var maxTokens = 512
@@ -28,6 +30,7 @@ struct ChatView: View {
     @AppStorage("machboost.chat.showReasoning") private var showReasoning = true
     @AppStorage("machboost.chat.autoSummarize") private var autoSummarize = true
     @AppStorage("machboost.chat.summaryThreshold") private var summaryThreshold = 90
+    @AppStorage("machboost.chat.codingMode") private var codingMode = true
 
     var body: some View {
         VStack(spacing: 0) {
@@ -62,6 +65,20 @@ struct ChatView: View {
         } message: {
             if let model = pendingModelDownload {
                 Text(downloadMessage(for: model))
+            }
+        }
+        .confirmationDialog(
+            "Allow repository change?",
+            isPresented: Binding(
+                get: { pendingToolApproval != nil },
+                set: { if !$0 { resolveToolApproval(false) } }
+            )
+        ) {
+            Button("Apply Change") { resolveToolApproval(true) }
+            Button("Deny", role: .cancel) { resolveToolApproval(false) }
+        } message: {
+            if let pendingToolApproval {
+                Text(CodingWorkspace.summary(of: pendingToolApproval))
             }
         }
         .onAppear {
@@ -117,7 +134,25 @@ struct ChatView: View {
 
             workspaceMenu
 
+            Button {
+                codingMode.toggle()
+            } label: {
+                Image(systemName: codingMode ? "hammer.fill" : "hammer")
+                    .foregroundStyle(codingMode ? Color.green : Color.secondary)
+            }
+            .buttonStyle(.plain)
+            .disabled(selectedWorkspace == nil || selectedModel?.supportsTools != true)
+            .accessibilityLabel("Coding mode")
+            .help("Coding mode")
+
             Spacer()
+
+            Label(
+                appState.inferenceLabel,
+                systemImage: appState.inferenceMode == .team ? "network" : "desktopcomputer"
+            )
+            .font(.caption)
+            .foregroundStyle(appState.inferenceMode == .team ? Color.green : Color.secondary)
 
             Button {
                 showsGenerationControls.toggle()
@@ -182,7 +217,7 @@ struct ChatView: View {
             Divider()
             HStack {
                 Label(
-                    "\(browsableModels.filter(\.cached).count) ready on this Mac",
+                    "\(browsableModels.filter(\.cached).count) ready on \(appState.inferenceLabel)",
                     systemImage: "checkmark.circle"
                 )
                 .font(.caption)
@@ -199,7 +234,7 @@ struct ChatView: View {
     }
 
     private func modelBrowserRow(_ model: CatalogModel) -> some View {
-        let loaded = appState.loadedModels.contains {
+        let loaded = appState.activeLoadedModels.contains {
             $0.model == model.name || $0.model == model.repository
         }
         let downloading = appState.downloads[model.name] != nil
@@ -211,7 +246,7 @@ struct ChatView: View {
                 conversation.updatedAt = .now
                 try? modelContext.save()
                 showsModelBrowser = false
-            } else if !downloading {
+            } else if appState.inferenceMode == .local, !downloading {
                 pendingModelDownload = model
             }
         } label: {
@@ -579,7 +614,7 @@ struct ChatView: View {
     }
 
     private var selectableModels: [CatalogModel] {
-        appState.catalog
+        appState.activeCatalog
             .filter {
                 $0.cached
                     && $0.support == "ready"
@@ -593,7 +628,7 @@ struct ChatView: View {
 
     private var browsableModels: [CatalogModel] {
         let query = modelSearch.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return appState.catalog
+        return appState.activeCatalog
             .filter { model in
                 guard
                     model.support == "ready",
@@ -725,55 +760,31 @@ struct ChatView: View {
         activeAssistant = assistant
         try? modelContext.save()
 
-        let requestID = "chat-\(UUID().uuidString.lowercased())"
-        activeRequestID = requestID
-        let apiMessages = requestMessages(
-            currentUser: user,
-            excluding: assistant,
-            images: images
-        )
-        let request = ChatRequest(
-            requestID: requestID,
-            model: conversation.model,
-            messages: apiMessages,
-            context: conversation.orderedAttachments
-                .filter { $0.kind == .text }
-                .map(\.importedPath),
-            options: .init(
-                maxTokens: maxTokens,
-                temperature: temperature,
-                affinityKey: conversation.workspaceID.map { "workspace:\($0)" }
-                    ?? conversation.id.uuidString
-            ),
-            workspaceID: conversation.workspaceID,
-            reasoningStrength: selectedModel?.supportsReasoning == true
-                && reasoningStrength != "off"
-                ? reasoningStrength
-                : nil
-        )
+        let requestPrefix = "chat-\(UUID().uuidString.lowercased())"
+        activeRequestID = requestPrefix
+        let workspace = selectedWorkspace
+        let codingActive = codingMode
+            && workspace != nil
+            && selectedModel?.supportsTools == true
         generationTask = Task { @MainActor in
-            var streamedToolCalls: [APIToolCall] = []
             do {
-                for try await event in appState.api.streamChat(request) {
-                    if let error = event.error {
-                        throw MachBoostAPIError.stream(error)
-                    }
-                    if let content = event.message?.content, !content.isEmpty {
-                        assistant.content += content
-                    }
-                    if let thinking = event.message?.thinking, !thinking.isEmpty {
-                        assistant.reasoningContent = (assistant.reasoningContent ?? "") + thinking
-                    }
-                    if let calls = event.message?.toolCalls, !calls.isEmpty {
-                        streamedToolCalls.append(contentsOf: calls)
-                        if let data = try? JSONEncoder().encode(streamedToolCalls) {
-                            assistant.toolCallsJSON = String(decoding: data, as: UTF8.self)
-                        }
-                    }
-                    if event.done {
-                        apply(event: event, to: assistant)
-                    }
-                }
+                try? await appState.reportTeamPresence(
+                    workspace: workspace,
+                    model: conversation.model
+                )
+                let messages = try requestMessages(
+                    currentUser: user,
+                    excluding: assistant,
+                    images: images,
+                    codingActive: codingActive
+                )
+                try await runGenerationLoop(
+                    requestPrefix: requestPrefix,
+                    messages: messages,
+                    assistant: assistant,
+                    workspace: workspace,
+                    codingActive: codingActive
+                )
                 try? modelContext.save()
                 if autoSummarize {
                     await compactContextIfNeeded(force: false)
@@ -781,7 +792,7 @@ struct ChatView: View {
             } catch is CancellationError {
                 assistant.wasCancelled = true
             } catch {
-                if assistant.content.isEmpty {
+                if assistant.content.isEmpty, assistant.toolCallsJSON == nil {
                     modelContext.delete(assistant)
                 }
                 appState.presentedError = error.localizedDescription
@@ -797,20 +808,127 @@ struct ChatView: View {
 
     private func stop() {
         guard let activeRequestID else { return }
+        resolveToolApproval(false)
         activeAssistant?.wasCancelled = true
         try? modelContext.save()
         Task { @MainActor in
-            _ = try? await appState.api.cancel(requestID: activeRequestID)
+            _ = try? await appState.inferenceAPI.cancel(requestID: activeRequestID)
             generationTask?.cancel()
+        }
+    }
+
+    private func runGenerationLoop(
+        requestPrefix: String,
+        messages initialMessages: [APIChatMessage],
+        assistant: ChatMessage,
+        workspace: WorkspaceSummary?,
+        codingActive: Bool
+    ) async throws {
+        var transcript = initialMessages
+        var allToolCalls: [APIToolCall] = []
+        for round in 0 ..< (codingActive ? CodingWorkspace.maximumToolRounds : 1) {
+            try Task.checkCancellation()
+            let requestID = round == 0 ? requestPrefix : "\(requestPrefix)-\(round)"
+            activeRequestID = requestID
+            let request = ChatRequest(
+                requestID: requestID,
+                model: conversation.model,
+                messages: transcript,
+                context: appState.inferenceMode == .local && !codingActive
+                    ? conversation.orderedAttachments
+                        .filter { $0.kind == .text }
+                        .map(\.importedPath)
+                    : [],
+                options: .init(
+                    maxTokens: maxTokens,
+                    temperature: temperature,
+                    affinityKey: workspace?.revision.map { "workspace:\($0)" }
+                        ?? conversation.id.uuidString
+                ),
+                workspaceID: appState.inferenceMode == .local && !codingActive
+                    ? conversation.workspaceID
+                    : nil,
+                reasoningStrength: selectedModel?.supportsReasoning == true
+                    && reasoningStrength != "off"
+                    ? reasoningStrength
+                    : nil,
+                tools: codingActive ? CodingWorkspace.tools : nil
+            )
+            var roundContent = ""
+            var roundToolCalls: [APIToolCall] = []
+            for try await event in appState.inferenceAPI.streamChat(request) {
+                if let error = event.error { throw MachBoostAPIError.stream(error) }
+                if let content = event.message?.content, !content.isEmpty {
+                    roundContent += content
+                    assistant.content += content
+                }
+                if let thinking = event.message?.thinking, !thinking.isEmpty {
+                    assistant.reasoningContent = (assistant.reasoningContent ?? "") + thinking
+                }
+                if let calls = event.message?.toolCalls, !calls.isEmpty {
+                    roundToolCalls.append(contentsOf: calls)
+                }
+                if event.done { apply(event: event, to: assistant) }
+            }
+            guard codingActive, !roundToolCalls.isEmpty, let workspace else { return }
+
+            allToolCalls.append(contentsOf: roundToolCalls)
+            if let data = try? JSONEncoder().encode(allToolCalls) {
+                assistant.toolCallsJSON = String(decoding: data, as: UTF8.self)
+            }
+            transcript.append(
+                APIChatMessage(
+                    role: MessageRole.assistant.rawValue,
+                    content: roundContent,
+                    toolCalls: roundToolCalls
+                )
+            )
+            for call in roundToolCalls {
+                try Task.checkCancellation()
+                let approved = !CodingWorkspace.isMutating(call)
+                    || await requestToolApproval(call)
+                let result: String
+                if !approved {
+                    result = toolError("The user denied this repository change.")
+                } else {
+                    do {
+                        result = try CodingWorkspace.execute(
+                            call,
+                            workspaceRoot: workspace.path
+                        ).content
+                    } catch {
+                        result = toolError(error.localizedDescription)
+                    }
+                }
+                transcript.append(
+                    APIChatMessage(
+                        role: "tool",
+                        content: result,
+                        toolName: call.function.name,
+                        toolCallID: call.id
+                    )
+                )
+            }
+            if round == CodingWorkspace.maximumToolRounds - 1 {
+                throw MachBoostAPIError.stream(
+                    "Coding mode reached its tool-call limit. Start a new turn to continue."
+                )
+            }
         }
     }
 
     private func requestMessages(
         currentUser: ChatMessage,
         excluding assistant: ChatMessage,
-        images: [ChatAttachment]
-    ) -> [APIChatMessage] {
+        images: [ChatAttachment],
+        codingActive: Bool
+    ) throws -> [APIChatMessage] {
         var messages: [APIChatMessage] = []
+        if codingActive {
+            messages.append(
+                APIChatMessage(role: MessageRole.system.rawValue, content: CodingWorkspace.systemPrompt)
+            )
+        }
         if let summary = conversation.contextSummary, !summary.isEmpty {
             messages.append(
                 APIChatMessage(
@@ -819,6 +937,16 @@ struct ChatView: View {
                 )
             )
         }
+        if appState.inferenceMode == .team,
+           let attachmentContext = try remoteTextAttachmentContext() {
+            messages.append(
+                APIChatMessage(
+                    role: MessageRole.system.rawValue,
+                    content: attachmentContext
+                )
+            )
+        }
+        let imageReferences = try imageReferences(images)
         messages.append(contentsOf: conversation.orderedMessages.compactMap { message in
             guard
                 message.id != assistant.id,
@@ -830,10 +958,71 @@ struct ChatView: View {
             return APIChatMessage(
                 role: message.role.rawValue,
                 content: message.content,
-                images: isCurrentUser && !images.isEmpty ? images.map(\.importedPath) : nil
+                images: isCurrentUser && !imageReferences.isEmpty ? imageReferences : nil
             )
         })
         return messages
+    }
+
+    private func requestToolApproval(_ call: APIToolCall) async -> Bool {
+        await withCheckedContinuation { continuation in
+            pendingToolApproval = call
+            toolApprovalContinuation = continuation
+        }
+    }
+
+    private func resolveToolApproval(_ approved: Bool) {
+        guard let continuation = toolApprovalContinuation else {
+            pendingToolApproval = nil
+            return
+        }
+        toolApprovalContinuation = nil
+        pendingToolApproval = nil
+        continuation.resume(returning: approved)
+    }
+
+    private func imageReferences(_ images: [ChatAttachment]) throws -> [String] {
+        guard appState.inferenceMode == .team else {
+            return images.map(\.importedPath)
+        }
+        return try images.map { image in
+            let data = try Data(contentsOf: URL(fileURLWithPath: image.importedPath))
+            guard data.count <= 25 * 1024 * 1024 else {
+                throw MachBoostAPIError.stream("\(image.displayName) exceeds the 25 MB image limit.")
+            }
+            let mimeType: String
+            switch URL(fileURLWithPath: image.importedPath).pathExtension.lowercased() {
+            case "jpg", "jpeg": mimeType = "image/jpeg"
+            case "gif": mimeType = "image/gif"
+            case "webp": mimeType = "image/webp"
+            default: mimeType = "image/png"
+            }
+            return "data:\(mimeType);base64,\(data.base64EncodedString())"
+        }
+    }
+
+    private func remoteTextAttachmentContext() throws -> String? {
+        let attachments = conversation.orderedAttachments.filter { $0.kind == .text }
+        guard !attachments.isEmpty else { return nil }
+        var remaining = 128_000
+        var sections: [String] = []
+        for attachment in attachments where remaining > 0 {
+            let data = try Data(contentsOf: URL(fileURLWithPath: attachment.importedPath))
+            let chunk = data.prefix(min(data.count, min(64_000, remaining)))
+            sections.append(
+                "FILE: \(attachment.displayName)\n\(String(decoding: chunk, as: UTF8.self))"
+            )
+            remaining -= chunk.count
+        }
+        return "Explicitly attached local files:\n\n" + sections.joined(separator: "\n\n")
+    }
+
+    private func toolError(_ message: String) -> String {
+        guard let data = try? JSONSerialization.data(
+            withJSONObject: ["error": message],
+            options: [.sortedKeys]
+        ) else { return #"{"error":"tool failed"}"# }
+        return String(decoding: data, as: UTF8.self)
     }
 
     private var contextUsageRatio: Double {
@@ -915,7 +1104,7 @@ struct ChatView: View {
 
         var summary = ""
         do {
-            for try await event in appState.api.streamChat(request) {
+            for try await event in appState.inferenceAPI.streamChat(request) {
                 if let error = event.error { throw MachBoostAPIError.stream(error) }
                 summary += event.message?.content ?? ""
             }
