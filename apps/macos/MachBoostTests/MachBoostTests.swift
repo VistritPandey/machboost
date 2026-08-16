@@ -512,6 +512,8 @@ final class MachBoostTests: XCTestCase {
               "keys":3,
               "traces":42,
               "evaluations":2,
+              "online_clients":5,
+              "pending_model_requests":1,
               "settings":{
                 "trace_mode":"redacted",
                 "retention_days":30,
@@ -524,9 +526,197 @@ final class MachBoostTests: XCTestCase {
         let status = try JSONDecoder().decode(TeamStatus.self, from: data)
 
         XCTAssertEqual(status.keys, 3)
+        XCTAssertEqual(status.onlineClients, 5)
+        XCTAssertEqual(status.pendingModelRequests, 1)
         XCTAssertEqual(status.settings.traceMode, "redacted")
         XCTAssertEqual(status.settings.retentionDays, 30)
         XCTAssertEqual(status.settings.maxStorageBytes, 536_870_912)
+    }
+
+    func testTeamConnectUsesBearerAndStableDeviceIdentity() async throws {
+        let session = mockSession { request in
+            XCTAssertEqual(request.url?.path, "/api/team/connect")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer mbk_team")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "X-MachBoost-Device-ID"), "device-42")
+            return self.response(
+                for: request,
+                body: """
+                {
+                  "schema":"machboost.team-connect.v1",
+                  "host":{"name":"Inference Mac","version":"0.13.0"},
+                  "principal":{
+                    "id":"key_1","name":"Alice","kind":"key",
+                    "scopes":["inference","models:read"],"allowed_models":[],
+                    "max_concurrent":2,"requests_per_minute":60
+                  },
+                  "models":[],"loaded_models":[],
+                  "capabilities":["chat","tool_calls"]
+                }
+                """
+            )
+        }
+        let api = MachBoostAPI(
+            endpoint: URL(string: "http://192.168.1.20:11435")!,
+            apiToken: "mbk_team",
+            deviceID: "device-42",
+            session: session
+        )
+
+        let connection = try await api.teamConnect()
+
+        XCTAssertEqual(connection.host.name, "Inference Mac")
+        XCTAssertEqual(connection.principal.name, "Alice")
+        XCTAssertTrue(connection.capabilities.contains("tool_calls"))
+    }
+
+    func testTeamPresenceNeverSendsRepositoryPath() async throws {
+        let session = mockSession { request in
+            let object = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: try XCTUnwrap(request.httpBody))
+                    as? [String: Any]
+            )
+            XCTAssertEqual(object["workspace_name"] as? String, "checkout-service")
+            XCTAssertEqual(object["workspace_fingerprint"] as? String, "abc123")
+            XCTAssertNil(object["workspace_path"])
+            return self.response(
+                for: request,
+                body: """
+                {
+                  "schema":"machboost.team-presence.v1",
+                  "client":{
+                    "device_id":"device-42",
+                    "principal":{"id":"key_1","name":"Alice"},
+                    "device_name":"Alice's Mac","app_version":"0.13.0",
+                    "mode":"connect","workspace_name":"checkout-service",
+                    "workspace_fingerprint":"abc123","model":"coder",
+                    "first_seen_at":"2026-08-15T12:00:00Z",
+                    "last_seen_at":"2026-08-15T12:00:01Z",
+                    "last_request_at":null,"request_count":0,"online":true
+                  }
+                }
+                """
+            )
+        }
+        let api = MachBoostAPI(
+            endpoint: URL(string: "http://192.168.1.20:11435")!,
+            apiToken: "mbk_team",
+            deviceID: "device-42",
+            session: session
+        )
+
+        let client = try await api.reportTeamPresence(
+            deviceID: "device-42",
+            deviceName: "Alice's Mac",
+            appVersion: "0.13.0",
+            workspaceName: "checkout-service",
+            workspaceFingerprint: "abc123",
+            model: "coder"
+        )
+
+        XCTAssertTrue(client.online)
+        XCTAssertEqual(client.workspaceName, "checkout-service")
+    }
+
+    func testToolResultMessageEncodesCallID() throws {
+        let message = MachBoostDaemonClient.APIChatMessage(
+            role: "tool",
+            content: #"{"files":["src/main.swift"]}"#,
+            toolName: "list_files",
+            toolCallID: "call-1"
+        )
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(message))
+                as? [String: Any]
+        )
+
+        XCTAssertEqual(object["tool_name"] as? String, "list_files")
+        XCTAssertEqual(object["tool_call_id"] as? String, "call-1")
+    }
+
+    func testCodingWorkspaceToolsAreBoundedToSelectedRepository() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("machboost-tools-\(UUID().uuidString)", isDirectory: true)
+        let source = root.appendingPathComponent("Sources/App.swift")
+        try FileManager.default.createDirectory(
+            at: source.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try "let greeting = \"hello\"\n".write(to: source, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let search = APIToolCall(
+            id: "search-1",
+            type: "function",
+            function: .init(
+                name: "search_code",
+                arguments: .object(["query": .string("greeting")])
+            )
+        )
+        let searchResult = try CodingWorkspace.execute(search, workspaceRoot: root.path)
+        XCTAssertTrue(searchResult.content.contains("Sources/App.swift"))
+
+        let replace = APIToolCall(
+            id: "replace-1",
+            type: "function",
+            function: .init(
+                name: "replace_in_file",
+                arguments: .object([
+                    "path": .string("Sources/App.swift"),
+                    "old_text": .string("hello"),
+                    "new_text": .string("hello team"),
+                ])
+            )
+        )
+        XCTAssertTrue(CodingWorkspace.isMutating(replace))
+        _ = try CodingWorkspace.execute(replace, workspaceRoot: root.path)
+        XCTAssertTrue(try String(contentsOf: source, encoding: .utf8).contains("hello team"))
+
+        let escape = APIToolCall(
+            function: .init(
+                name: "read_file",
+                arguments: .object(["path": .string("../private.txt")])
+            )
+        )
+        XCTAssertThrowsError(try CodingWorkspace.execute(escape, workspaceRoot: root.path))
+    }
+
+    func testCodingWorkspaceRejectsSymlinkEscapesAndAmbiguousWrites() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("machboost-tools-\(UUID().uuidString)", isDirectory: true)
+        let outside = FileManager.default.temporaryDirectory
+            .appendingPathComponent("machboost-outside-\(UUID().uuidString).txt")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try "secret".write(to: outside, atomically: true, encoding: .utf8)
+        try FileManager.default.createSymbolicLink(
+            at: root.appendingPathComponent("outside.txt"),
+            withDestinationURL: outside
+        )
+        let duplicate = root.appendingPathComponent("duplicate.txt")
+        try "same same".write(to: duplicate, atomically: true, encoding: .utf8)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: outside)
+        }
+
+        let readLink = APIToolCall(
+            function: .init(
+                name: "read_file",
+                arguments: .object(["path": .string("outside.txt")])
+            )
+        )
+        XCTAssertThrowsError(try CodingWorkspace.execute(readLink, workspaceRoot: root.path))
+
+        let ambiguous = APIToolCall(
+            function: .init(
+                name: "replace_in_file",
+                arguments: .object([
+                    "path": .string("duplicate.txt"),
+                    "old_text": .string("same"),
+                    "new_text": .string("new"),
+                ])
+            )
+        )
+        XCTAssertThrowsError(try CodingWorkspace.execute(ambiguous, workspaceRoot: root.path))
     }
 
     func testMemoryCacheAndProviderSchemasDecode() throws {
