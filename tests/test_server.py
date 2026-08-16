@@ -86,6 +86,34 @@ class ToolCallParsingTests(unittest.TestCase):
         self.assertEqual(content, "")
         self.assertEqual(calls[0]["function"]["name"], "list_files")
 
+    def test_extracts_native_muse_atem_calls_and_cleans_recipient_tokens(self):
+        content, calls = extract_tool_calls(
+            '<|start|>assistant to=list_files<|message|>'
+            '<atem:function_calls>\n'
+            '<atem:invoke name="list_files">\n'
+            '<atem:parameter name="path">services/app</atem:parameter>\n'
+            '<atem:parameter name="limit">50</atem:parameter>\n'
+            '</atem:invoke>\n'
+            '</atem:function_calls><|eot|>'
+        )
+
+        self.assertEqual(content, "")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["function"]["name"], "list_files")
+        self.assertEqual(
+            json.loads(calls[0]["function"]["arguments"]),
+            {"path": "services/app", "limit": 50},
+        )
+
+    def test_rejects_invalid_tool_names_and_removes_bare_user_recipient(self):
+        content, calls = extract_tool_calls(
+            '<tool_call name="&quot;list_files<|message|" arguments={}></tool_call>'
+            'to=user'
+        )
+
+        self.assertEqual(content, "")
+        self.assertEqual(calls, [])
+
 
 @dataclass
 class FakeStats:
@@ -233,9 +261,21 @@ class FakeVisionAccelerator:
         vision_token_layer=None,
         vision_token_bucket=None,
         vision_calibration=None,
+        tools=None,
+        tool_choice="auto",
+        reasoning_strength=None,
     ):
         self.chat_calls.append(
-            (messages, max_tokens, use_vision_cache, temperature, enable_thinking)
+            (
+                messages,
+                max_tokens,
+                use_vision_cache,
+                temperature,
+                enable_thinking,
+                tools,
+                tool_choice,
+                reasoning_strength,
+            )
         )
         self.cold_vision_calls.append((cold_vision_mode, cold_vision_max_edge))
         self.vision_token_calls.append(
@@ -1915,6 +1955,34 @@ class HTTPServerTests(unittest.TestCase):
         model = json.loads(ps_body)["models"][0]
         self.assertEqual(model["capabilities"], ["vision", "chat"])
         self.assertEqual(model["vision_cache"]["hits"], 1)
+
+    def test_native_vlm_receives_tools_through_its_chat_template(self):
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "read_file",
+                    "description": "Read a file",
+                    "parameters": {"type": "object"},
+                },
+            }
+        ]
+        with patch("machboost.models.native_mlx_vlm_available", return_value=True):
+            self.request(
+                "/api/chat",
+                {
+                    "model": "qwen2.5-vl:3b",
+                    "messages": [{"role": "user", "content": "Inspect it."}],
+                    "tools": tools,
+                    "tool_choice": "required",
+                    "stream": False,
+                },
+            )
+
+        call = self.loaded[0][1].chat_calls[0]
+        self.assertEqual(call[0], [{"role": "user", "content": "Inspect it."}])
+        self.assertEqual(call[5], tools)
+        self.assertEqual(call[6], "required")
 
     def test_muse_glimmer_ollama_chat_preserves_reasoning_vision_and_tools(self):
         tools = [
