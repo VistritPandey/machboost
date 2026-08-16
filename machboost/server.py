@@ -7,6 +7,7 @@ import math
 import os
 import re
 import resource
+import socket
 import sys
 import threading
 import time
@@ -67,6 +68,17 @@ DEFAULT_MAX_QUEUE = 64
 DEFAULT_QUEUE_TIMEOUT = 300.0
 MAX_REPLICAS = 8
 MAX_REQUEST_ID_LENGTH = 128
+TEAM_INFERENCE_PATHS = {
+    "/api/chat",
+    "/api/generate",
+    "/api/embed",
+    "/api/embeddings",
+    "/v1/chat/completions",
+    "/v1/completions",
+    "/v1/embeddings",
+    "/v1/messages",
+    "/v1/responses",
+}
 
 
 class RequestCancelled(RuntimeError):
@@ -1801,6 +1813,52 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
         if path == "/api/version":
             self.send_json({"version": __version__})
             return
+        if path == "/api/team/connect":
+            if self.teams is None:
+                self.send_error_json(
+                    404, "team mode is not enabled", code="team_mode_disabled"
+                )
+                return
+            if not self.require_scope("models:read"):
+                return
+            available = [
+                row
+                for row in catalog_rows()
+                if bool(row.get("cached"))
+                and row.get("support") == "ready"
+                and _principal_permits_catalog_model(self.principal, row)
+            ]
+            loaded = [
+                row
+                for row in self.runtime.ps()
+                if self.principal.permits_model(
+                    str(row.get("requested_model") or row.get("model") or "")
+                )
+            ]
+            self.send_json(
+                {
+                    "schema": "machboost.team-connect.v1",
+                    "host": {
+                        "name": os.environ.get("MACHBOOST_HOST_NAME")
+                        or socket.gethostname(),
+                        "version": __version__,
+                    },
+                    "principal": self.principal.to_dict(),
+                    "models": available,
+                    "loaded_models": loaded,
+                    "capabilities": [
+                        "chat",
+                        "streaming",
+                        "vision",
+                        "reasoning",
+                        "tool_calls",
+                        "cancellation",
+                        "openai_compatibility",
+                        "ollama_compatibility",
+                    ],
+                }
+            )
+            return
         if path == "/api/catalog":
             if not self.require_scope("models:read"):
                 return
@@ -1846,6 +1904,35 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
             if not self.require_team_admin():
                 return
             self.send_json({"schema": "machboost.team-keys.v1", "keys": self.teams.list_keys()})
+            return
+        if path == "/api/team/clients":
+            if not self.require_team_admin():
+                return
+            query = parse_qs(parsed.query)
+            self.send_json(
+                {
+                    "schema": "machboost.team-clients.v1",
+                    "clients": self.teams.list_clients(
+                        active_within=float(
+                            _query_value(query, "active_within_seconds") or 120.0
+                        )
+                    ),
+                }
+            )
+            return
+        if path == "/api/team/model-requests":
+            if not self.require_team_admin():
+                return
+            query = parse_qs(parsed.query)
+            self.send_json(
+                {
+                    "schema": "machboost.model-requests.v1",
+                    "requests": self.teams.list_model_requests(
+                        status=_query_value(query, "status"),
+                        limit=int(_query_value(query, "limit") or 100),
+                    ),
+                }
+            )
             return
         if path == "/api/traces":
             if not self.require_scope("traces:read"):
@@ -2141,6 +2228,65 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                 self.send_json(
                     {"schema": "machboost.team-key.v1", **created.to_dict()},
                     status=201,
+                )
+                return
+            if path == "/api/team/presence":
+                if self.teams is None:
+                    self.send_error_json(
+                        404, "team mode is not enabled", code="team_mode_disabled"
+                    )
+                    return
+                if not self.require_scope("models:read"):
+                    return
+                client = self.teams.record_client_presence(
+                    principal=self.principal,
+                    device_id=required_string(payload, "device_id"),
+                    device_name=required_string(payload, "device_name"),
+                    app_version=required_string(payload, "app_version"),
+                    mode=str(payload.get("mode") or "connect"),
+                    workspace_name=str(payload.get("workspace_name") or "") or None,
+                    workspace_fingerprint=str(
+                        payload.get("workspace_fingerprint") or ""
+                    )
+                    or None,
+                    model=str(payload.get("model") or "") or None,
+                )
+                self.send_json(
+                    {"schema": "machboost.team-presence.v1", "client": client}
+                )
+                return
+            if path == "/api/team/model-requests":
+                if self.teams is None:
+                    self.send_error_json(
+                        404, "team mode is not enabled", code="team_mode_disabled"
+                    )
+                    return
+                if not self.require_scope("models:read"):
+                    return
+                request = self.teams.create_model_request(
+                    principal=self.principal,
+                    model=required_string(payload, "model"),
+                    device_id=str(payload.get("device_id") or "") or None,
+                    note=str(payload.get("note") or "") or None,
+                )
+                self.send_json(
+                    {"schema": "machboost.model-request.v1", "request": request},
+                    status=201,
+                )
+                return
+            if path == "/api/team/model-requests/resolve":
+                if not self.require_team_admin():
+                    return
+                request = self.teams.resolve_model_request(
+                    required_string(payload, "request_id"),
+                    status=required_string(payload, "status"),
+                    note=str(payload.get("note") or "") or None,
+                )
+                if request is None:
+                    self.send_error_json(404, "pending model request not found")
+                    return
+                self.send_json(
+                    {"schema": "machboost.model-request.v1", "request": request}
                 )
                 return
             if path == "/api/team/keys/revoke":
@@ -3971,6 +4117,11 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
             if principal is not None:
                 self.teams.touch_key(principal.id)
                 self._principal = principal
+                if urlparse(self.path).path in TEAM_INFERENCE_PATHS:
+                    self.teams.record_client_request(
+                        principal=principal,
+                        device_id=self.headers.get("X-MachBoost-Device-ID", ""),
+                    )
                 return True
         if not supplied and not self.server.require_auth:  # type: ignore[attr-defined]
             self._principal = TeamPrincipal(
@@ -4760,6 +4911,19 @@ def parse_judge_score(trace_id: str, text: str) -> dict[str, Any]:
         if isinstance(payload, dict)
         else "",
     }
+
+
+def _principal_permits_catalog_model(
+    principal: TeamPrincipal, row: dict[str, Any]
+) -> bool:
+    if not principal.allowed_models:
+        return True
+    identifiers = {
+        str(row.get("name") or ""),
+        str(row.get("repository") or ""),
+        str(row.get("source_repository") or ""),
+    }
+    return any(identifier in principal.allowed_models for identifier in identifiers if identifier)
 
 
 def integration_catalog(host: str) -> dict[str, Any]:
