@@ -13,6 +13,7 @@
 		1C9E4E6E69E7F0F84744660E /* UpdateController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C427B3847622D628B344F16 /* UpdateController.swift */; };
 		27E688AF9676E42DED5E32D6 /* PersistenceModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = E17FDB86433150ABA6AF28AD /* PersistenceModels.swift */; };
 		2AE014D9F9C0E3D500A7EF6C /* UITestMachBoostAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48709DA45E2A1AFBF0DCD64A /* UITestMachBoostAPI.swift */; };
+		30B2BB9AEE8AFDD0B4CEBBBA /* ConnectionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CBD9A214BE09A2CA78F95549 /* ConnectionsView.swift */; };
 		4850300E156305AF616FE930 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = E284163CFFA3CC2C71B3C1CC /* Sparkle */; };
 		4A7F15708786794B3614BA7F /* AttachmentStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2661046B65C78C18FAFBFED /* AttachmentStore.swift */; };
 		4CABF47F885FDD74C37117E1 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2436F81998E2D43F6056D376 /* RootView.swift */; };
@@ -20,6 +21,7 @@
 		5DD9B55F557ACFA7AAF581A1 /* ModelsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0EFA8AE4D369703004BF4868 /* ModelsView.swift */; };
 		62465861BCFFAEA08CA9DEC6 /* MessageContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C62A9D5540E53785741BB3B /* MessageContentView.swift */; };
 		6C23074F0BD6603DD259ADFC /* MachBoostApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 714090FF416A6EA959EEC39B /* MachBoostApp.swift */; };
+		A1E629B42E54BCE71D379C2A /* CodingWorkspace.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80E5D278800F3B196C7595E2 /* CodingWorkspace.swift */; };
 		A3ACD221FDF66A145D5980CF /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 880BA16ED1FA2BE113A59AD6 /* ChatView.swift */; };
 		AA476F2527C980D043F52F8A /* ConversationExporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 604DB256210FD0992B5F8A6C /* ConversationExporter.swift */; };
 		AE67929B45EF5C34FC58DF67 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8F16CEE5C06B74EBF5897BF /* AppState.swift */; };
@@ -96,6 +98,7 @@
 		6AB089EC757DC3AE6A41F230 /* MachBoostAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MachBoostAPI.swift; sourceTree = "<group>"; };
 		6D3E0E38EC91A702C4A3F7BB /* MachBoostTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MachBoostTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		714090FF416A6EA959EEC39B /* MachBoostApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MachBoostApp.swift; sourceTree = "<group>"; };
+		80E5D278800F3B196C7595E2 /* CodingWorkspace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodingWorkspace.swift; sourceTree = "<group>"; };
 		84185F3311F3E768BE3347C3 /* MachBoostPersistence.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = MachBoostPersistence.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		87B97748332FB15E03C019A8 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		880BA16ED1FA2BE113A59AD6 /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
@@ -107,6 +110,7 @@
 		B015F7E4554CB7BDFD22B814 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		B4E3E80C4F320139BF2EB1C4 /* MachBoostUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MachBoostUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		B5C13DB7C6E6AF6223311FA2 /* MachBoostUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MachBoostUITests.swift; sourceTree = "<group>"; };
+		CBD9A214BE09A2CA78F95549 /* ConnectionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionsView.swift; sourceTree = "<group>"; };
 		D2661046B65C78C18FAFBFED /* AttachmentStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentStore.swift; sourceTree = "<group>"; };
 		E17FDB86433150ABA6AF28AD /* PersistenceModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceModels.swift; sourceTree = "<group>"; };
 		EE8900B13B2CE90C7E32FF10 /* DomainModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DomainModels.swift; sourceTree = "<group>"; };
@@ -160,6 +164,8 @@
 				A8F16CEE5C06B74EBF5897BF /* AppState.swift */,
 				9AE21F9C8B888A139F3A8B1B /* Assets.xcassets */,
 				880BA16ED1FA2BE113A59AD6 /* ChatView.swift */,
+				80E5D278800F3B196C7595E2 /* CodingWorkspace.swift */,
+				CBD9A214BE09A2CA78F95549 /* ConnectionsView.swift */,
 				A31E8B16876F4F8C49D2AB38 /* DaemonManager.swift */,
 				EE8900B13B2CE90C7E32FF10 /* DomainModels.swift */,
 				B015F7E4554CB7BDFD22B814 /* Info.plist */,
@@ -389,6 +395,8 @@
 			files = (
 				AE67929B45EF5C34FC58DF67 /* AppState.swift in Sources */,
 				A3ACD221FDF66A145D5980CF /* ChatView.swift in Sources */,
+				A1E629B42E54BCE71D379C2A /* CodingWorkspace.swift in Sources */,
+				30B2BB9AEE8AFDD0B4CEBBBA /* ConnectionsView.swift in Sources */,
 				B13EB86E24A994C300C7858C /* DaemonManager.swift in Sources */,
 				F3A9FF23F0DBCABCEC4463E9 /* DomainModels.swift in Sources */,
 				B4C476FB19A204404CC5DF12 /* KeychainStore.swift in Sources */,
