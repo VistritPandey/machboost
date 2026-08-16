@@ -764,9 +764,10 @@ struct ChatView: View {
         let requestPrefix = "chat-\(UUID().uuidString.lowercased())"
         activeRequestID = requestPrefix
         let workspace = selectedWorkspace
-        let codingActive = codingMode
+            ?? (uiTestCodingFixtureEnabled ? appState.workspaces.first : nil)
+        let codingActive = (codingMode || uiTestCodingFixtureEnabled)
             && workspace != nil
-            && selectedModel?.supportsTools == true
+            && (selectedModel?.supportsTools == true || uiTestCodingFixtureEnabled)
         generationTask = Task { @MainActor in
             do {
                 try? await appState.reportTeamPresence(
@@ -816,6 +817,14 @@ struct ChatView: View {
             _ = try? await appState.inferenceAPI.cancel(requestID: activeRequestID)
             generationTask?.cancel()
         }
+    }
+
+    private var uiTestCodingFixtureEnabled: Bool {
+#if DEBUG
+        ProcessInfo.processInfo.environment["MACHBOOST_UI_TEST_CODING"] == "1"
+#else
+        false
+#endif
     }
 
     private func runGenerationLoop(
