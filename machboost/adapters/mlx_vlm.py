@@ -290,6 +290,9 @@ class MLXVLMAccelerator:
         vision_token_layer: Optional[int] = None,
         vision_token_bucket: Optional[int] = None,
         vision_calibration: Optional[dict[str, Any]] = None,
+        tools: Optional[Sequence[dict[str, Any]]] = None,
+        tool_choice: Any = "auto",
+        reasoning_strength: Optional[str] = None,
     ) -> tuple[str, VisionRunStats]:
         normalized, image_sources = normalize_multimodal_messages(messages)
         images = self.assets.materialize_all(image_sources)
@@ -297,6 +300,9 @@ class MLXVLMAccelerator:
             normalized,
             image_count=len(images),
             enable_thinking=enable_thinking,
+            tools=tools,
+            tool_choice=tool_choice,
+            reasoning_strength=reasoning_strength,
         )
         return self._generate(
             prompt,
@@ -323,6 +329,9 @@ class MLXVLMAccelerator:
         *,
         image_count: int,
         enable_thinking: bool = False,
+        tools: Optional[Sequence[dict[str, Any]]] = None,
+        tool_choice: Any = "auto",
+        reasoning_strength: Optional[str] = None,
     ) -> str:
         model_type = config_value(self.model.config, "model_type", "")
         module_name = str(getattr(self._apply_chat_template, "__module__", ""))
@@ -333,13 +342,22 @@ class MLXVLMAccelerator:
             "qwen3_5",
             "qwen3_5_moe",
         }
+        template_options: dict[str, Any] = {
+            "enable_thinking": enable_thinking,
+        }
+        if tools:
+            template_options["tools"] = list(tools)
+            template_options["tool_choice"] = tool_choice
+        if reasoning_strength:
+            template_options["reasoning_strength"] = reasoning_strength
+
         if image_count < 1 or model_type not in qwen_types or not module_name.startswith("mlx_vlm"):
             return self._apply_chat_template(
                 self.processor,
                 self.model.config,
                 messages,
                 num_images=image_count,
-                enable_thinking=enable_thinking,
+                **template_options,
             )
 
         prompt_utils = importlib.import_module("mlx_vlm.prompt_utils")
@@ -367,7 +385,7 @@ class MLXVLMAccelerator:
             self.processor,
             formatted,
             add_generation_prompt=True,
-            enable_thinking=enable_thinking,
+            **template_options,
         )
 
     def generate(
