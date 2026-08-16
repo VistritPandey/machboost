@@ -2218,9 +2218,18 @@ class TeamGatewayHTTPTests(unittest.TestCase):
         self.thread.join(timeout=2.0)
         self.temporary.cleanup()
 
-    def request(self, path, payload=None, *, token="admin-secret", raw=False):
+    def request(
+        self,
+        path,
+        payload=None,
+        *,
+        token="admin-secret",
+        raw=False,
+        extra_headers=None,
+    ):
         data = None if payload is None else json.dumps(payload).encode("utf-8")
         headers = {"Authorization": f"Bearer {token}"}
+        headers.update(extra_headers or {})
         if data is not None:
             headers["Content-Type"] = "application/json"
         request = Request(self.base_url + path, data=data, headers=headers)
@@ -2323,6 +2332,76 @@ class TeamGatewayHTTPTests(unittest.TestCase):
         self.assertEqual(body["schema"], "machboost.integrations.v1")
         self.assertTrue(body["openai_base_url"].endswith("/v1"))
         self.assertIn("OLLAMA_HOST", body["clients"][1]["environment"])
+
+    def test_desktop_client_enrolls_and_reports_real_inference_requests(self) -> None:
+        token = self.create_employee_key()
+
+        _, connect = self.request("/api/team/connect", token=token)
+        _, presence = self.request(
+            "/api/team/presence",
+            {
+                "device_id": "desktop-1",
+                "device_name": "Developer Mac",
+                "app_version": "0.13.0",
+                "workspace_name": "checkout-service",
+                "workspace_fingerprint": "sha256:private-path-free",
+                "model": "mlx-community/example",
+            },
+            token=token,
+        )
+        self.request(
+            "/api/chat",
+            {
+                "model": "mlx-community/example",
+                "messages": [{"role": "user", "content": "hello"}],
+                "stream": False,
+            },
+            token=token,
+            extra_headers={"X-MachBoost-Device-ID": "desktop-1"},
+        )
+        _, clients = self.request("/api/team/clients")
+
+        self.assertEqual(connect["schema"], "machboost.team-connect.v1")
+        self.assertEqual(connect["principal"]["name"], "Coding agent")
+        self.assertTrue(all(model["cached"] for model in connect["models"]))
+        self.assertEqual(presence["client"]["workspace_name"], "checkout-service")
+        self.assertNotIn("workspace_path", presence["client"])
+        self.assertEqual(clients["clients"][0]["request_count"], 1)
+
+        with self.assertRaises(HTTPError) as forbidden:
+            self.request("/api/team/clients", token=token)
+        self.assertEqual(forbidden.exception.code, 403)
+
+    def test_client_can_request_model_but_only_admin_can_resolve_it(self) -> None:
+        token = self.create_employee_key()
+
+        status, created = self.request(
+            "/api/team/model-requests",
+            {
+                "model": "mlx-community/Muse-Glimmer-30B-4bit",
+                "device_id": "desktop-1",
+                "note": "Vision coding work",
+            },
+            token=token,
+        )
+        request_id = created["request"]["id"]
+        _, requests = self.request("/api/team/model-requests?status=pending")
+
+        self.assertEqual(status, 201)
+        self.assertEqual(len(requests["requests"]), 1)
+        with self.assertRaises(HTTPError) as forbidden:
+            self.request(
+                "/api/team/model-requests/resolve",
+                {"request_id": request_id, "status": "downloaded"},
+                token=token,
+            )
+        self.assertEqual(forbidden.exception.code, 403)
+
+        _, resolved = self.request(
+            "/api/team/model-requests/resolve",
+            {"request_id": request_id, "status": "downloaded"},
+        )
+        self.assertEqual(resolved["request"]["status"], "downloaded")
 
     def test_workspace_memory_and_exact_cache_skip_second_inference(self) -> None:
         repository = Path(self.temporary.name) / "memory-repo"
