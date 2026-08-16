@@ -23,7 +23,7 @@
     <title>MachBoost — Faster local inference on Apple Silicon</title>
     <link rel="icon" href="assets/machboost-icon.webp">
     <link rel="apple-touch-icon" href="assets/machboost-icon.webp">
-    <link rel="stylesheet" href="styles.css?v=0.13.0">
+    <link rel="stylesheet" href="styles.css?v=0.13.3">
     <script
       defer
       src="https://cdn.jsdelivr.net/npm/lucide@0.468.0/dist/umd/lucide.min.js"
@@ -154,8 +154,8 @@
               <i data-lucide="folder-git-2" aria-hidden="true"></i>
               <h3>Repository intelligence</h3>
               <p>
-                Keep repository access on the developer's Mac. Bounded read, search,
-                and approved write tools send only the evidence needed for each turn.
+                Keep repository access on the developer's Mac. Choose Plan, Manual,
+                Auto, Accept edits, or Bypass while the selected-folder boundary stays enforced.
               </p>
             </li>
             <li>
@@ -267,12 +267,12 @@ export OPENAI_API_KEY="mbk_employee_key"</code></pre>
                 <div class="architecture-node">
                   <i data-lucide="laptop" aria-hidden="true"></i>
                   <strong>MachBoost app</strong>
-                  <span>Chat, tool timeline, diff review</span>
+                  <span>Chat, tool timeline, permission modes</span>
                 </div>
                 <div class="architecture-node">
                   <i data-lucide="folder-search" aria-hidden="true"></i>
                   <strong>Repository tools</strong>
-                  <span>Bounded list, read, search, edit</span>
+                  <span>Per-turn patches + final Git diff</span>
                 </div>
                 <div class="architecture-node">
                   <i data-lucide="square-terminal" aria-hidden="true"></i>
