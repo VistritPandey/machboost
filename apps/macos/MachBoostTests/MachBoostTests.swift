@@ -830,6 +830,25 @@ final class MachBoostTests: XCTestCase {
         XCTAssertTrue(healthy)
     }
 
+    func testServerVersionComesFromHealthProbe() async throws {
+        let session = mockSession { request in
+            XCTAssertEqual(request.url?.path, "/healthz")
+            XCTAssertEqual(request.timeoutInterval, 0.4, accuracy: 0.001)
+            return self.response(
+                for: request,
+                body: #"{"status":"ok","version":"0.13.1"}"#
+            )
+        }
+        let api = MachBoostAPI(
+            endpoint: URL(string: "http://127.0.0.1:11435")!,
+            session: session
+        )
+
+        let version = try await api.serverVersion(timeoutInterval: 0.4)
+
+        XCTAssertEqual(version, "0.13.1")
+    }
+
     func testCancellationSendsClientRequestID() async throws {
         let session = mockSession { request in
             let data = try XCTUnwrap(request.httpBody)
@@ -979,6 +998,14 @@ final class MachBoostTests: XCTestCase {
 
         let secured = DaemonManager.launchEnvironment(base: [:], apiToken: "fresh-token")
         XCTAssertEqual(secured["MACHBOOST_API_TOKEN"], "fresh-token")
+    }
+
+    @MainActor
+    func testDaemonOnlyReplacesOlderVersions() {
+        XCTAssertTrue(DaemonManager.isOlderVersion("0.12.1", than: "0.13.1"))
+        XCTAssertTrue(DaemonManager.isOlderVersion("0.9.0", than: "0.10.0"))
+        XCTAssertFalse(DaemonManager.isOlderVersion("0.13.1", than: "0.13.1"))
+        XCTAssertFalse(DaemonManager.isOlderVersion("0.14.0", than: "0.13.1"))
     }
 
     @MainActor
