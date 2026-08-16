@@ -885,8 +885,12 @@ struct ChatView: View {
             )
             for call in roundToolCalls {
                 try Task.checkCancellation()
-                let approved = !CodingWorkspace.isMutating(call)
-                    || await requestToolApproval(call)
+                let approved: Bool
+                if CodingWorkspace.isMutating(call) {
+                    approved = await requestToolApproval(call)
+                } else {
+                    approved = true
+                }
                 let result: String
                 if !approved {
                     result = toolError("The user denied this repository change.")
