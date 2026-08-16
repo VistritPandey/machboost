@@ -9,6 +9,21 @@ final class UITestMachBoostAPI: MachBoostAPIProtocol, @unchecked Sendable {
     ]
     private var cancelledRequests: Set<String> = []
     private var chatRequestCount = 0
+    private lazy var fixtureWorkspaceRoot: String = {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("machboost-ui-workspace-\(ProcessInfo.processInfo.processIdentifier)")
+        let source = root.appendingPathComponent("Sources/App.swift")
+        try? FileManager.default.createDirectory(
+            at: source.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try? "let greeting = \"hello\"\n".write(
+            to: source,
+            atomically: true,
+            encoding: .utf8
+        )
+        return root.path
+    }()
 
     func catalogSnapshot() -> [CatalogModel] {
         lock.withLock { makeCatalog() }
@@ -46,6 +61,16 @@ final class UITestMachBoostAPI: MachBoostAPIProtocol, @unchecked Sendable {
     func models() async throws -> [ModelInstance] {
         lock.withLock { loadedRepositories.sorted().map(modelInstance) }
     }
+
+    func workspaces() async throws -> [WorkspaceSummary] {
+        [fixtureWorkspace()]
+    }
+
+    func reindexWorkspace(id: String) async throws -> WorkspaceSummary {
+        fixtureWorkspace()
+    }
+
+    func removeWorkspace(id: String) async throws {}
 
     func preflight(model: String) async throws -> ModelPreflightResponse.Preflight {
         ModelPreflightResponse.Preflight(
@@ -108,6 +133,13 @@ final class UITestMachBoostAPI: MachBoostAPIProtocol, @unchecked Sendable {
         return AsyncThrowingStream { continuation in
             let task = Task<Void, Never> {
                 do {
+                    if self.isCodingFixture(request) {
+                        try await self.streamCodingFixture(
+                            request,
+                            continuation: continuation
+                        )
+                        return
+                    }
                     let response = self.fixtureResponse(
                         for: request,
                         requestNumber: requestNumber
@@ -165,6 +197,77 @@ final class UITestMachBoostAPI: MachBoostAPIProtocol, @unchecked Sendable {
             }
             continuation.onTermination = { _ in task.cancel() }
         }
+    }
+
+    private func isCodingFixture(_ request: ChatRequest) -> Bool {
+        request.messages.contains {
+            $0.role == "user" && $0.content == "Exercise coding agent"
+        }
+    }
+
+    private func streamCodingFixture(
+        _ request: ChatRequest,
+        continuation: AsyncThrowingStream<ChatEvent, Error>.Continuation
+    ) async throws {
+        try await Task.sleep(for: .milliseconds(120))
+        let completedTools = request.messages.filter { $0.role == "tool" }.count
+        if completedTools == 0 {
+            continuation.yield(museReasoningEvent(requestID: request.requestID))
+            continuation.yield(
+                toolEvent(
+                    requestID: request.requestID,
+                    calls: [
+                        .init(
+                            id: "list-1",
+                            type: "function",
+                            function: .init(
+                                name: "list_files",
+                                arguments: .object(["path": .string("Sources")])
+                            )
+                        ),
+                        .init(
+                            id: "read-1",
+                            type: "function",
+                            function: .init(
+                                name: "read_file",
+                                arguments: .object(["path": .string("Sources/App.swift")])
+                            )
+                        ),
+                    ]
+                )
+            )
+            continuation.yield(chatEvent(requestID: request.requestID, content: "", done: true))
+        } else if completedTools == 2 {
+            continuation.yield(
+                toolEvent(
+                    requestID: request.requestID,
+                    calls: [
+                        .init(
+                            id: "edit-1",
+                            type: "function",
+                            function: .init(
+                                name: "replace_in_file",
+                                arguments: .object([
+                                    "path": .string("Sources/App.swift"),
+                                    "old_text": .string("hello"),
+                                    "new_text": .string("hello team"),
+                                ])
+                            )
+                        ),
+                    ]
+                )
+            )
+            continuation.yield(chatEvent(requestID: request.requestID, content: "", done: true))
+        } else {
+            continuation.yield(
+                chatEvent(
+                    requestID: request.requestID,
+                    content: "Reviewed the repository after three tool results.",
+                    done: true
+                )
+            )
+        }
+        continuation.finish()
     }
 
     func streamPull(
@@ -420,6 +523,36 @@ final class UITestMachBoostAPI: MachBoostAPIProtocol, @unchecked Sendable {
             evalCount: nil,
             machboost: nil,
             error: nil
+        )
+    }
+
+    private func toolEvent(requestID: String, calls: [APIToolCall]) -> ChatEvent {
+        ChatEvent(
+            requestID: requestID,
+            message: .init(role: "assistant", content: "", toolCalls: calls),
+            done: false,
+            doneReason: nil,
+            totalDuration: nil,
+            evalDuration: nil,
+            evalCount: nil,
+            machboost: nil,
+            error: nil
+        )
+    }
+
+    private func fixtureWorkspace() -> WorkspaceSummary {
+        WorkspaceSummary(
+            id: "workspace-ui-fixture",
+            name: "MachBoost fixture",
+            path: fixtureWorkspaceRoot,
+            createdAt: "2026-08-16T00:00:00Z",
+            updatedAt: "2026-08-16T00:00:00Z",
+            indexedAt: "2026-08-16T00:00:00Z",
+            revision: "fixture-revision",
+            fileCount: 1,
+            chunkCount: 1,
+            totalBytes: 23,
+            languages: [.init(name: "Swift", files: 1)]
         )
     }
 
