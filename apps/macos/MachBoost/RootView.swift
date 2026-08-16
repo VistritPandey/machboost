@@ -81,6 +81,8 @@ struct RootView: View {
                 }
 
                 Section("Workspace") {
+                    Label("Connections", systemImage: "point.3.connected.trianglepath.dotted")
+                        .tag(SidebarDestination.connections)
                     Label("Models", systemImage: "shippingbox")
                         .tag(SidebarDestination.models)
                     Label("Server", systemImage: "server.rack")
@@ -98,11 +100,11 @@ struct RootView: View {
                 Circle()
                     .fill(appState.serverIsRunning ? Color.green : Color.red)
                     .frame(width: 8, height: 8)
-                Text(appState.serverIsRunning ? "Server ready" : "Server offline")
+                Text(appState.inferenceMode == .team ? appState.inferenceLabel : (appState.serverIsRunning ? "Local ready" : "Local offline"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
-                Text("\(appState.loadedModels.count) loaded")
+                Text("\(appState.activeLoadedModels.count) loaded")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -119,6 +121,8 @@ struct RootView: View {
             } else {
                 emptyDetail
             }
+        case .connections:
+            ConnectionsView()
         case .models:
             ModelsView()
         case .server:
@@ -171,8 +175,8 @@ struct RootView: View {
 
     private func newConversation() {
         let defaultModel = uiTestModel
-            ?? appState.catalog.first(where: { $0.cached && $0.recommended })?.name
-            ?? appState.catalog.first(where: \.cached)?.name
+            ?? appState.activeCatalog.first(where: { $0.cached && $0.recommended })?.name
+            ?? appState.activeCatalog.first(where: \.cached)?.name
             ?? "llama3.2:3b"
         let conversation = Conversation(model: defaultModel)
         modelContext.insert(conversation)
