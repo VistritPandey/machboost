@@ -47,7 +47,7 @@ Treat every workload as uncalibrated until it passes a same-model paired benchma
 | Muse Glimmer 30B MLX-VLM | native Hugging Face MLX conversions with reasoning, vision, and tool-call transport; 131,072-token advertised context | usable with `mlx-vlm>=0.6.13`; the default 4-bit alias recommends at least 32 GB unified memory |
 | Fresh-prompt DFlash decode | Qwen3.5 4B BF16 median was 1.65x with 3/3 validation prefixes exact; Qwen3.5 9B BF16 reached 1.61x with 2/3 exact | 4B alias is opt-in; 9B remains experimental; greedy-only and workload-dependent |
 | Concurrent text API serving | bounded tenant-fair admission, explicit overload responses, per-key limits, and isolated model replicas | usable; replicas consume additional memory and do not guarantee higher GPU throughput |
-| Team gateway | hashed scoped keys, model allowlists, fair queueing, configurable local traces, and evaluations | usable on a trusted private network; MachBoost does not terminate TLS |
+| Team gateway | hashed scoped keys, model allowlists, enrolled desktop clients, model requests, fair queueing, configurable local traces, and evaluations | usable on a trusted private network; MachBoost does not terminate TLS |
 | Team memory | private or administrator-published shared entries, workspace/revision/dependency isolation, bounded retrieval, and opt-in deterministic exact-response reuse | useful for recurring team work; not a decode-throughput speedup and not enabled as a universal response cache |
 | External fallback | OpenAI-compatible providers with process-only secrets, monthly budgets, cost accounting, and transient-failure routing | usable for resilience; remote providers require HTTPS and streaming may be buffered when the upstream response is buffered |
 | Repository workspace prefix reuse | latest 8,843-file Qwen2.5 3B audit reached 2.894x median with 10/10 exact token pairs; earlier 3B and 7B audits reached 3.021x and 3.282x with 6/6 exact pairs | promising for later questions over a stable indexed repo; not a first-request, arbitrary-model, or decode-throughput claim |
@@ -108,7 +108,8 @@ macOS 14 or newer. It provides streaming chat, local conversation history,
 repository workspaces, text/code/folder/image attachments, model downloads,
 resident-model controls, automatic long-chat summarization near the selected
 context limit, server metrics, employee-key management, trace/evaluation views,
-a developer API view, and a menu-bar controller. Chats and
+a Local/Team inference switch, repo-scoped coding tools, connected-device and
+model-request views, a developer API view, and a menu-bar controller. Chats and
 imported attachments remain local, model downloads always require confirmation,
 and closing the window leaves the selected models available until they expire,
 are unloaded, or MachBoost is quit.
@@ -521,6 +522,19 @@ export OPENAI_BASE_URL="http://TEAM-MAC:11435/v1"
 export OPENAI_API_KEY="mbk_employee_key"
 ```
 
+MachBoost desktop clients can connect directly from **Connections → Team host**.
+The host returns only compatible models already cached on that Mac and permitted
+by the employee key. An employee can request another repository or alias; the
+host must approve and download it from **Server → Team**. The host view reports
+device presence, selected model, workspace name/revision fingerprint, and actual
+inference request counts. It does not receive the client's repository path.
+
+In desktop coding mode, repository list/read/search operations execute on the
+employee Mac. Exact replacements and new files pause for approval and are also
+applied on that employee Mac. Only bounded tool results are sent to the selected
+inference host. This avoids granting the host filesystem access and keeps the
+same coding UI available to employees who cannot run the model locally.
+
 Codex-style clients can select MachBoost as a Responses provider:
 
 ```toml
@@ -545,7 +559,9 @@ claude
 
 Responses, Anthropic Messages, OpenAI chat, and Ollama chat routes accept
 function tool definitions and return multiple requested tool calls. MachBoost
-does not execute tools; the calling agent retains its normal permission boundary.
+does not execute arbitrary tools at the gateway. Generic callers retain their
+normal permission boundary; the native app implements only its documented,
+repo-scoped coding tools and requires approval before writes.
 
 Repository-aware requests can also opt into the team memory ledger. Private
 entries remain visible only to their employee key. Shared entries must be
