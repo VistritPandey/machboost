@@ -598,6 +598,177 @@ h3 {
   font-size: 14px;
 }
 
+.architecture-section {
+  color: var(--white);
+  background: #101512;
+  border-bottom: 1px solid var(--line-dark);
+}
+
+.architecture-diagram {
+  margin-top: 60px;
+  border-top: 1px solid #36423a;
+  border-bottom: 1px solid #36423a;
+}
+
+.architecture-layer {
+  padding: 28px 0 30px;
+}
+
+.architecture-layer-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 20px;
+}
+
+.architecture-layer-title span {
+  font-size: 15px;
+  font-weight: 740;
+}
+
+.architecture-layer-title small {
+  color: #8f9b93;
+  font-size: 12px;
+}
+
+.architecture-nodes {
+  display: grid;
+  gap: 12px;
+}
+
+.architecture-nodes-three {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.architecture-nodes-four {
+  grid-template-columns: repeat(4, 1fr);
+}
+
+.architecture-node {
+  display: grid;
+  min-width: 0;
+  min-height: 132px;
+  grid-template-columns: 28px 1fr;
+  grid-template-rows: auto 1fr;
+  column-gap: 12px;
+  align-content: center;
+  padding: 20px;
+  background: #171e19;
+  border: 1px solid #344139;
+  border-radius: 6px;
+}
+
+.architecture-node svg {
+  width: 23px;
+  height: 23px;
+  grid-row: 1 / span 2;
+  color: var(--cyan-500);
+  stroke-width: 1.8;
+}
+
+.architecture-node strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 14px;
+}
+
+.architecture-node span {
+  align-self: start;
+  min-width: 0;
+  margin-top: 5px;
+  color: #98a59c;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.architecture-node-accent {
+  border-color: #218b49;
+}
+
+.architecture-node-accent svg,
+.architecture-node-model svg {
+  color: var(--green-500);
+}
+
+.architecture-node-model {
+  border-color: #3f7450;
+  background: #152119;
+}
+
+.architecture-link {
+  position: relative;
+  display: grid;
+  min-height: 78px;
+  color: #b8c3bb;
+  border-top: 1px solid #2d3831;
+  border-bottom: 1px solid #2d3831;
+  place-items: center;
+}
+
+.architecture-link::before,
+.architecture-link::after {
+  position: absolute;
+  left: 50%;
+  width: 1px;
+  height: 15px;
+  content: "";
+  background: var(--green-500);
+}
+
+.architecture-link::before {
+  top: 0;
+}
+
+.architecture-link::after {
+  bottom: 0;
+}
+
+.architecture-link span {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  padding: 7px 11px;
+  background: #101512;
+  font-size: 12px;
+  text-align: center;
+}
+
+.architecture-link svg,
+.architecture-observability svg {
+  width: 15px;
+  height: 15px;
+  color: var(--green-500);
+}
+
+.architecture-observability {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  margin-top: 12px;
+  border-top: 1px solid #2e3932;
+  border-bottom: 1px solid #2e3932;
+}
+
+.architecture-observability span {
+  display: inline-flex;
+  min-width: 0;
+  gap: 8px;
+  align-items: center;
+  padding: 14px 12px;
+  color: #aeb9b1;
+  font-size: 12px;
+}
+
+.architecture-observability span + span {
+  border-left: 1px solid #2e3932;
+}
+
+.architecture-note {
+  max-width: 860px;
+  margin: 24px 0 0;
+  color: #89968d;
+  font-size: 13px;
+}
+
 .benchmarks-section {
   color: var(--white);
   background: var(--ink-950);
@@ -1017,6 +1188,20 @@ footer {
     grid-template-columns: 1fr;
   }
 
+  .architecture-nodes-four,
+  .architecture-observability {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .architecture-observability span:nth-child(3) {
+    border-top: 1px solid #2e3932;
+    border-left: 0;
+  }
+
+  .architecture-observability span:nth-child(4) {
+    border-top: 1px solid #2e3932;
+  }
+
   .team-layout {
     gap: 48px;
   }
@@ -1110,6 +1295,28 @@ footer {
   .team-capabilities {
     grid-template-columns: 1fr;
     margin-top: 52px;
+  }
+
+  .architecture-nodes-three,
+  .architecture-nodes-four,
+  .architecture-observability {
+    grid-template-columns: 1fr;
+  }
+
+  .architecture-layer-title {
+    display: grid;
+    gap: 4px;
+  }
+
+  .architecture-node {
+    min-height: 112px;
+  }
+
+  .architecture-observability span + span,
+  .architecture-observability span:nth-child(3),
+  .architecture-observability span:nth-child(4) {
+    border-top: 1px solid #2e3932;
+    border-left: 0;
   }
 
   .team-capabilities > div,
