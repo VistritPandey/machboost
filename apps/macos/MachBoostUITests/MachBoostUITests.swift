@@ -145,7 +145,10 @@ final class MachBoostUITests: XCTestCase {
         XCTAssertTrue(
             app.disclosureTriangles["message-reasoning"].waitForExistence(timeout: 8)
         )
-        XCTAssertTrue(app.staticTexts["search_repository"].waitForExistence(timeout: 3))
+        XCTAssertTrue(
+            app.descendants(matching: .any)["tool-call-search_repository"]
+                .waitForExistence(timeout: 3)
+        )
         XCTAssertTrue(app.staticTexts["Fixture response."].waitForExistence(timeout: 3))
     }
 
