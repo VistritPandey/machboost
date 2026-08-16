@@ -123,9 +123,36 @@ claude
 `GET /api/integrations` returns the same connection values for the active host.
 `POST /v1/responses`, `POST /v1/messages`, and `POST /v1/chat/completions`
 accept function tools and preserve streaming tool-call events. `POST /api/chat`
-accepts Ollama tool schemas. MachBoost returns requested tool calls but never
-executes them; execution remains inside the employee's coding agent and its
-permission system.
+accepts Ollama tool schemas. The gateway returns requested tool calls but does
+not execute arbitrary tools; execution remains inside the employee's coding
+agent and its permission system.
+
+### Connect MachBoost Desktop Apps
+
+An employee can choose **Connections → Team host** in the native app and enter
+the LAN endpoint plus an employee key. The token is stored in that Mac's
+Keychain. The host enrollment response contains only compatible models that are
+already cached on the host and allowed for that key. The employee can submit a
+model request, but only the host administrator can approve the download from
+**Server → Team**.
+
+The app sends a random device identifier and periodic presence record. Presence
+contains the device name, app version, selected model, optional workspace name,
+and workspace revision fingerprint. It does not contain the workspace path,
+file content, prompts, or credentials. The host records actual inference calls
+tagged with that device identifier separately from heartbeat traffic.
+
+Desktop coding mode is client-executed. Bounded file listing, reading, and
+literal search run on the employee Mac. Exact replacement and file creation
+pause for approval and also run on the employee Mac. Paths are canonicalized
+under the selected repository; traversal, `.git`, symlink escapes, binary files,
+large files, and ambiguous replacements are rejected. Only tool results enter
+the chat request sent to the host. The host therefore does not need a mount of
+every employee repository.
+
+This is a hub-and-spoke topology, not peer-to-peer synchronization. The host
+owns inference admission, resident models, traces, and optional reusable state;
+each employee owns local source access and write approval.
 
 ### Serve Muse Glimmer 30B MLX
 
@@ -164,7 +191,8 @@ continuous batching. Simultaneous clients queue around each native replica.
 
 Registering a repository and retrieving relevant files is not, by itself, a
 MachBoost-specific advantage. Coding agents already inspect repositories. The
-server-side advantage is that independent employee threads using the same
+server-side workspace path is available only when the host itself can read and
+index that repository. Its advantage is that independent threads using the same
 workspace content revision can reuse the resident MLX state for the exact
 system and repository-map prefix. Query-specific evidence and the new question
 are still evaluated normally. Private memories and exact responses remain in
@@ -353,6 +381,11 @@ print(report["summary"])
 | Method | Route | Purpose |
 |---|---|---|
 | `GET` | `/api/team/status` | Counts and trace policy |
+| `GET` | `/api/team/connect` | Enroll a desktop client and return its permitted cached models |
+| `POST` | `/api/team/presence` | Refresh privacy-bounded device presence |
+| `GET` | `/api/team/clients` | List enrolled devices; administrator only |
+| `GET`, `POST` | `/api/team/model-requests` | List requests as administrator or request a model as an employee |
+| `POST` | `/api/team/model-requests/resolve` | Resolve a pending model request; administrator only |
 | `GET`, `POST` | `/api/team/keys` | List or create employee keys |
 | `POST` | `/api/team/keys/revoke` | Revoke a key |
 | `POST` | `/api/team/settings` | Update trace policy |
