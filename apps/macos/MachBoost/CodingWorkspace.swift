@@ -162,7 +162,12 @@ enum CodingWorkspace {
     }
 
     static func supports(_ call: APIToolCall) -> Bool {
-        tools.contains { $0.function.name == call.function.name }
+        let name = call.function.name
+        guard !name.isEmpty, name.count <= 64 else { return false }
+        return name.range(
+            of: #"^[A-Za-z0-9_-]+$"#,
+            options: .regularExpression
+        ) != nil
     }
 
     static func tools(for mode: CodingPermissionMode) -> [APIToolDefinition] {
