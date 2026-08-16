@@ -45,10 +45,12 @@ are downloaded only after confirmation, and an incomplete cache snapshot is
 not presented as runnable.
 
 Muse Glimmer supports text, images, reasoning, and structured function-tool
-output. The app displays reasoning separately from final Markdown and renders
-tool calls as structured data; the connected coding agent or API client remains
-responsible for executing tools. Apple Silicon with at least 32 GB unified
-memory is the conservative recommendation for the 4-bit conversion.
+output. The app displays reasoning separately from final Markdown. In native
+coding mode it executes only MachBoost's bounded repository tools, supports
+multiple calls and follow-up tool rounds, and pauses for approval before a file
+write. Generic API clients remain responsible for executing their own tools.
+Apple Silicon with at least 32 GB unified memory is the conservative
+recommendation for the 4-bit conversion.
 
 After installation, Muse Glimmer can be used from chat or through OpenAI Chat,
 OpenAI Responses, Anthropic Messages, and Ollama-compatible endpoints. Images
@@ -108,6 +110,12 @@ codebase. The selected workspace is stored with that conversation and remains
 active for follow-up questions until **No Repository** is selected. The same
 menu can refresh the index after code changes or remove MachBoost's local index.
 Removing a workspace never deletes or modifies the source repository.
+
+Coding activity appears as collapsible human-readable rows instead of model
+protocol text. Each row records its result and completion state. Approved file
+edits also produce a bounded Code Changes preview with actions to open the file
+or reveal it in Finder. Read, search, and list tools run without approval;
+exact replacements and new files always require confirmation.
 
 MachBoost does not place every file into the model context. The bundled daemon:
 
