@@ -23,12 +23,43 @@ from machboost.server import (
     RequestCancelled,
     RuntimeManager,
     download_progress_class,
+    extract_tool_calls,
     load_accelerator,
     model_config,
     parse_keep_alive,
 )
 from machboost.team import TeamStore
 from machboost.workspace import WorkspaceStore
+
+
+class ToolCallParsingTests(unittest.TestCase):
+    def test_extracts_muse_attribute_call_without_exposing_control_tokens(self):
+        content, calls = extract_tool_calls(
+            '<|start|>assistant to=list_files<|message|>'
+            '<tool_call name="list_files" '
+            'arguments={"path":"services/chat_assistant"}></tool_call>'
+        )
+
+        self.assertEqual(content, "")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["function"]["name"], "list_files")
+        self.assertEqual(
+            json.loads(calls[0]["function"]["arguments"]),
+            {"path": "services/chat_assistant"},
+        )
+
+    def test_extracts_multiple_attribute_calls_and_keeps_visible_answer(self):
+        content, calls = extract_tool_calls(
+            'Checking both locations. '
+            '<tool_call name="read_file" arguments={"path":"a.py"}></tool_call>'
+            '<tool_call name="search_code" arguments={"query":"cancel"}></tool_call>'
+        )
+
+        self.assertEqual(content, "Checking both locations.")
+        self.assertEqual(
+            [call["function"]["name"] for call in calls],
+            ["read_file", "search_code"],
+        )
 
 
 @dataclass
