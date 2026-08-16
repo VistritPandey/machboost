@@ -534,6 +534,9 @@ employee Mac. Exact replacements and new files pause for approval and are also
 applied on that employee Mac. Only bounded tool results are sent to the selected
 inference host. This avoids granting the host filesystem access and keeps the
 same coding UI available to employees who cannot run the model locally.
+The chat groups multiple calls and follow-up tool rounds into collapsible
+activity rows. Approved edits include a bounded patch preview plus Open File
+and Reveal in Finder actions; model protocol tokens are not shown as messages.
 
 Codex-style clients can select MachBoost as a Responses provider:
 
