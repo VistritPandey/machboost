@@ -157,6 +157,86 @@ class TeamStoreTests(unittest.TestCase):
         self.assertEqual(summary["latency_seconds"]["p50"], 2.0)
         self.assertEqual(self.store.list_evaluations()[0]["id"], evaluation["id"])
 
+    def test_client_presence_tracks_devices_without_repository_paths(self) -> None:
+        now = [1_000.0]
+        self.store.close()
+        self.store = TeamStore(
+            Path(self.temporary.name) / "clients.sqlite3",
+            clock=lambda: now[0],
+        )
+        principal = self.store.create_key("Developer").principal
+
+        client = self.store.record_client_presence(
+            principal=principal,
+            device_id="device-1",
+            device_name="Sam's MacBook",
+            app_version="0.13.0",
+            workspace_name="checkout-service",
+            workspace_fingerprint="sha256:abc",
+            model="mlx-community/Qwen3-8B-4bit",
+        )
+        self.assertTrue(client["online"])
+        self.assertNotIn("workspace_path", client)
+        self.assertTrue(
+            self.store.record_client_request(
+                principal=principal,
+                device_id="device-1",
+            )
+        )
+        self.assertEqual(self.store.list_clients()[0]["request_count"], 1)
+        self.assertEqual(self.store.status()["online_clients"], 1)
+
+        now[0] += 121
+        self.assertFalse(self.store.list_clients()[0]["online"])
+        self.assertEqual(self.store.status()["online_clients"], 0)
+
+    def test_client_request_requires_matching_principal(self) -> None:
+        owner = self.store.create_key("Owner").principal
+        other = self.store.create_key("Other").principal
+        self.store.record_client_presence(
+            principal=owner,
+            device_id="shared-device",
+            device_name="Build Mac",
+            app_version="0.13.0",
+        )
+
+        self.assertFalse(
+            self.store.record_client_request(
+                principal=other,
+                device_id="shared-device",
+            )
+        )
+        self.assertEqual(self.store.list_clients()[0]["request_count"], 0)
+
+    def test_model_requests_are_deduplicated_and_resolved(self) -> None:
+        principal = self.store.create_key("Developer").principal
+
+        first = self.store.create_model_request(
+            principal=principal,
+            model="mlx-community/Muse-Glimmer-30B-4bit",
+            device_id="device-1",
+            note="Needed for vision review",
+        )
+        duplicate = self.store.create_model_request(
+            principal=principal,
+            model="mlx-community/Muse-Glimmer-30B-4bit",
+        )
+
+        self.assertEqual(first["id"], duplicate["id"])
+        self.assertEqual(len(self.store.list_model_requests(status="pending")), 1)
+        self.assertEqual(self.store.status()["pending_model_requests"], 1)
+
+        resolved = self.store.resolve_model_request(
+            first["id"],
+            status="downloaded",
+            note="Available on host",
+        )
+        self.assertEqual(resolved["status"], "downloaded")
+        self.assertEqual(self.store.status()["pending_model_requests"], 0)
+        self.assertIsNone(
+            self.store.resolve_model_request(first["id"], status="declined")
+        )
+
 
 class TeamAdmissionControllerTests(unittest.TestCase):
     def setUp(self) -> None:
