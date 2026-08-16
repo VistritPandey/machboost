@@ -440,6 +440,12 @@ struct ChatView: View {
 
     private var messageList: some View {
         let messages: [ChatMessage] = conversation.orderedMessages
+        let scrollSignal = [
+            messages.last?.content ?? "",
+            messages.last?.reasoningContent ?? "",
+            messages.last?.toolCallsJSON ?? "",
+            messages.last?.toolActivityJSON ?? "",
+        ].joined(separator: "|")
 
         return ScrollViewReader { (proxy: ScrollViewProxy) in
             ScrollView(.vertical, showsIndicators: true) {
@@ -456,6 +462,7 @@ struct ChatView: View {
                             MessageRow(
                                 message: message,
                                 showsReasoning: showReasoning,
+                                workspaceRoot: selectedWorkspace?.path,
                                 onEdit: { edit(message) },
                                 onRegenerate: regenerateAction(
                                     for: message,
@@ -485,13 +492,7 @@ struct ChatView: View {
                     proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
                 }
             }
-            .task(
-                id: [
-                    messages.last?.content ?? "",
-                    messages.last?.reasoningContent ?? "",
-                    messages.last?.toolCallsJSON ?? "",
-                ].joined(separator: "|")
-            ) {
+            .task(id: scrollSignal) {
                 try? await Task.sleep(for: .milliseconds(100))
                 guard !Task.isCancelled else { return }
                 proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
@@ -826,6 +827,7 @@ struct ChatView: View {
     ) async throws {
         var transcript = initialMessages
         var allToolCalls: [APIToolCall] = []
+        var activities: [CodingToolActivity] = []
         for round in 0 ..< (codingActive ? CodingWorkspace.maximumToolRounds : 1) {
             try Task.checkCancellation()
             let requestID = round == 0 ? requestPrefix : "\(requestPrefix)-\(round)"
@@ -875,6 +877,10 @@ struct ChatView: View {
                 if let data = try? JSONEncoder().encode(allToolCalls) {
                     assistant.toolCallsJSON = String(decoding: data, as: UTF8.self)
                 }
+                activities.append(
+                    contentsOf: roundToolCalls.map { CodingToolActivity(call: $0) }
+                )
+                persist(activities, to: assistant)
             }
             guard codingActive, !roundToolCalls.isEmpty, let workspace else { return }
 
@@ -885,8 +891,10 @@ struct ChatView: View {
                     toolCalls: roundToolCalls
                 )
             )
-            for call in roundToolCalls {
+            let activityStart = activities.count - roundToolCalls.count
+            for (offset, call) in roundToolCalls.enumerated() {
                 try Task.checkCancellation()
+                let activityIndex = activityStart + offset
                 let approved: Bool
                 if CodingWorkspace.isMutating(call) {
                     approved = await requestToolApproval(call)
@@ -895,16 +903,30 @@ struct ChatView: View {
                 }
                 let result: String
                 if !approved {
-                    result = toolError("The user denied this repository change.")
+                    let message = "The user denied this repository change."
+                    result = toolError(message)
+                    activities[activityIndex].state = .denied
+                    activities[activityIndex].output = message
+                    persist(activities, to: assistant)
                 } else {
+                    activities[activityIndex].state = .running
+                    persist(activities, to: assistant)
                     do {
-                        result = try CodingWorkspace.execute(
+                        let toolResult = try CodingWorkspace.execute(
                             call,
                             workspaceRoot: workspace.path
-                        ).content
+                        )
+                        result = toolResult.content
+                        activities[activityIndex].state = .succeeded
+                        activities[activityIndex].output = toolResult.content
+                        activities[activityIndex].changedPath = toolResult.changedPath
+                        activities[activityIndex].changePatch = toolResult.changePatch
                     } catch {
                         result = toolError(error.localizedDescription)
+                        activities[activityIndex].state = .failed
+                        activities[activityIndex].output = error.localizedDescription
                     }
+                    persist(activities, to: assistant)
                 }
                 transcript.append(
                     APIChatMessage(
@@ -921,6 +943,12 @@ struct ChatView: View {
                 )
             }
         }
+    }
+
+    private func persist(_ activities: [CodingToolActivity], to message: ChatMessage) {
+        guard let data = try? JSONEncoder().encode(activities) else { return }
+        message.toolActivityJSON = String(decoding: data, as: UTF8.self)
+        try? modelContext.save()
     }
 
     private func requestMessages(
@@ -1244,6 +1272,7 @@ enum ConversationCompaction {
 private struct MessageRow: View {
     @Bindable var message: ChatMessage
     let showsReasoning: Bool
+    let workspaceRoot: String?
     let onEdit: () -> Void
     let onRegenerate: (() -> Void)?
 
@@ -1263,7 +1292,8 @@ private struct MessageRow: View {
                 if
                     message.content.isEmpty,
                     message.reasoningContent?.isEmpty != false,
-                    message.toolCallsJSON?.isEmpty != false
+                    message.toolCallsJSON?.isEmpty != false,
+                    message.toolActivityJSON?.isEmpty != false
                 {
                     ProgressView()
                         .controlSize(.small)
@@ -1284,8 +1314,8 @@ private struct MessageRow: View {
                     if !message.content.isEmpty {
                         MessageContentView(content: message.content)
                     }
-                    if !toolCalls.isEmpty {
-                        toolCallList
+                    if !toolActivities.isEmpty {
+                        toolActivityList
                     }
                 }
                 if message.role == .assistant, hasStats {
@@ -1381,40 +1411,176 @@ private struct MessageRow: View {
         return (try? JSONDecoder().decode([APIToolCall].self, from: data)) ?? []
     }
 
-    private var toolCallList: some View {
+    private var toolActivities: [CodingToolActivity] {
+        if
+            let json = message.toolActivityJSON,
+            let data = json.data(using: .utf8),
+            let activities = try? JSONDecoder().decode([CodingToolActivity].self, from: data)
+        {
+            return activities
+        }
+        return toolCalls.map { CodingToolActivity(call: $0, state: .succeeded) }
+    }
+
+    private var changedActivities: [CodingToolActivity] {
+        toolActivities.filter { $0.changedPath != nil && $0.changePatch != nil }
+    }
+
+    private var toolActivityList: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ForEach(Array(toolCalls.enumerated()), id: \.offset) { _, call in
-                VStack(alignment: .leading, spacing: 4) {
-                    Label(call.function.name, systemImage: "wrench.and.screwdriver")
-                        .font(.caption.weight(.semibold))
-                        .accessibilityIdentifier("tool-call-\(call.function.name)")
-                    if let arguments = call.function.arguments {
-                        Text(prettyJSON(arguments))
-                            .font(.caption.monospaced())
-                            .textSelection(.enabled)
+            ForEach(toolActivities) { activity in
+                DisclosureGroup {
+                    toolActivityDetails(activity)
+                        .padding(.top, 8)
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: statusIcon(activity.state))
+                            .foregroundStyle(statusColor(activity.state))
+                            .frame(width: 16)
+                        Text(CodingWorkspace.activitySummary(of: activity.call))
+                            .font(.callout.weight(.medium))
+                            .lineLimit(1)
+                        Spacer()
+                        Text(statusLabel(activity.state))
+                            .font(.caption)
                             .foregroundStyle(.secondary)
                     }
                 }
+                .accessibilityIdentifier("tool-call-\(activity.call.function.name)")
                 .padding(10)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(Color(nsColor: .controlBackgroundColor))
                 .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
             }
+            if !changedActivities.isEmpty {
+                codeChanges
+            }
         }
     }
 
-    private func prettyJSON(_ value: JSONValue) -> String {
-        guard
-            let data = try? JSONEncoder().encode(value),
-            let object = try? JSONSerialization.jsonObject(with: data),
-            let pretty = try? JSONSerialization.data(
-                withJSONObject: object,
-                options: [.prettyPrinted, .sortedKeys]
-            )
-        else {
-            return ""
+    @ViewBuilder
+    private func toolActivityDetails(_ activity: CodingToolActivity) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(
+                Array(CodingWorkspace.activityDetails(of: activity.call).enumerated()),
+                id: \.offset
+            ) { _, detail in
+                LabeledContent(detail.0, value: detail.1)
+                    .font(.caption)
+            }
+            if let output = activity.output, !output.isEmpty {
+                Text(activity.state == .failed || activity.state == .denied ? "Message" : "Result")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                ScrollView([.horizontal, .vertical]) {
+                    Text(CodingWorkspace.displayResult(output))
+                        .font(.caption.monospaced())
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 220)
+            }
         }
-        return String(decoding: pretty, as: UTF8.self)
+    }
+
+    private var codeChanges: some View {
+        DisclosureGroup {
+            VStack(alignment: .leading, spacing: 12) {
+                ForEach(changedActivities) { activity in
+                    if let path = activity.changedPath, let patch = activity.changePatch {
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Label(path, systemImage: "doc.text")
+                                    .font(.caption.weight(.semibold))
+                                Spacer()
+                                if CodingWorkspace.fileURL(
+                                    relativePath: path,
+                                    workspaceRoot: workspaceRoot
+                                ) != nil {
+                                    Button {
+                                        openFile(path)
+                                    } label: {
+                                        Label("Open File", systemImage: "arrow.up.forward.app")
+                                    }
+                                    .buttonStyle(.borderless)
+                                    Button {
+                                        revealFile(path)
+                                    } label: {
+                                        Label("Reveal", systemImage: "folder")
+                                    }
+                                    .buttonStyle(.borderless)
+                                }
+                            }
+                            ScrollView([.horizontal, .vertical]) {
+                                Text(patch)
+                                    .font(.caption.monospaced())
+                                    .textSelection(.enabled)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            .frame(maxHeight: 280)
+                            .padding(8)
+                            .background(Color(nsColor: .textBackgroundColor))
+                            .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                        }
+                    }
+                }
+            }
+            .padding(.top, 8)
+        } label: {
+            Label(
+                "Code changes (\(changedActivities.count))",
+                systemImage: "doc.badge.gearshape"
+            )
+            .font(.callout.weight(.semibold))
+            .foregroundStyle(.green)
+        }
+        .padding(10)
+        .background(Color.green.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .accessibilityIdentifier("code-changes")
+    }
+
+    private func statusIcon(_ state: CodingToolState) -> String {
+        switch state {
+        case .queued: "clock"
+        case .running: "arrow.trianglehead.2.clockwise.rotate.90"
+        case .succeeded: "checkmark.circle.fill"
+        case .denied: "hand.raised.fill"
+        case .failed: "xmark.circle.fill"
+        }
+    }
+
+    private func statusColor(_ state: CodingToolState) -> Color {
+        switch state {
+        case .queued, .running: .secondary
+        case .succeeded: .green
+        case .denied: .orange
+        case .failed: .red
+        }
+    }
+
+    private func statusLabel(_ state: CodingToolState) -> String {
+        switch state {
+        case .queued: "Queued"
+        case .running: "Running"
+        case .succeeded: "Done"
+        case .denied: "Denied"
+        case .failed: "Failed"
+        }
+    }
+
+    private func openFile(_ path: String) {
+        guard let url = CodingWorkspace.fileURL(relativePath: path, workspaceRoot: workspaceRoot) else {
+            return
+        }
+        NSWorkspace.shared.open(url)
+    }
+
+    private func revealFile(_ path: String) {
+        guard let url = CodingWorkspace.fileURL(relativePath: path, workspaceRoot: workspaceRoot) else {
+            return
+        }
+        NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
     private func copyMessage() {
