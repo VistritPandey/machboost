@@ -109,7 +109,8 @@ repository workspaces, text/code/folder/image attachments, model downloads,
 resident-model controls, automatic long-chat summarization near the selected
 context limit, server metrics, employee-key management, trace/evaluation views,
 a Local/Team inference switch, repo-scoped coding tools, connected-device and
-model-request views, a developer API view, and a menu-bar controller. Chats and
+model-request views, coding permission modes, a Git working-tree review panel,
+a developer API view, and a menu-bar controller. Chats and
 imported attachments remain local, model downloads always require confirmation,
 and closing the window leaves the selected models available until they expire,
 are unloaded, or MachBoost is quit.
@@ -530,13 +531,20 @@ device presence, selected model, workspace name/revision fingerprint, and actual
 inference request counts. It does not receive the client's repository path.
 
 In desktop coding mode, repository list/read/search operations execute on the
-employee Mac. Exact replacements and new files pause for approval and are also
-applied on that employee Mac. Only bounded tool results are sent to the selected
-inference host. This avoids granting the host filesystem access and keeps the
-same coding UI available to employees who cannot run the model locally.
+employee Mac. **Manual** asks before every write, **Auto** approves bounded
+exact replacements but asks before broader changes, **Accept edits** approves
+file writes, **Plan** exposes read-only tools, and **Bypass permissions**
+approves all available repository tools. Every mode retains the selected-folder
+boundary. Only bounded tool results are sent to the selected inference host.
+This avoids granting the host filesystem access and keeps the same coding UI
+available to employees who cannot run the model locally.
 The chat groups multiple calls and follow-up tool rounds into collapsible
 activity rows. Approved edits include a bounded patch preview plus Open File
-and Reveal in Finder actions; model protocol tokens are not shown as messages.
+and Reveal in Finder actions. A trailing `branch -> working tree` panel shows
+the final repository-wide Git diff, while per-message patches retain the change
+history. Model protocol tokens are not shown as messages. Throughput shown in
+chat is generated tokens divided by decode time across the complete assistant
+turn, including tool-call follow-up rounds.
 
 Codex-style clients can select MachBoost as a Responses provider:
 
