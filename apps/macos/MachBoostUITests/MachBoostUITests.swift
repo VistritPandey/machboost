@@ -153,6 +153,45 @@ final class MachBoostUITests: XCTestCase {
     }
 
     @MainActor
+    func testCodingAgentShowsMultiRoundActivityAndReviewableChanges() {
+        let app = launchApp(environment: [
+            "MACHBOOST_UI_TEST_MODEL": "muse-glimmer:30b"
+        ])
+        let repository = app.descendants(matching: .any)["repository-picker"]
+        XCTAssertTrue(repository.waitForExistence(timeout: 10))
+        focus(repository)
+        let fixture = app.menuItems["MachBoost fixture"]
+        XCTAssertTrue(fixture.waitForExistence(timeout: 3))
+        fixture.click()
+
+        send("Exercise coding agent", in: app)
+
+        XCTAssertTrue(app.staticTexts["Listed files in Sources"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Read Sources/App.swift"].waitForExistence(timeout: 3))
+        let approval = app.sheets.buttons["Apply Change"]
+        XCTAssertTrue(approval.waitForExistence(timeout: 5))
+        approval.click()
+
+        XCTAssertTrue(app.staticTexts["Edited Sources/App.swift"].waitForExistence(timeout: 5))
+        XCTAssertTrue(
+            app.staticTexts["Reviewed the repository after three tool results."]
+                .waitForExistence(timeout: 5)
+        )
+        let changes = app.buttons["code-changes"]
+        XCTAssertTrue(changes.waitForExistence(timeout: 3))
+        changes.click()
+        XCTAssertTrue(app.buttons["Open File"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["Reveal"].exists)
+        let patch = app.staticTexts["change-patch-edit-1"]
+        XCTAssertTrue(patch.waitForExistence(timeout: 3))
+        XCTAssertFalse(
+            app.staticTexts.containing(
+                NSPredicate(format: "label CONTAINS %@", "<tool_call")
+            ).firstMatch.exists
+        )
+    }
+
+    @MainActor
     func testLongMarkdownStreamKeepsItsEndVisible() {
         let app = launchApp()
         send("Show a long Markdown response", in: app)
