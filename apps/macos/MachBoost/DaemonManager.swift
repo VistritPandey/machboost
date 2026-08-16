@@ -32,9 +32,19 @@ final class DaemonManager {
         state = .starting
         let api = MachBoostAPI(endpoint: configuration.endpoint, apiToken: apiToken)
         if (try? await api.health()) == true {
-            ownsProcess = false
-            state = .running
-            return
+            let appVersion = Self.applicationVersion()
+            if let serverVersion = try? await api.serverVersion(),
+               Self.isOlderVersion(serverVersion, than: appVersion) {
+                try await stopOlderDaemon(
+                    api: api,
+                    serverVersion: serverVersion,
+                    appVersion: appVersion
+                )
+            } else {
+                ownsProcess = false
+                state = .running
+                return
+            }
         }
 
         let launch = try runtimeLaunch()
@@ -177,6 +187,34 @@ final class DaemonManager {
         throw DaemonError.timedOut
     }
 
+    private func stopOlderDaemon(
+        api: MachBoostAPI,
+        serverVersion: String,
+        appVersion: String
+    ) async throws {
+        appendLog(
+            "Replacing MachBoost daemon \(serverVersion) with bundled version \(appVersion)."
+        )
+        do {
+            try await api.shutdown()
+        } catch {
+            throw DaemonError.incompatibleDaemon(
+                running: serverVersion,
+                expected: appVersion
+            )
+        }
+        for _ in 0..<50 {
+            if (try? await api.health(timeoutInterval: 0.15)) != true {
+                return
+            }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        throw DaemonError.incompatibleDaemon(
+            running: serverVersion,
+            expected: appVersion
+        )
+    }
+
     private func appendLog(_ text: String) {
         recentLogs.append(contentsOf: text.split(whereSeparator: { $0.isNewline }).map(String.init))
         if recentLogs.count > 300 {
@@ -199,6 +237,16 @@ final class DaemonManager {
             environment.removeValue(forKey: "MACHBOOST_API_TOKEN")
         }
         return environment
+    }
+
+    static func isOlderVersion(_ serverVersion: String, than appVersion: String) -> Bool {
+        serverVersion.compare(appVersion, options: .numeric) == .orderedAscending
+    }
+
+    private static func applicationVersion() -> String {
+        Bundle.main.object(
+            forInfoDictionaryKey: "CFBundleShortVersionString"
+        ) as? String ?? "0"
     }
 
     private func runtimeLaunch() throws -> RuntimeLaunch {
@@ -262,6 +310,7 @@ enum DaemonError: LocalizedError {
     case timedOut
     case exited(Int32)
     case externallyManaged
+    case incompatibleDaemon(running: String, expected: String)
 
     var errorDescription: String? {
         switch self {
@@ -273,6 +322,8 @@ enum DaemonError: LocalizedError {
             "The MachBoost daemon exited with status \(status)."
         case .externallyManaged:
             "This server was started outside the app. Stop it before changing app server settings."
+        case let .incompatibleDaemon(running, expected):
+            "MachBoost \(running) is already using the local server port and could not be replaced by \(expected). Quit the older MachBoost process and reopen the app."
         }
     }
 }
