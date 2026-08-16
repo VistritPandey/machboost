@@ -130,8 +130,7 @@ final class MachBoostUITests: XCTestCase {
     @MainActor
     func testMuseChatShowsReasoningControlsAndToolCalls() {
         let app = launchApp(environment: [
-            "MACHBOOST_UI_TEST_MODEL": "muse-glimmer:30b",
-            "MACHBOOST_UI_TEST_CODING": "1",
+            "MACHBOOST_UI_TEST_MODEL": "muse-glimmer:30b"
         ])
         let controls = app.buttons["Generation controls"]
         XCTAssertTrue(controls.waitForExistence(timeout: 10))
@@ -156,7 +155,8 @@ final class MachBoostUITests: XCTestCase {
     @MainActor
     func testCodingAgentShowsMultiRoundActivityAndReviewableChanges() {
         let app = launchApp(environment: [
-            "MACHBOOST_UI_TEST_MODEL": "muse-glimmer:30b"
+            "MACHBOOST_UI_TEST_MODEL": "muse-glimmer:30b",
+            "MACHBOOST_UI_TEST_CODING": "1",
         ])
         let repository = app.descendants(matching: .any)["repository-picker"]
         XCTAssertTrue(repository.waitForExistence(timeout: 10))
