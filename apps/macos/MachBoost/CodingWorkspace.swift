@@ -27,6 +27,33 @@ struct CodingToolResult: Sendable {
     let name: String
     let content: String
     let changedPath: String?
+    let changePatch: String?
+}
+
+enum CodingToolState: String, Codable, Hashable, Sendable {
+    case queued
+    case running
+    case succeeded
+    case denied
+    case failed
+}
+
+struct CodingToolActivity: Codable, Hashable, Identifiable, Sendable {
+    let id: String
+    let call: APIToolCall
+    var state: CodingToolState
+    var output: String?
+    var changedPath: String?
+    var changePatch: String?
+
+    init(call: APIToolCall, state: CodingToolState = .queued) {
+        self.id = call.id ?? "activity-\(UUID().uuidString.lowercased())"
+        self.call = call
+        self.state = state
+        self.output = nil
+        self.changedPath = nil
+        self.changePatch = nil
+    }
 }
 
 enum CodingWorkspace {
@@ -103,6 +130,83 @@ enum CodingWorkspace {
         }
     }
 
+    static func activitySummary(of call: APIToolCall) -> String {
+        let arguments = object(call.function.arguments)
+        let path = string(arguments["path"]) ?? "repository root"
+        switch call.function.name {
+        case "list_files": return "Listed files in \(path)"
+        case "read_file": return "Read \(path)"
+        case "search_code": return "Searched for \(string(arguments["query"]) ?? "text")"
+        case "replace_in_file": return "Edited \(path)"
+        case "create_file": return "Created \(path)"
+        default: return "Ran \(call.function.name)"
+        }
+    }
+
+    static func activityDetails(of call: APIToolCall) -> [(String, String)] {
+        let arguments = object(call.function.arguments)
+        let path = string(arguments["path"])
+        switch call.function.name {
+        case "list_files":
+            return [("Directory", path ?? "Repository root")]
+        case "read_file":
+            var rows = [("File", path ?? "Unknown")]
+            if let start = int(arguments["start_line"]), let end = int(arguments["end_line"]) {
+                rows.append(("Lines", "\(start)-\(end)"))
+            }
+            return rows
+        case "search_code":
+            return [
+                ("Query", string(arguments["query"]) ?? ""),
+                ("Location", path ?? "Entire repository"),
+            ]
+        case "replace_in_file", "create_file":
+            return [("File", path ?? "Unknown")]
+        default:
+            return []
+        }
+    }
+
+    static func displayResult(_ content: String) -> String {
+        guard
+            let data = content.data(using: .utf8),
+            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else {
+            return content
+        }
+        if let error = object["error"] as? String { return error }
+        if let files = object["files"] as? [String] {
+            return files.isEmpty ? "No files found." : files.joined(separator: "\n")
+        }
+        if let text = object["content"] as? String { return text }
+        if let matches = object["matches"] as? [[String: Any]] {
+            if matches.isEmpty { return "No matches found." }
+            return matches.map { match in
+                let path = match["path"] as? String ?? "file"
+                let line = match["line"] as? Int ?? 0
+                let text = match["text"] as? String ?? ""
+                return "\(path):\(line)  \(text)"
+            }.joined(separator: "\n")
+        }
+        if let path = object["path"] as? String, let status = object["status"] as? String {
+            return "\(status.capitalized) \(path)"
+        }
+        return content
+    }
+
+    static func fileURL(relativePath: String, workspaceRoot: String?) -> URL? {
+        guard let workspaceRoot else { return nil }
+        let root = URL(fileURLWithPath: workspaceRoot, isDirectory: true)
+            .standardizedFileURL.resolvingSymlinksInPath()
+        guard
+            let file = try? safeURL(root: root, relativePath: relativePath, mustExist: true),
+            contains(file, root: root)
+        else {
+            return nil
+        }
+        return file
+    }
+
     static func execute(_ call: APIToolCall, workspaceRoot: String) throws -> CodingToolResult {
         let root = URL(fileURLWithPath: workspaceRoot, isDirectory: true)
             .standardizedFileURL.resolvingSymlinksInPath()
@@ -114,6 +218,7 @@ enum CodingWorkspace {
         let arguments = object(call.function.arguments)
         let content: String
         let changedPath: String?
+        let changePatch: String?
         switch call.function.name {
         case "list_files":
             content = try listFiles(
@@ -122,6 +227,7 @@ enum CodingWorkspace {
                 limit: boundedInt(arguments["limit"], default: 200, range: 1 ... 500)
             )
             changedPath = nil
+            changePatch = nil
         case "read_file":
             let path = try requiredString(arguments, "path")
             content = try readFile(
@@ -131,6 +237,7 @@ enum CodingWorkspace {
                 endLine: boundedInt(arguments["end_line"], default: 400, range: 1 ... 1_000_000)
             )
             changedPath = nil
+            changePatch = nil
         case "search_code":
             content = try searchCode(
                 root: root,
@@ -139,23 +246,29 @@ enum CodingWorkspace {
                 limit: boundedInt(arguments["limit"], default: 50, range: 1 ... 100)
             )
             changedPath = nil
+            changePatch = nil
         case "replace_in_file":
             let path = try requiredString(arguments, "path")
+            let oldText = try requiredString(arguments, "old_text", allowEmpty: false)
+            let newText = try requiredString(arguments, "new_text", allowEmpty: true)
             content = try replaceInFile(
                 root: root,
                 path: path,
-                oldText: requiredString(arguments, "old_text", allowEmpty: false),
-                newText: try requiredString(arguments, "new_text", allowEmpty: true)
+                oldText: oldText,
+                newText: newText
             )
             changedPath = path
+            changePatch = patch(path: path, before: oldText, after: newText, created: false)
         case "create_file":
             let path = try requiredString(arguments, "path")
+            let newContent = try requiredString(arguments, "content", allowEmpty: true)
             content = try createFile(
                 root: root,
                 path: path,
-                content: try requiredString(arguments, "content", allowEmpty: true)
+                content: newContent
             )
             changedPath = path
+            changePatch = patch(path: path, before: "", after: newContent, created: true)
         default:
             throw CodingWorkspaceError.invalidArguments(
                 "Unknown coding tool: \(call.function.name)"
@@ -165,8 +278,30 @@ enum CodingWorkspace {
             callID: call.id,
             name: call.function.name,
             content: content,
-            changedPath: changedPath
+            changedPath: changedPath,
+            changePatch: changePatch
         )
+    }
+
+    private static func patch(
+        path: String,
+        before: String,
+        after: String,
+        created: Bool
+    ) -> String {
+        var lines = [
+            "--- \(created ? "/dev/null" : "a/\(path)")",
+            "+++ b/\(path)",
+            "@@ changed block @@",
+        ]
+        let beforeLines = before.components(separatedBy: .newlines)
+        let afterLines = after.components(separatedBy: .newlines)
+        lines.append(contentsOf: beforeLines.prefix(200).map { "-\($0)" })
+        lines.append(contentsOf: afterLines.prefix(200).map { "+\($0)" })
+        if beforeLines.count > 200 || afterLines.count > 200 {
+            lines.append("... patch preview truncated ...")
+        }
+        return String(lines.joined(separator: "\n").prefix(24_000))
     }
 
     private static func listFiles(
@@ -399,6 +534,11 @@ enum CodingWorkspace {
     private static func string(_ value: JSONValue?) -> String? {
         guard case let .string(string) = value else { return nil }
         return string
+    }
+
+    private static func int(_ value: JSONValue?) -> Int? {
+        guard case let .number(number) = value else { return nil }
+        return Int(number)
     }
 
     private static func boundedInt(
