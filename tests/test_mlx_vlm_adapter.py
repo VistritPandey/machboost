@@ -324,6 +324,31 @@ class MLXVLMAcceleratorTests(unittest.TestCase):
         _, options = self.templates[0]
         self.assertTrue(options["enable_thinking"])
 
+    def test_chat_template_receives_native_tools_and_reasoning_strength(self):
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "read_file",
+                    "description": "Read a repository file",
+                    "parameters": {"type": "object"},
+                },
+            }
+        ]
+
+        self.accelerator.generate_chat(
+            [{"role": "user", "content": "Inspect the code."}],
+            max_tokens=8,
+            tools=tools,
+            tool_choice="required",
+            reasoning_strength="medium",
+        )
+
+        _, options = self.templates[0]
+        self.assertEqual(options["tools"], tools)
+        self.assertEqual(options["tool_choice"], "required")
+        self.assertEqual(options["reasoning_strength"], "medium")
+
     def test_streams_reasoning_separately_across_marker_boundaries(self):
         self.accelerator.model.config = {
             "model_type": "muse_glimmer",
