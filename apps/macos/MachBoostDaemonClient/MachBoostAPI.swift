@@ -27,6 +27,27 @@ public protocol MachBoostAPIProtocol: AnyObject, Sendable {
     func removeWorkspace(id: String) async throws
     func teamStatus() async throws -> TeamStatus?
     func teamKeys() async throws -> [TeamKey]
+    func teamConnect() async throws -> TeamConnectResponse
+    func reportTeamPresence(
+        deviceID: String,
+        deviceName: String,
+        appVersion: String,
+        workspaceName: String?,
+        workspaceFingerprint: String?,
+        model: String?
+    ) async throws -> TeamClient
+    func teamClients() async throws -> [TeamClient]
+    func teamModelRequests(status: String?) async throws -> [TeamModelRequest]
+    func requestTeamModel(
+        model: String,
+        deviceID: String,
+        note: String?
+    ) async throws -> TeamModelRequest
+    func resolveTeamModelRequest(
+        id: String,
+        status: String,
+        note: String?
+    ) async throws -> TeamModelRequest
     func createTeamKey(
         name: String,
         scopes: [String],
@@ -105,6 +126,35 @@ public extension MachBoostAPIProtocol {
 
     func teamStatus() async throws -> TeamStatus? { nil }
     func teamKeys() async throws -> [TeamKey] { [] }
+    func teamConnect() async throws -> TeamConnectResponse {
+        throw MachBoostAPIError.server(status: 501, message: "Team connections are unavailable.")
+    }
+    func reportTeamPresence(
+        deviceID: String,
+        deviceName: String,
+        appVersion: String,
+        workspaceName: String?,
+        workspaceFingerprint: String?,
+        model: String?
+    ) async throws -> TeamClient {
+        throw MachBoostAPIError.server(status: 501, message: "Team connections are unavailable.")
+    }
+    func teamClients() async throws -> [TeamClient] { [] }
+    func teamModelRequests(status: String?) async throws -> [TeamModelRequest] { [] }
+    func requestTeamModel(
+        model: String,
+        deviceID: String,
+        note: String?
+    ) async throws -> TeamModelRequest {
+        throw MachBoostAPIError.server(status: 501, message: "Team connections are unavailable.")
+    }
+    func resolveTeamModelRequest(
+        id: String,
+        status: String,
+        note: String?
+    ) async throws -> TeamModelRequest {
+        throw MachBoostAPIError.server(status: 501, message: "Team connections are unavailable.")
+    }
     func traces(limit: Int) async throws -> [TraceSummary] { [] }
     func evaluations(limit: Int) async throws -> [TraceEvaluation] { [] }
     func memories(workspaceID: String?) async throws -> [MemorySummary] { [] }
@@ -160,13 +210,20 @@ public extension MachBoostAPIProtocol {
 public final class MachBoostAPI: MachBoostAPIProtocol, @unchecked Sendable {
     private let endpoint: URL
     private let apiToken: String?
+    private let deviceID: String?
     private let session: URLSession
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
 
-    public init(endpoint: URL, apiToken: String? = nil, session: URLSession? = nil) {
+    public init(
+        endpoint: URL,
+        apiToken: String? = nil,
+        deviceID: String? = nil,
+        session: URLSession? = nil
+    ) {
         self.endpoint = endpoint
         self.apiToken = apiToken
+        self.deviceID = deviceID
         if let session {
             self.session = session
         } else {
@@ -252,6 +309,81 @@ public final class MachBoostAPI: MachBoostAPIProtocol, @unchecked Sendable {
     public func teamKeys() async throws -> [TeamKey] {
         let response: TeamKeysResponse = try await get("/api/team/keys")
         return response.keys
+    }
+
+    public func teamConnect() async throws -> TeamConnectResponse {
+        try await get("/api/team/connect")
+    }
+
+    public func reportTeamPresence(
+        deviceID: String,
+        deviceName: String,
+        appVersion: String,
+        workspaceName: String? = nil,
+        workspaceFingerprint: String? = nil,
+        model: String? = nil
+    ) async throws -> TeamClient {
+        var payload: [String: Any] = [
+            "device_id": deviceID,
+            "device_name": deviceName,
+            "app_version": appVersion,
+            "mode": "connect",
+        ]
+        if let workspaceName, !workspaceName.isEmpty {
+            payload["workspace_name"] = workspaceName
+        }
+        if let workspaceFingerprint, !workspaceFingerprint.isEmpty {
+            payload["workspace_fingerprint"] = workspaceFingerprint
+        }
+        if let model, !model.isEmpty { payload["model"] = model }
+        let response: TeamPresenceResponse = try await post(
+            "/api/team/presence",
+            jsonObject: payload
+        )
+        return response.client
+    }
+
+    public func teamClients() async throws -> [TeamClient] {
+        let response: TeamClientsResponse = try await get("/api/team/clients")
+        return response.clients
+    }
+
+    public func teamModelRequests(status: String? = nil) async throws -> [TeamModelRequest] {
+        let suffix = status.map {
+            "?status=" + $0.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)!
+        } ?? ""
+        let response: TeamModelRequestsResponse = try await get(
+            "/api/team/model-requests\(suffix)"
+        )
+        return response.requests
+    }
+
+    public func requestTeamModel(
+        model: String,
+        deviceID: String,
+        note: String? = nil
+    ) async throws -> TeamModelRequest {
+        var payload: [String: Any] = ["model": model, "device_id": deviceID]
+        if let note, !note.isEmpty { payload["note"] = note }
+        let response: TeamModelRequestResponse = try await post(
+            "/api/team/model-requests",
+            jsonObject: payload
+        )
+        return response.request
+    }
+
+    public func resolveTeamModelRequest(
+        id: String,
+        status: String,
+        note: String? = nil
+    ) async throws -> TeamModelRequest {
+        var payload: [String: Any] = ["request_id": id, "status": status]
+        if let note, !note.isEmpty { payload["note"] = note }
+        let response: TeamModelRequestResponse = try await post(
+            "/api/team/model-requests/resolve",
+            jsonObject: payload
+        )
+        return response.request
     }
 
     public func createTeamKey(
@@ -555,6 +687,9 @@ public final class MachBoostAPI: MachBoostAPIProtocol, @unchecked Sendable {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if authenticated, let apiToken, !apiToken.isEmpty {
             request.setValue("Bearer \(apiToken)", forHTTPHeaderField: "Authorization")
+        }
+        if let deviceID, !deviceID.isEmpty {
+            request.setValue(deviceID, forHTTPHeaderField: "X-MachBoost-Device-ID")
         }
         return request
     }
