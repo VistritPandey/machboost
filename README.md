@@ -555,7 +555,9 @@ rows instead of raw model protocol. Approved edits include a bounded patch previ
 and Reveal in Finder actions. A trailing `branch -> working tree` panel shows
 the final repository-wide Git diff, while per-message patches retain the change
 history. Model protocol tokens are not shown as messages. Reasoning is disabled
-by default and remains an explicit generation control for supported models.
+by default where the model supports that choice. Muse Glimmer always reasons, so
+MachBoost uses its documented `low` setting as the fast default and exposes
+`low`, `medium`, `high`, and `xhigh` in Generation controls.
 Throughput shown in chat uses total model tokens divided by backend decode time
 across the complete assistant turn, including hidden reasoning, tool protocol,
 and follow-up rounds. It is not a visible-word rate.
