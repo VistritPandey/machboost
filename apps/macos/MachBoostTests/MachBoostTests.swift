@@ -40,6 +40,14 @@ final class MachBoostTests: XCTestCase {
             HostRoutingPolicy.score(metrics: saturatedResident, modelLoaded: true),
             HostRoutingPolicy.score(metrics: idleColdHost, modelLoaded: false)
         )
+        XCTAssertGreaterThan(
+            HostRoutingPolicy.score(
+                metrics: availableResident,
+                modelLoaded: true,
+                reservedRequests: 2
+            ),
+            HostRoutingPolicy.score(metrics: idleColdHost, modelLoaded: false)
+        )
     }
 
     func testTurnMetricsAggregateEveryToolRound() {
