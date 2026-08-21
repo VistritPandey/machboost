@@ -409,6 +409,32 @@ class MLXVLMAcceleratorTests(unittest.TestCase):
         self.assertEqual(text, "Done")
         self.assertEqual("".join(content), "Done")
 
+    def test_removes_prompt_suffix_echo_without_hiding_following_reasoning(self):
+        self.accelerator.model.config = {
+            "model_type": "muse_glimmer",
+            "thinking_start_token": "to=self<|message|>",
+            "thinking_end_token": "<|eom|>",
+        }
+
+        def reasoning_stream(model, processor, prompt, **kwargs):
+            yield FakeGenerationRow("<|start|>assistant to=self<|message|>Reply")
+            yield FakeGenerationRow(" briefly. So the answer is 4.")
+            yield FakeGenerationRow("<|eom|><|start|>assistant to=user<|message|>4")
+
+        self.accelerator._stream_generate = reasoning_stream
+        thinking = []
+
+        text, stats = self.accelerator.generate_chat(
+            [{"role": "user", "content": "What is 2 + 2? Reply briefly."}],
+            max_tokens=32,
+            on_thinking=thinking.append,
+            enable_thinking=True,
+        )
+
+        self.assertEqual("".join(thinking), "So the answer is 4.")
+        self.assertEqual(stats.thinking, "So the answer is 4.")
+        self.assertEqual(text, "4")
+
     def test_preserves_non_echo_initial_reasoning(self):
         self.accelerator.model.config = {
             "model_type": "muse_glimmer",
