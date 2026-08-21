@@ -37,6 +37,7 @@ class OllamaOptionTests(unittest.TestCase):
         self.assertEqual(result["num_ctx"], 4096)
         self.assertEqual(result["stop"], ["END"])
         self.assertEqual(result["_think"], "high")
+        self.assertEqual(result["_reasoning_strength"], "high")
         self.assertEqual(result["_format"], "json")
 
     def test_invalid_sampling_and_format_are_rejected(self):
