@@ -49,11 +49,20 @@ struct TeamHostSnapshot: Identifiable, Sendable {
 }
 
 enum HostRoutingPolicy {
-    static func score(metrics: ServerMetrics?, modelLoaded: Bool) -> Double {
+    static func score(
+        metrics: ServerMetrics?,
+        modelLoaded: Bool,
+        reservedRequests: Int = 0
+    ) -> Double {
         let active = Double(metrics?.scheduler.activeRequests ?? 0)
         let queued = Double(metrics?.scheduler.queuedRequests ?? 0)
-        let latency = metrics?.operations.latencySeconds.p50 ?? 0
-        return (modelLoaded ? 0 : 1_000) + queued * 100 + active * 10 + latency
+        let latency = max(0.25, metrics?.operations.latencySeconds.p50 ?? 0.75)
+        let requestCost = max(0.75, latency)
+        return (modelLoaded ? 0 : 3)
+            + queued * requestCost
+            + active * 0.25
+            + Double(reservedRequests) * requestCost
+            + latency * 0.1
     }
 }
 
