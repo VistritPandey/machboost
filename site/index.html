@@ -23,7 +23,7 @@
     <title>MachBoost — Faster local inference on Apple Silicon</title>
     <link rel="icon" href="assets/machboost-icon.webp">
     <link rel="apple-touch-icon" href="assets/machboost-icon.webp">
-    <link rel="stylesheet" href="styles.css?v=0.13.3">
+    <link rel="stylesheet" href="styles.css?v=0.14.0">
     <script
       defer
       src="https://cdn.jsdelivr.net/npm/lucide@0.468.0/dist/umd/lucide.min.js"
@@ -194,9 +194,11 @@
             <h2>One Mac. Your team's coding agents.</h2>
             <p>
               Give each employee a scoped key and point Codex, Claude Code, Cline,
-              Kilo Code, or another compatible client at the same private endpoint. Models stay
-              resident while MachBoost enforces model access, concurrency, request
-              rates, and fair queueing between employees. Revision-aware memory can
+              Kilo Code, or another compatible client at a private endpoint. The
+              desktop app can discover several MachBoost Macs and route each new
+              request to a compatible resident model with the best current load.
+              Each host enforces model access, concurrency, request rates, and fair
+              queueing between employees. Revision-aware memory can
               reuse validated repository knowledge without exposing private work,
               while exact reusable prefixes can avoid repeated prefill when requests
               genuinely overlap. Budgeted external providers remain an explicit
@@ -217,7 +219,7 @@
             </div>
             <dl class="team-stats">
               <div><dt>Identity</dt><dd>Scoped keys</dd></div>
-              <div><dt>Admission</dt><dd>Tenant-fair</dd></div>
+              <div><dt>Routing</dt><dd>Load-aware host pool</dd></div>
               <div><dt>Protocols</dt><dd>Responses + Messages + Ollama</dd></div>
               <div><dt>Memory</dt><dd>Private + shared</dd></div>
             </dl>
@@ -230,7 +232,7 @@ export OPENAI_API_KEY="mbk_employee_key"</code></pre>
           <div>
             <i data-lucide="users" aria-hidden="true"></i>
             <h3>Connect the desktop fleet</h3>
-            <p>Employees use the same MachBoost chat and coding UI while inference runs on the host.</p>
+            <p>Bonjour finds nearby hosts; scoped keys keep every connection explicit and authenticated.</p>
           </div>
           <div>
             <i data-lucide="brain-circuit" aria-hidden="true"></i>
@@ -239,8 +241,8 @@ export OPENAI_API_KEY="mbk_employee_key"</code></pre>
           </div>
           <div>
             <i data-lucide="activity" aria-hidden="true"></i>
-            <h3>Route, inspect, evaluate</h3>
-            <p>Apply provider budgets and transient fallback, inspect local traces, then evaluate selected requests.</p>
+            <h3>Spill over busy requests</h3>
+            <p>Prefer resident models, account for queues and new reservations, and optionally use the employee Mac.</p>
           </div>
         </div>
       </section>
@@ -249,11 +251,11 @@ export OPENAI_API_KEY="mbk_employee_key"</code></pre>
         <div class="shell">
           <div class="section-heading section-heading-light">
             <p class="kicker">Architecture</p>
-            <h2>Repos stay with developers. Models stay with the host.</h2>
+            <h2>Repos stay with developers. Models run across the host pool.</h2>
             <p>
-              MachBoost uses a hub-and-spoke design. Client apps execute scoped
-              repository tools locally; the host receives chat context and tool
-              results, then schedules generation across resident native MLX models.
+              Client apps execute scoped repository tools locally, discover approved
+              hosts, and select one compatible machine before generation. Each host
+              schedules requests across its own resident native MLX models.
             </p>
           </div>
 
@@ -288,29 +290,29 @@ export OPENAI_API_KEY="mbk_employee_key"</code></pre>
 
             <div class="architecture-layer architecture-host">
               <div class="architecture-layer-title">
-                <span>Team host Mac</span>
-                <small>One authenticated endpoint</small>
+                <span>Inference host pool</span>
+                <small>Independent authenticated endpoints</small>
               </div>
               <div class="architecture-nodes architecture-nodes-four">
                 <div class="architecture-node architecture-node-accent">
                   <i data-lucide="route" aria-hidden="true"></i>
-                  <strong>Smart gateway</strong>
-                  <span>Keys, allowlists, protocol adapters</span>
+                  <strong>Desktop router</strong>
+                  <span>Catalog, residency, queue pressure</span>
                 </div>
                 <div class="architecture-node">
                   <i data-lucide="list-ordered" aria-hidden="true"></i>
-                  <strong>Admission</strong>
-                  <span>Limits, bounded queue, replicas</span>
+                  <strong>Primary Mac Studio</strong>
+                  <span>Resident models, bounded queue</span>
                 </div>
                 <div class="architecture-node">
                   <i data-lucide="database-zap" aria-hidden="true"></i>
-                  <strong>Reusable state</strong>
-                  <span>Exact prefixes and reviewed memory</span>
+                  <strong>Fallback Mac</strong>
+                  <span>Compatible model spillover</span>
                 </div>
                 <div class="architecture-node architecture-node-model">
                   <i data-lucide="memory-stick" aria-hidden="true"></i>
-                  <strong>Resident MLX pool</strong>
-                  <span>Text, vision, reasoning, tools</span>
+                  <strong>Optional local worker</strong>
+                  <span>Joins only with the model ready</span>
                 </div>
               </div>
               <div class="architecture-observability">
@@ -324,8 +326,10 @@ export OPENAI_API_KEY="mbk_employee_key"</code></pre>
 
           <p class="architecture-note">
             Repository paths and credentials are not sent as host presence metadata.
-            Writes are applied on the client only after approval. Cache acceleration
-            requires reusable work; a fully unique request still runs the target model.
+            Writes are applied on the client only after approval. Routing is
+            request-level and desktop-side: an in-progress stream is not migrated,
+            memory is not pooled across Macs, and generic API clients use the single
+            endpoint they target.
           </p>
         </div>
       </section>
