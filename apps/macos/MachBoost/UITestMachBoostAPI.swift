@@ -293,34 +293,37 @@ final class UITestMachBoostAPI: MachBoostAPIProtocol, @unchecked Sendable {
         requestID: String
     ) -> AsyncThrowingStream<PullEvent, Error> {
         AsyncThrowingStream { continuation in
-            continuation.yield(
-                PullEvent(
-                    requestID: requestID,
-                    status: "downloading",
-                    file: "weights.safetensors",
-                    completed: 4,
-                    total: 8,
-                    unit: "bytes",
-                    done: false,
-                    path: nil,
-                    error: nil
+            Task {
+                continuation.yield(
+                    PullEvent(
+                        requestID: requestID,
+                        status: "downloading",
+                        file: "weights.safetensors",
+                        completed: 4,
+                        total: 8,
+                        unit: "bytes",
+                        done: false,
+                        path: nil,
+                        error: nil
+                    )
                 )
-            )
-            _ = lock.withLock { downloadedModels.insert(model) }
-            continuation.yield(
-                PullEvent(
-                    requestID: requestID,
-                    status: "success",
-                    file: nil,
-                    completed: 8,
-                    total: 8,
-                    unit: "bytes",
-                    done: true,
-                    path: "/tmp/machboost-ui-fixture",
-                    error: nil
+                try? await Task.sleep(for: .milliseconds(400))
+                _ = lock.withLock { downloadedModels.insert(model) }
+                continuation.yield(
+                    PullEvent(
+                        requestID: requestID,
+                        status: "success",
+                        file: nil,
+                        completed: 8,
+                        total: 8,
+                        unit: "bytes",
+                        done: true,
+                        path: "/tmp/machboost-ui-fixture",
+                        error: nil
+                    )
                 )
-            )
-            continuation.finish()
+                continuation.finish()
+            }
         }
     }
 
