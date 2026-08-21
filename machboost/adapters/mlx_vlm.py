@@ -229,6 +229,13 @@ class InitialReasoningEchoFilter:
         if current and (not can_still_match or already_continued):
             cleaned, removed = self._strip_leading_echo(self.buffer)
             if removed:
+                cleaned_current = _collapsed_whitespace(cleaned)
+                if not cleaned_current or any(
+                    candidate.startswith(cleaned_current)
+                    for candidate in self.candidates
+                ):
+                    self.buffer = cleaned
+                    return ""
                 self.buffer = ""
                 self.decided = True
                 return cleaned
