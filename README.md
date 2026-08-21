@@ -108,8 +108,9 @@ macOS 14 or newer. It provides streaming chat, local conversation history,
 repository workspaces, text/code/folder/image attachments, model downloads,
 resident-model controls, automatic long-chat summarization near the selected
 context limit, server metrics, employee-key management, trace/evaluation views,
-a Local/Team inference switch, repo-scoped coding tools, connected-device and
-model-request views, coding permission modes, a Git working-tree review panel,
+a Local/Host pool inference switch, Bonjour host discovery, load-aware
+request routing, repo-scoped coding tools, connected-device and model-request
+views, coding permission modes, a Git working-tree review panel,
 a developer API view, and a menu-bar controller. Chats and
 imported attachments remain local, model downloads always require confirmation,
 and closing the window leaves the selected models available until they expire,
@@ -523,12 +524,22 @@ export OPENAI_BASE_URL="http://TEAM-MAC:11435/v1"
 export OPENAI_API_KEY="mbk_employee_key"
 ```
 
-MachBoost desktop clients can connect directly from **Connections → Team host**.
-The host returns only compatible models already cached on that Mac and permitted
-by the employee key. An employee can request another repository or alias; the
-host must approve and download it from **Server → Team**. The host view reports
-device presence, selected model, workspace name/revision fingerprint, and actual
-inference request counts. It does not receive the client's repository path.
+MachBoost desktop clients can connect directly from **Connections → Host pool**.
+The app discovers nearby MachBoost servers with Bonjour, accepts additional
+endpoint and scoped-key pairs, and shows each host's loaded models, active
+requests, and queue depth. A request is routed only to an online host where the
+selected model is ready. A resident copy is preferred until measured queue
+pressure or immediately reserved in-flight requests make an idle compatible host
+the better choice. The employee Mac can also join the pool when it has the model.
+
+Routing is client-side and occurs before generation begins. MachBoost does not
+migrate a partially streamed response, combine GPU memory across Macs, or make a
+model available on a host where it is not downloaded. Generic API clients still
+use the single endpoint they target. An employee can request another repository
+or alias; the host must approve and download it from **Server → Team**. The host
+view reports device presence, selected model, workspace name/revision
+fingerprint, and actual inference request counts. It does not receive the
+client's repository path.
 
 In desktop coding mode, repository list/read/search operations execute on the
 employee Mac. **Manual** asks before every write, **Auto** approves bounded
@@ -538,13 +549,16 @@ approves all available repository tools. Every mode retains the selected-folder
 boundary. Only bounded tool results are sent to the selected inference host.
 This avoids granting the host filesystem access and keeps the same coding UI
 available to employees who cannot run the model locally.
-The chat groups multiple calls and follow-up tool rounds into collapsible
-activity rows. Approved edits include a bounded patch preview plus Open File
+The chat preserves the streamed order of reasoning, visible prose, and one or
+more tool-call rounds. Tool activity is shown in collapsible human-readable
+rows instead of raw model protocol. Approved edits include a bounded patch preview plus Open File
 and Reveal in Finder actions. A trailing `branch -> working tree` panel shows
 the final repository-wide Git diff, while per-message patches retain the change
-history. Model protocol tokens are not shown as messages. Throughput shown in
-chat is generated tokens divided by decode time across the complete assistant
-turn, including tool-call follow-up rounds.
+history. Model protocol tokens are not shown as messages. Reasoning is disabled
+by default and remains an explicit generation control for supported models.
+Throughput shown in chat uses total model tokens divided by backend decode time
+across the complete assistant turn, including hidden reasoning, tool protocol,
+and follow-up rounds. It is not a visible-word rate.
 
 Codex-style clients can select MachBoost as a Responses provider:
 
