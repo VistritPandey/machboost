@@ -21,7 +21,7 @@ concurrency:
 jobs:
   release:
     name: Sign, notarize, and publish
-    if: github.event_name == 'workflow_dispatch' || vars.MACHBOOST_SIGNED_RELEASES == 'true'
+    if: vars.MACHBOOST_SIGNED_RELEASES == 'true'
     runs-on: macos-15
     timeout-minutes: 120
     steps:
@@ -164,3 +164,95 @@ jobs:
           if [[ -n "${MACHBOOST_RELEASE_KEYCHAIN:-}" ]]; then
             security delete-keychain "$MACHBOOST_RELEASE_KEYCHAIN" || true
           fi
+
+  community-release:
+    name: Build and publish community DMG
+    if: vars.MACHBOOST_SIGNED_RELEASES != 'true'
+    runs-on: macos-15
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Select release tag
+        shell: bash
+        run: |
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            VERSION="${{ inputs.version }}"
+          else
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
+          if [[ -z "$VERSION" || "$VERSION" == v* ]]; then
+            echo "Invalid release version: $VERSION" >&2
+            exit 2
+          fi
+          git rev-parse --verify "v${VERSION}^{commit}" >/dev/null
+          git checkout --detach "v${VERSION}"
+          echo "MACHBOOST_RELEASE_VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Install release tools
+        run: |
+          curl --fail --location --silent --show-error \
+            --output "$RUNNER_TEMP/xcodegen.zip" \
+            https://github.com/yonaskolb/XcodeGen/releases/download/2.46.0/xcodegen.zip
+          echo "4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806  $RUNNER_TEMP/xcodegen.zip" \
+            | shasum --algorithm 256 --check
+          ditto -x -k "$RUNNER_TEMP/xcodegen.zip" "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/xcodegen/bin" >> "$GITHUB_PATH"
+
+      - name: Prepare Sparkle signing key
+        env:
+          SPARKLE_PRIVATE_KEY_VALUE: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        shell: bash
+        run: |
+          : "${SPARKLE_PRIVATE_KEY_VALUE:?Missing SPARKLE_PRIVATE_KEY}"
+          KEY_PATH="$RUNNER_TEMP/machboost-sparkle-private-key"
+          printf '%s' "$SPARKLE_PRIVATE_KEY_VALUE" > "$KEY_PATH"
+          chmod 600 "$KEY_PATH"
+          echo "SPARKLE_PRIVATE_KEY=$KEY_PATH" >> "$GITHUB_ENV"
+
+      - name: Build DMG and signed appcast
+        env:
+          SPARKLE_PUBLIC_ED_KEY: ${{ secrets.SPARKLE_PUBLIC_ED_KEY }}
+        run: ./scripts/release_macos.sh "$MACHBOOST_RELEASE_VERSION" --local
+
+      - name: Verify community application
+        shell: bash
+        run: |
+          APP="dist/macos/MachBoost.xcarchive/Products/Applications/MachBoost.app"
+          PYTHON="$APP/Contents/Resources/runtime/python/bin/python3"
+          PYTHONDONTWRITEBYTECODE=1 "$PYTHON" -I -B -c \
+            'import machboost, mlx, mlx_lm, mlx_vlm; print(machboost.__version__)'
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          hdiutil verify "dist/macos/MachBoost-${MACHBOOST_RELEASE_VERSION}-arm64.dmg"
+          test -s dist/macos/appcast.xml
+
+      - name: Generate release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh api \
+            --method POST \
+            "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
+            -f "tag_name=v${MACHBOOST_RELEASE_VERSION}" \
+            --jq .body > "$RUNNER_TEMP/machboost-release-notes.md"
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ./scripts/publish_macos_release.sh \
+            "$MACHBOOST_RELEASE_VERSION" \
+            "$RUNNER_TEMP/machboost-release-notes.md"
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: MachBoost-${{ env.MACHBOOST_RELEASE_VERSION }}-macOS-community
+          path: |
+            dist/macos/MachBoost-${{ env.MACHBOOST_RELEASE_VERSION }}-arm64.dmg
+            dist/macos/MachBoost-${{ env.MACHBOOST_RELEASE_VERSION }}-arm64.dmg.sha256
+            dist/macos/appcast.xml
+          if-no-files-found: error
