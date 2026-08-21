@@ -41,4 +41,4 @@ gh release create "$TAG" \
   --title "MachBoost ${VERSION} for macOS" \
   --notes-file "$NOTES_FILE"
 
-echo "Published $TAG with the notarized DMG, checksum, and signed appcast."
+echo "Published $TAG with the DMG, checksum, and signed appcast."
