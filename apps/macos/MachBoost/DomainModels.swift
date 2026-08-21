@@ -24,6 +24,39 @@ struct TeamHostProfile: Codable, Identifiable, Equatable, Sendable {
     var connectedAt: Date
 }
 
+struct TeamHostSnapshot: Identifiable, Sendable {
+    let profile: TeamHostProfile
+    var catalog: [CatalogModel]
+    var loadedModels: [ModelInstance]
+    var metrics: ServerMetrics?
+    var isOnline: Bool
+    var lastError: String?
+    var updatedAt: Date
+
+    var id: UUID { profile.id }
+    var activeRequests: Int { metrics?.scheduler.activeRequests ?? 0 }
+    var queuedRequests: Int { metrics?.scheduler.queuedRequests ?? 0 }
+
+    func supports(model: String) -> Bool {
+        catalog.contains {
+            ($0.name == model || $0.repository == model) && $0.cached && $0.support == "ready"
+        }
+    }
+
+    func hasLoaded(model: String) -> Bool {
+        loadedModels.contains { $0.model == model }
+    }
+}
+
+enum HostRoutingPolicy {
+    static func score(metrics: ServerMetrics?, modelLoaded: Bool) -> Double {
+        let active = Double(metrics?.scheduler.activeRequests ?? 0)
+        let queued = Double(metrics?.scheduler.queuedRequests ?? 0)
+        let latency = metrics?.operations.latencySeconds.p50 ?? 0
+        return (modelLoaded ? 0 : 1_000) + queued * 100 + active * 10 + latency
+    }
+}
+
 enum AssistantTimelineKind: String, Codable, Sendable {
     case reasoning
     case content
