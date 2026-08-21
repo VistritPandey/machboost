@@ -719,7 +719,17 @@ class RuntimeManager:
         elif ttft is not None:
             ttft = lease.queue_wait_seconds + float(ttft)
         prompt_eval_duration = float(stats.get("prompt_eval_seconds") or 0.0)
+        if prompt_eval_duration <= 0:
+            prompt_tps = float(stats.get("prompt_tokens_per_second") or 0.0)
+            prompt_tokens = int(stats.get("prompt_tokens") or 0)
+            if prompt_tps > 0 and prompt_tokens > 0:
+                prompt_eval_duration = prompt_tokens / prompt_tps
         eval_duration = float(stats.get("generation_seconds") or 0.0)
+        if eval_duration <= 0:
+            generation_tps = float(stats.get("generation_tokens_per_second") or 0.0)
+            generated_tokens = int(stats.get("generated_tokens") or 0)
+            if generation_tps > 0 and generated_tokens > 0:
+                eval_duration = generated_tokens / generation_tps
         if eval_duration <= 0:
             eval_duration = max(
                 0.0,
@@ -893,7 +903,17 @@ class RuntimeManager:
         elif ttft is not None:
             ttft = lease.queue_wait_seconds + float(ttft)
         prompt_eval_duration = float(stats.get("prompt_eval_seconds") or 0.0)
+        if prompt_eval_duration <= 0:
+            prompt_tps = float(stats.get("prompt_tokens_per_second") or 0.0)
+            prompt_tokens = int(stats.get("prompt_tokens") or 0)
+            if prompt_tps > 0 and prompt_tokens > 0:
+                prompt_eval_duration = prompt_tokens / prompt_tps
         eval_duration = float(stats.get("generation_seconds") or 0.0)
+        if eval_duration <= 0:
+            generation_tps = float(stats.get("generation_tokens_per_second") or 0.0)
+            generated_tokens = int(stats.get("generated_tokens") or 0)
+            if generation_tps > 0 and generated_tokens > 0:
+                eval_duration = generated_tokens / generation_tps
         if eval_duration <= 0:
             eval_duration = max(
                 0.0,
@@ -2650,6 +2670,8 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                 }
             )
 
+        tool_stream = ToolAwareTextStream(emit)
+
         try:
             result = self.run_traced_operation(
                 request_id,
@@ -2661,7 +2683,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                     options=options,
                     keep_alive=payload.get("keep_alive"),
                     context=context,
-                    emit=None if options.get("_tools") else emit,
+                    emit=tool_stream.feed if options.get("_tools") else emit,
                     emit_thinking=emit_thinking,
                     on_admitted=on_admitted,
                     cancel_event=cancel_event,
@@ -2697,7 +2719,12 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
             assistant_text=content,
         )
         if options.get("_tools"):
-            message = {"role": "assistant", "content": content}
+            remaining_content = content
+            if content.startswith(tool_stream.visible):
+                remaining_content = content[len(tool_stream.visible) :]
+            elif tool_stream.visible:
+                remaining_content = ""
+            message = {"role": "assistant", "content": remaining_content}
             if tool_calls:
                 message["tool_calls"] = ollama_tool_calls(tool_calls)
             self.write_json_line(
@@ -4903,7 +4930,42 @@ def extract_tool_calls(text: str) -> tuple[str, list[dict[str, Any]]]:
         flags=re.I,
     )
     content = re.sub(r"<tool_call\b[^>]*(?:>.*)?$", "", content, flags=re.S | re.I)
+    content = re.sub(
+        r"<(?:atem:)?(?:function_calls|invoke|parameter)\b[^>]*(?:>.*)?$",
+        "",
+        content,
+        flags=re.S | re.I,
+    )
     return content.strip(), calls
+
+
+class ToolAwareTextStream:
+    """Stream visible prose while withholding model tool protocol markup."""
+
+    def __init__(self, emit: Callable[[str], None]) -> None:
+        self.emit = emit
+        self.raw = ""
+        self.visible = ""
+
+    def feed(self, text: str) -> None:
+        if not text:
+            return
+        self.raw += text
+        visible, _ = extract_tool_calls(self.raw)
+        open_tag = visible.rfind("<")
+        if open_tag > visible.rfind(">"):
+            candidate = visible[open_tag:].lower()
+            protocol_prefixes = ("<tool_call", "<atem:", "<|")
+            if any(
+                prefix.startswith(candidate) or candidate.startswith(prefix)
+                for prefix in protocol_prefixes
+            ):
+                visible = visible[:open_tag].rstrip()
+        if visible.startswith(self.visible):
+            delta = visible[len(self.visible) :]
+            self.visible = visible
+            if delta:
+                self.emit(delta)
 
 
 def result_content_and_tool_calls(
