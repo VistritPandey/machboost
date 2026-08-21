@@ -23,6 +23,13 @@ struct WorkspaceChangeSet: Equatable, Sendable {
     var deletions: Int { changes.reduce(0) { $0 + $1.deletions } }
 }
 
+enum WorkspaceChangeScope: String, CaseIterable, Identifiable {
+    case conversation = "This Chat"
+    case workingTree = "Working Tree"
+
+    var id: String { rawValue }
+}
+
 enum WorkspaceChanges {
     static func load(workspaceRoot: String) -> WorkspaceChangeSet {
         let root = URL(fileURLWithPath: workspaceRoot, isDirectory: true)
@@ -57,6 +64,51 @@ enum WorkspaceChanges {
         } catch {
             return .init(branch: "", changes: [], error: error.localizedDescription)
         }
+    }
+
+    static func session(
+        workspaceRoot: String,
+        activities: [CodingToolActivity]
+    ) -> WorkspaceChangeSet {
+        let root = URL(fileURLWithPath: workspaceRoot, isDirectory: true)
+        let branch = (try? git(root, ["branch", "--show-current"]).trimmed)
+            .flatMap { $0.isEmpty ? nil : $0 }
+            ?? "detached"
+        let successful = activities.filter {
+            $0.state == .succeeded && $0.changedPath != nil && $0.changePatch != nil
+        }
+        var orderedPaths: [String] = []
+        var changesByPath: [String: WorkspaceChange] = [:]
+        for activity in successful {
+            guard let path = activity.changedPath, let patch = activity.changePatch else {
+                continue
+            }
+            let counts = diffCounts(patch)
+            let status = patch.contains("--- /dev/null") ? "Created" : "Edited"
+            if let existing = changesByPath[path] {
+                changesByPath[path] = WorkspaceChange(
+                    path: path,
+                    status: existing.status == "Created" ? existing.status : status,
+                    additions: existing.additions + counts.additions,
+                    deletions: existing.deletions + counts.deletions,
+                    patch: String((existing.patch + "\n\n" + patch).prefix(60_000))
+                )
+            } else {
+                orderedPaths.append(path)
+                changesByPath[path] = WorkspaceChange(
+                    path: path,
+                    status: status,
+                    additions: counts.additions,
+                    deletions: counts.deletions,
+                    patch: String(patch.prefix(60_000))
+                )
+            }
+        }
+        return WorkspaceChangeSet(
+            branch: branch,
+            changes: orderedPaths.compactMap { changesByPath[$0] },
+            error: nil
+        )
     }
 
     private static func change(root: URL, path: String, status: String) -> WorkspaceChange {
@@ -150,12 +202,26 @@ enum WorkspaceChanges {
         return value.replacingOccurrences(of: "\\\"", with: "\"")
             .replacingOccurrences(of: "\\\\", with: "\\")
     }
+
+    private static func diffCounts(_ patch: String) -> (additions: Int, deletions: Int) {
+        var additions = 0
+        var deletions = 0
+        for line in patch.split(separator: "\n", omittingEmptySubsequences: false) {
+            if line.hasPrefix("+") && !line.hasPrefix("+++") {
+                additions += 1
+            } else if line.hasPrefix("-") && !line.hasPrefix("---") {
+                deletions += 1
+            }
+        }
+        return (additions, deletions)
+    }
 }
 
 struct WorkspaceChangesView: View {
     let snapshot: WorkspaceChangeSet
     let workspaceRoot: String
     let isRefreshing: Bool
+    @Binding var scope: WorkspaceChangeScope
     let onRefresh: () -> Void
     let onClose: () -> Void
 
@@ -170,40 +236,50 @@ struct WorkspaceChangesView: View {
     }
 
     private var header: some View {
-        HStack(spacing: 9) {
-            Image(systemName: "arrow.triangle.branch")
-                .foregroundStyle(.green)
-            VStack(alignment: .leading, spacing: 1) {
-                Text("\(snapshot.branch.isEmpty ? "workspace" : snapshot.branch) → working tree")
-                    .font(.callout.weight(.semibold))
-                Text("\(snapshot.changes.count) changed files")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
-            if snapshot.additions > 0 {
-                Text("+\(snapshot.additions)")
+        VStack(spacing: 9) {
+            HStack(spacing: 9) {
+                Image(systemName: "arrow.triangle.branch")
                     .foregroundStyle(.green)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(snapshot.branch.isEmpty ? "Workspace changes" : snapshot.branch)
+                        .font(.callout.weight(.semibold))
+                    Text("\(snapshot.changes.count) changed files")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                if snapshot.additions > 0 {
+                    Text("+\(snapshot.additions)")
+                        .foregroundStyle(.green)
+                }
+                if snapshot.deletions > 0 {
+                    Text("−\(snapshot.deletions)")
+                        .foregroundStyle(.red)
+                }
+                Button(action: onRefresh) {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .buttonStyle(.borderless)
+                .disabled(isRefreshing)
+                .help("Refresh changes")
+                Button(action: onClose) {
+                    Image(systemName: "xmark")
+                }
+                .buttonStyle(.borderless)
+                .help("Close changes")
             }
-            if snapshot.deletions > 0 {
-                Text("−\(snapshot.deletions)")
-                    .foregroundStyle(.red)
+
+            Picker("Change scope", selection: $scope) {
+                ForEach(WorkspaceChangeScope.allCases) { value in
+                    Text(value.rawValue).tag(value)
+                }
             }
-            Button(action: onRefresh) {
-                Image(systemName: "arrow.clockwise")
-            }
-            .buttonStyle(.borderless)
-            .disabled(isRefreshing)
-            .help("Refresh changes")
-            Button(action: onClose) {
-                Image(systemName: "xmark")
-            }
-            .buttonStyle(.borderless)
-            .help("Close changes")
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .accessibilityIdentifier("workspace-change-scope")
         }
         .font(.caption.monospacedDigit())
-        .padding(.horizontal, 12)
-        .frame(height: 50)
+        .padding(12)
     }
 
     @ViewBuilder
@@ -216,9 +292,13 @@ struct WorkspaceChangesView: View {
             )
         } else if snapshot.changes.isEmpty {
             ContentUnavailableView(
-                "Working tree is clean",
+                scope == .conversation ? "No changes from this chat" : "Working tree is clean",
                 systemImage: "checkmark.circle",
-                description: Text("Repository changes will appear here.")
+                description: Text(
+                    scope == .conversation
+                        ? "Files changed by other chats and tools stay hidden."
+                        : "Repository changes will appear here."
+                )
             )
         } else {
             ScrollView {
