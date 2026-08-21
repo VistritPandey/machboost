@@ -65,6 +65,7 @@ public final class ChatMessage {
     public var reasoningContent: String?
     public var toolCallsJSON: String?
     public var toolActivityJSON: String?
+    public var timelineJSON: String?
     public var createdAt: Date
     public var durationSeconds: Double?
     public var timeToFirstTokenSeconds: Double?
@@ -80,6 +81,7 @@ public final class ChatMessage {
         reasoningContent: String? = nil,
         toolCallsJSON: String? = nil,
         toolActivityJSON: String? = nil,
+        timelineJSON: String? = nil,
         createdAt: Date = .now,
         conversation: Conversation? = nil
     ) {
@@ -89,6 +91,7 @@ public final class ChatMessage {
         self.reasoningContent = reasoningContent
         self.toolCallsJSON = toolCallsJSON
         self.toolActivityJSON = toolActivityJSON
+        self.timelineJSON = timelineJSON
         self.createdAt = createdAt
         self.wasCancelled = false
         self.conversation = conversation
