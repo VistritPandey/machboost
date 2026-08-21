@@ -26,7 +26,7 @@ final class MachBoostUITests: XCTestCase {
 
         XCTAssertTrue(app.staticTexts["Inference source"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.radioButtons["This Mac"].exists)
-        XCTAssertTrue(app.radioButtons["Team host"].exists)
+        XCTAssertTrue(app.radioButtons["Host pool"].exists)
         XCTAssertTrue(app.staticTexts["Repository tools and model inference both run on this Mac."].exists)
     }
 
