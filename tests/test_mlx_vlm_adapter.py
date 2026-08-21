@@ -417,7 +417,9 @@ class MLXVLMAcceleratorTests(unittest.TestCase):
         }
 
         def reasoning_stream(model, processor, prompt, **kwargs):
-            yield FakeGenerationRow("<|start|>assistant to=self<|message|>Reply")
+            yield FakeGenerationRow(
+                "<|start|>assistant to=self<|message|>Reply briefly.\n\nReply"
+            )
             yield FakeGenerationRow(" briefly. Reply")
             yield FakeGenerationRow(" briefly. So the answer is 4.")
             yield FakeGenerationRow("<|eom|><|start|>assistant to=user<|message|>4")
