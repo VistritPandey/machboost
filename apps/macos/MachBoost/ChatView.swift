@@ -990,6 +990,7 @@ struct ChatView: View {
         var transcript = initialMessages
         var allToolCalls: [APIToolCall] = []
         var activities: [CodingToolActivity] = []
+        var timeline: [AssistantTimelineEntry] = []
         var turnMetrics = GenerationTurnMetrics()
         defer {
             turnMetrics.apply(to: assistant)
@@ -1029,9 +1030,13 @@ struct ChatView: View {
                 if let content = event.message?.content, !content.isEmpty {
                     roundContent += content
                     assistant.content += content
+                    timeline.appendText(content, kind: .content)
+                    persist(timeline, to: assistant)
                 }
                 if let thinking = event.message?.thinking, !thinking.isEmpty {
                     assistant.reasoningContent = (assistant.reasoningContent ?? "") + thinking
+                    timeline.appendText(thinking, kind: .reasoning)
+                    persist(timeline, to: assistant)
                 }
                 if let calls = event.message?.toolCalls, !calls.isEmpty {
                     roundToolCalls.append(contentsOf: calls)
@@ -1043,10 +1048,13 @@ struct ChatView: View {
                 if let data = try? JSONEncoder().encode(allToolCalls) {
                     assistant.toolCallsJSON = String(decoding: data, as: UTF8.self)
                 }
-                activities.append(
-                    contentsOf: roundToolCalls.map { CodingToolActivity(call: $0) }
+                let roundActivities = roundToolCalls.map { CodingToolActivity(call: $0) }
+                activities.append(contentsOf: roundActivities)
+                timeline.append(
+                    AssistantTimelineEntry(kind: .tools, activities: roundActivities)
                 )
                 persist(activities, to: assistant)
+                persist(timeline, to: assistant)
             }
             guard codingActive, !roundToolCalls.isEmpty, let workspace else { return }
 
@@ -1083,10 +1091,14 @@ struct ChatView: View {
                     result = toolError(denialMessage)
                     activities[activityIndex].state = .denied
                     activities[activityIndex].output = denialMessage
+                    updateTimeline(&timeline, activity: activities[activityIndex])
                     persist(activities, to: assistant)
+                    persist(timeline, to: assistant)
                 } else {
                     activities[activityIndex].state = .running
+                    updateTimeline(&timeline, activity: activities[activityIndex])
                     persist(activities, to: assistant)
+                    persist(timeline, to: assistant)
                     do {
                         let toolResult = try CodingWorkspace.execute(
                             call,
@@ -1105,7 +1117,9 @@ struct ChatView: View {
                         activities[activityIndex].state = .failed
                         activities[activityIndex].output = error.localizedDescription
                     }
+                    updateTimeline(&timeline, activity: activities[activityIndex])
                     persist(activities, to: assistant)
+                    persist(timeline, to: assistant)
                 }
                 transcript.append(
                     APIChatMessage(
@@ -1128,6 +1142,24 @@ struct ChatView: View {
         guard let data = try? JSONEncoder().encode(activities) else { return }
         message.toolActivityJSON = String(decoding: data, as: UTF8.self)
         try? modelContext.save()
+    }
+
+    private func persist(_ timeline: [AssistantTimelineEntry], to message: ChatMessage) {
+        guard let data = try? JSONEncoder().encode(timeline) else { return }
+        message.timelineJSON = String(decoding: data, as: UTF8.self)
+    }
+
+    private func updateTimeline(
+        _ timeline: inout [AssistantTimelineEntry],
+        activity: CodingToolActivity
+    ) {
+        for entryIndex in timeline.indices where timeline[entryIndex].kind == .tools {
+            guard let activityIndex = timeline[entryIndex].activities.firstIndex(where: {
+                $0.id == activity.id
+            }) else { continue }
+            timeline[entryIndex].activities[activityIndex] = activity
+            return
+        }
     }
 
     private func requestMessages(
@@ -1471,24 +1503,10 @@ private struct MessageRow: View {
                     ProgressView()
                         .controlSize(.small)
                 } else {
-                    if
-                        showsReasoning,
-                        let reasoning = message.reasoningContent,
-                        !reasoning.isEmpty
-                    {
-                        DisclosureGroup("Reasoning") {
-                            MessageContentView(content: reasoning)
-                                .padding(.top, 6)
-                                .foregroundStyle(.secondary)
-                        }
-                        .font(.callout)
-                        .accessibilityIdentifier("message-reasoning")
-                    }
-                    if !visibleContent.isEmpty {
-                        MessageContentView(content: visibleContent)
-                    }
-                    if !toolActivities.isEmpty {
-                        toolActivityList
+                    if timeline.isEmpty {
+                        legacyMessageBody
+                    } else {
+                        timelineBody
                     }
                 }
                 if message.role == .assistant, hasStats {
@@ -1561,6 +1579,52 @@ private struct MessageRow: View {
             : message.content
     }
 
+    @ViewBuilder
+    private var legacyMessageBody: some View {
+        if showsReasoning, let reasoning = message.reasoningContent, !reasoning.isEmpty {
+            reasoningView(reasoning, id: "legacy")
+        }
+        if !visibleContent.isEmpty {
+            MessageContentView(content: visibleContent)
+        }
+        if !toolActivities.isEmpty {
+            toolActivityList(toolActivities)
+        }
+    }
+
+    private var timelineBody: some View {
+        ForEach(timeline) { entry in
+            Group {
+                switch entry.kind {
+                case .reasoning:
+                    if showsReasoning, !entry.text.isEmpty {
+                        reasoningView(entry.text, id: entry.id.uuidString)
+                    }
+                case .content:
+                    if !entry.text.isEmpty {
+                        MessageContentView(
+                            content: CodingWorkspace.visibleAssistantText(entry.text)
+                        )
+                    }
+                case .tools:
+                    if !entry.activities.isEmpty {
+                        toolActivityList(entry.activities)
+                    }
+                }
+            }
+        }
+    }
+
+    private func reasoningView(_ reasoning: String, id: String) -> some View {
+        DisclosureGroup("Reasoning") {
+            MessageContentView(content: reasoning)
+                .padding(.top, 6)
+                .foregroundStyle(.secondary)
+        }
+        .font(.callout)
+        .accessibilityIdentifier("message-reasoning-\(id)")
+    }
+
     private var stats: some View {
         HStack(spacing: 10) {
             if let rate = message.tokensPerSecond {
@@ -1603,13 +1667,17 @@ private struct MessageRow: View {
         return toolCalls.map { CodingToolActivity(call: $0, state: .requested) }
     }
 
-    private var changedActivities: [CodingToolActivity] {
-        toolActivities.filter { $0.changedPath != nil && $0.changePatch != nil }
+    private var timeline: [AssistantTimelineEntry] {
+        guard
+            let json = message.timelineJSON,
+            let data = json.data(using: .utf8)
+        else { return [] }
+        return (try? JSONDecoder().decode([AssistantTimelineEntry].self, from: data)) ?? []
     }
 
-    private var toolActivityList: some View {
+    private func toolActivityList(_ activities: [CodingToolActivity]) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            ForEach(toolActivities) { activity in
+            ForEach(activities) { activity in
                 DisclosureGroup {
                     toolActivityDetails(activity)
                         .padding(.top, 8)
@@ -1633,8 +1701,8 @@ private struct MessageRow: View {
                 .background(Color(nsColor: .controlBackgroundColor))
                 .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
             }
-            if !changedActivities.isEmpty {
-                codeChanges
+            if activities.contains(where: { $0.changedPath != nil && $0.changePatch != nil }) {
+                codeChanges(activities)
             }
         }
     }
@@ -1664,8 +1732,11 @@ private struct MessageRow: View {
         }
     }
 
-    private var codeChanges: some View {
-        VStack(alignment: .leading, spacing: 8) {
+    private func codeChanges(_ activities: [CodingToolActivity]) -> some View {
+        let changedActivities = activities.filter {
+            $0.changedPath != nil && $0.changePatch != nil
+        }
+        return VStack(alignment: .leading, spacing: 8) {
             Button {
                 withAnimation(.easeInOut(duration: 0.16)) {
                     showsCodeChanges.toggle()
