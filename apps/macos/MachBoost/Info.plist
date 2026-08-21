@@ -41,6 +41,10 @@
 	</array>
 	<key>SUEnableAutomaticChecks</key>
 	<true/>
+	<key>SUAllowsAutomaticUpdates</key>
+	<true/>
+	<key>SUAutomaticallyUpdate</key>
+	<true/>
 	<key>SUFeedURL</key>
 	<string>https://github.com/VistritPandey/machboost/releases/latest/download/appcast.xml</string>
 	<key>SUPublicEDKey</key>
