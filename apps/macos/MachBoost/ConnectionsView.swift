@@ -51,7 +51,7 @@ struct ConnectionsView: View {
         Picker("Run models on", selection: modeBinding) {
             Label("This Mac", systemImage: "desktopcomputer")
                 .tag(InferenceMode.local)
-            Label("Team host", systemImage: "server.rack")
+            Label("Host pool", systemImage: "server.rack")
                 .tag(InferenceMode.team)
         }
         .pickerStyle(.segmented)
@@ -76,34 +76,108 @@ struct ConnectionsView: View {
 
     @ViewBuilder
     private var teamStatus: some View {
-        if let host = appState.teamHost, appState.teamIsConnected {
-            VStack(alignment: .leading, spacing: 20) {
-                HStack {
-                    sectionTitle(host.hostName, systemImage: "network")
-                    Spacer()
-                    Button("Disconnect", role: .destructive) {
-                        appState.forgetTeamHost()
-                        apiKey = ""
+        VStack(alignment: .leading, spacing: 22) {
+            HStack {
+                sectionTitle("Inference hosts", systemImage: "point.3.connected.trianglepath.dotted")
+                Spacer()
+                Toggle("Use this Mac when available", isOn: includeLocalBinding)
+                    .toggleStyle(.switch)
+            }
+
+            if appState.teamHosts.isEmpty {
+                Text("Add a host below. MachBoost routes each request to one compatible machine and spills over when another host is busy.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(appState.teamHosts) { host in
+                        hostRow(host)
+                        if host.id != appState.teamHosts.last?.id { Divider() }
                     }
                 }
-                HStack(spacing: 24) {
-                    metric("MachBoost", value: host.hostVersion)
-                    metric("Access", value: host.principalName)
-                    metric("Models", value: "\(appState.teamCatalog.count)")
-                }
+            }
+
+            if !appState.hostDiscovery.hosts.isEmpty {
+                Divider()
+                nearbyHosts
+            }
+            Divider()
+            connectForm
+            if !appState.teamCatalog.isEmpty {
                 Divider()
                 hostModels
                 Divider()
                 modelRequest
             }
-        } else {
-            connectForm
+        }
+    }
+
+    private func hostRow(_ host: TeamHostProfile) -> some View {
+        let snapshot = appState.teamHostSnapshots[host.id]
+        return HStack(spacing: 14) {
+            Image(systemName: snapshot?.isOnline == true ? "server.rack" : "server.rack")
+                .foregroundStyle(snapshot?.isOnline == true ? Color.green : Color.secondary)
+                .frame(width: 24)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 7) {
+                    Text(host.hostName).font(.body.weight(.medium))
+                    if appState.teamHost?.id == host.id {
+                        Text("Preferred")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.green)
+                    }
+                }
+                Text(host.endpoint.absoluteString)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+            Spacer()
+            if let snapshot {
+                metric("Active", value: "\(snapshot.activeRequests)")
+                metric("Queued", value: "\(snapshot.queuedRequests)")
+                metric("Models", value: "\(snapshot.catalog.filter(\.cached).count)")
+            }
+            Button {
+                appState.selectTeamHost(host)
+            } label: {
+                Image(systemName: "checkmark.circle")
+            }
+            .buttonStyle(.borderless)
+            .disabled(snapshot?.isOnline != true || appState.teamHost?.id == host.id)
+            .help("Prefer this host")
+            Button(role: .destructive) {
+                appState.removeTeamHost(host)
+            } label: {
+                Image(systemName: "trash")
+            }
+            .buttonStyle(.borderless)
+            .help("Remove host")
+        }
+        .padding(.vertical, 10)
+    }
+
+    private var nearbyHosts: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Nearby MachBoost hosts").font(.headline)
+            ForEach(appState.hostDiscovery.hosts) { host in
+                HStack {
+                    Label(host.name, systemImage: "bonjour")
+                    Text(host.endpoint.absoluteString)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Use") {
+                        endpoint = host.endpoint.absoluteString
+                    }
+                }
+            }
         }
     }
 
     private var connectForm: some View {
         VStack(alignment: .leading, spacing: 16) {
-            sectionTitle("Connect to host", systemImage: "link")
+            sectionTitle("Add host", systemImage: "link.badge.plus")
             Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 12) {
                 GridRow {
                     Text("Endpoint")
@@ -224,6 +298,13 @@ struct ConnectionsView: View {
                     Task { await appState.useTeamInference() }
                 }
             }
+        )
+    }
+
+    private var includeLocalBinding: Binding<Bool> {
+        Binding(
+            get: { appState.includeLocalInHostPool },
+            set: { appState.includeLocalInHostPool = $0 }
         )
     }
 
