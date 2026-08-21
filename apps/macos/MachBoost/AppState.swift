@@ -551,6 +551,17 @@ final class AppState {
 
     func pull(model: String) async {
         let requestID = "pull-\(UUID().uuidString.lowercased())"
+        downloads[model] = PullEvent(
+            requestID: requestID,
+            status: "Checking compatibility",
+            file: nil,
+            completed: nil,
+            total: nil,
+            unit: nil,
+            done: false,
+            path: nil,
+            error: nil
+        )
         do {
             let preflight = try await api.preflight(model: model)
             guard preflight.supported else {
