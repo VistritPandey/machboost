@@ -252,6 +252,20 @@ class ToolCallingAccelerator(FakeAccelerator):
         )
 
 
+class StreamingToolCallingAccelerator(FakeAccelerator):
+    def generate_chat(self, messages, *, max_tokens, on_text=None, **_kwargs):
+        self.chat_calls.append((messages, max_tokens))
+        chunks = (
+            "I will inspect it. ",
+            "<tool_",
+            'call name="read_file" arguments={"path":"a.py"}></tool_call>',
+        )
+        if on_text is not None:
+            for chunk in chunks:
+                on_text(chunk)
+        return "".join(chunks), FakeStats(generated_tokens=18)
+
+
 class FakeVisionAccelerator:
     def __init__(self) -> None:
         self.chat_calls = []
@@ -1025,6 +1039,8 @@ class HTTPServerTests(unittest.TestCase):
     def _load(self, config):
         if config.model.endswith("failing"):
             accelerator = FailingAccelerator()
+        elif config.model.endswith("streaming-tool-calling"):
+            accelerator = StreamingToolCallingAccelerator()
         elif config.model.endswith("tool-calling"):
             accelerator = ToolCallingAccelerator()
         elif config.backend == "ollama-mlx":
@@ -1804,6 +1820,45 @@ class HTTPServerTests(unittest.TestCase):
         calls = response["message"]["tool_calls"]
         self.assertEqual(calls[0]["function"]["name"], "read_file")
         self.assertEqual(calls[0]["function"]["arguments"]["path"], "a.py")
+
+    def test_tool_enabled_chat_streams_prose_before_the_tool_event(self):
+        _, _, body = self.request(
+            "/api/chat",
+            {
+                "model": "mlx-community/streaming-tool-calling",
+                "messages": [{"role": "user", "content": "Inspect it"}],
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "read_file",
+                            "parameters": {"type": "object"},
+                        },
+                    }
+                ],
+                "stream": True,
+            },
+        )
+
+        events = [json.loads(line) for line in body.splitlines()]
+        visible = [
+            event["message"]["content"]
+            for event in events
+            if event.get("message", {}).get("content")
+        ]
+        tool_index = next(
+            index
+            for index, event in enumerate(events)
+            if event.get("message", {}).get("tool_calls")
+        )
+        visible_index = next(
+            index
+            for index, event in enumerate(events)
+            if event.get("message", {}).get("content")
+        )
+        self.assertEqual("".join(visible), "I will inspect it.")
+        self.assertLess(visible_index, tool_index)
+        self.assertNotIn("<tool", body)
 
     def test_stop_endpoint_unloads_resident_model(self):
         self.request(
