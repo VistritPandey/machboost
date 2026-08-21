@@ -177,13 +177,29 @@ class ThinkingStreamSplitter:
 
 
 class InitialReasoningEchoFilter:
-    """Remove a model's verbatim prompt echo from the first reasoning paragraph."""
+    """Remove prompt echoes from the beginning of a reasoning stream."""
 
     _PARAGRAPH_BREAK = re.compile(r"\n[ \t]*\n")
+    _FRAGMENT_BREAK = re.compile(r"(?:\n+|(?<=[.!?])\s+)")
 
     def __init__(self, candidates: Sequence[str]) -> None:
-        normalized = (_collapsed_whitespace(value) for value in candidates)
-        self.candidates = tuple(dict.fromkeys(value for value in normalized if value))
+        normalized = tuple(
+            value
+            for value in (_collapsed_whitespace(value) for value in candidates)
+            if value
+        )
+        fragments = [
+            fragment
+            for value in candidates
+            for fragment in (
+                _collapsed_whitespace(part)
+                for part in self._FRAGMENT_BREAK.split(value)
+            )
+            if len(fragment) >= 8
+        ]
+        self.candidates = tuple(
+            sorted(dict.fromkeys((*normalized, *fragments)), key=len, reverse=True)
+        )
         self.buffer = ""
         self.decided = not self.candidates
 
@@ -197,8 +213,11 @@ class InitialReasoningEchoFilter:
             remainder = self.buffer[match.end() :]
             self.buffer = ""
             self.decided = True
-            if _collapsed_whitespace(paragraph) in self.candidates:
+            cleaned, removed = self._strip_leading_echo(paragraph)
+            if removed and not cleaned:
                 return remainder.lstrip("\n")
+            if removed:
+                return cleaned + self.buffered_separator(match) + remainder
             return paragraph + self.buffered_separator(match) + remainder
 
         current = _collapsed_whitespace(self.buffer)
@@ -208,14 +227,39 @@ class InitialReasoningEchoFilter:
             for candidate in self.candidates
         )
         if current and (not can_still_match or already_continued):
-            return self._release()
-        if final:
-            if current in self.candidates:
+            cleaned, removed = self._strip_leading_echo(self.buffer)
+            if removed:
                 self.buffer = ""
                 self.decided = True
-                return ""
+                return cleaned
+            return self._release()
+        if final:
+            cleaned, removed = self._strip_leading_echo(self.buffer)
+            if removed:
+                self.buffer = ""
+                self.decided = True
+                return cleaned
             return self._release()
         return ""
+
+    def _strip_leading_echo(self, value: str) -> tuple[str, bool]:
+        remainder = value
+        removed = False
+        while remainder:
+            matched = False
+            for candidate in self.candidates:
+                words = candidate.split()
+                pattern = r"^\s*" + r"\s+".join(re.escape(word) for word in words)
+                match = re.match(pattern + r"(?=\s|$)", remainder)
+                if match is None:
+                    continue
+                remainder = remainder[match.end() :].lstrip()
+                removed = True
+                matched = True
+                break
+            if not matched:
+                break
+        return remainder, removed
 
     def _release(self) -> str:
         value = self.buffer
