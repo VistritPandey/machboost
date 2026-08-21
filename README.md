@@ -108,8 +108,8 @@ macOS 14 or newer. It provides streaming chat, local conversation history,
 repository workspaces, text/code/folder/image attachments, model downloads,
 resident-model controls, automatic long-chat summarization near the selected
 context limit, server metrics, employee-key management, trace/evaluation views,
-a Local/Host pool inference switch, Bonjour host discovery, load-aware
-request routing, repo-scoped coding tools, connected-device and model-request
+a direct device connection screen, Bonjour host discovery, load-aware request
+routing, repo-scoped coding tools, connected-device and model-request
 views, coding permission modes, a Git working-tree review panel,
 a developer API view, and a menu-bar controller. Chats and
 imported attachments remain local, model downloads always require confirmation,
@@ -126,10 +126,11 @@ Release builds bundle pinned arm64 CPython 3.13, MLX, `mlx-lm`, `mlx-vlm`, and
 MachBoost dependencies. They do not depend on Homebrew, system Python, or an
 existing package install. The source is under [apps/macos](apps/macos/); see the
 [native app guide](apps/macos/README.md) for local builds, runtime verification,
-signing, notarization, DMG creation, and update delivery. Signed builds use
-Sparkle. Unsigned community builds check GitHub Releases on launch and through
-**Settings → Updates → Check Now**, then open the release for manual installation
-when a newer version exists.
+signing, notarization, DMG creation, and update delivery. Version 0.15.0 and
+later community builds embed a Sparkle EdDSA public key and consume a signed
+appcast, so **Settings → Updates → Check Now** downloads, verifies, installs,
+and relaunches in the app. Apple notarization remains separate from Sparkle
+update authentication.
 
 The bundled runtime remains self-contained for MLX and MLX-VLM models.
 `muse-glimmer:30b` downloads the native 4-bit Hugging Face conversion after
@@ -524,10 +525,11 @@ export OPENAI_BASE_URL="http://TEAM-MAC:11435/v1"
 export OPENAI_API_KEY="mbk_employee_key"
 ```
 
-MachBoost desktop clients can connect directly from **Connections → Host pool**.
-The app discovers nearby MachBoost servers with Bonjour, accepts additional
-endpoint and scoped-key pairs, and shows each host's loaded models, active
-requests, and queue depth. A request is routed only to an online host where the
+MachBoost desktop clients connect from **Connections**. Nearby hosts appear as
+available devices through Bonjour; choosing **Connect** asks only for the scoped
+API key. **Connect by address** is available when discovery is blocked. The app
+stores keys in Keychain and shows each device's loaded models, active requests,
+and queue depth. A request is routed only to an online host where the
 selected model is ready. A resident copy is preferred until measured queue
 pressure or immediately reserved in-flight requests make an idle compatible host
 the better choice. The employee Mac can also join the pool when it has the model.
