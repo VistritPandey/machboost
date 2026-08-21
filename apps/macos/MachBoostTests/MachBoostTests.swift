@@ -432,6 +432,25 @@ final class MachBoostTests: XCTestCase {
         XCTAssertEqual(ConversationCompaction.clampedThreshold(90), 90)
     }
 
+    func testConversationCompactionTriggersAtConfiguredContextThreshold() {
+        XCTAssertFalse(
+            ConversationCompaction.shouldCompact(
+                estimatedTokens: 809,
+                contextLength: 1_000,
+                reservedOutputTokens: 100,
+                thresholdPercent: 90
+            )
+        )
+        XCTAssertTrue(
+            ConversationCompaction.shouldCompact(
+                estimatedTokens: 810,
+                contextLength: 1_000,
+                reservedOutputTokens: 100,
+                thresholdPercent: 90
+            )
+        )
+    }
+
     @MainActor
     func testCommunityUpdaterRejectsPlaceholderKeyAndDefaultsToReleaseChecks() {
         let releasesURL = URL(string: "https://example.com/releases/latest")!
