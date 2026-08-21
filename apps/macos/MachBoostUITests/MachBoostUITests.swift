@@ -142,14 +142,14 @@ final class MachBoostUITests: XCTestCase {
 
         send("Use Muse tools", in: app)
 
-        XCTAssertTrue(
-            app.disclosureTriangles["message-reasoning"].waitForExistence(timeout: 8)
-        )
-        XCTAssertTrue(
-            app.descendants(matching: .any)["tool-call-search_repository"]
-                .waitForExistence(timeout: 3)
-        )
-        XCTAssertTrue(app.staticTexts["Fixture response."].waitForExistence(timeout: 3))
+        let reasoning = app.disclosureTriangles["message-reasoning"]
+        let tool = app.descendants(matching: .any)["tool-call-search_repository"]
+        let response = app.staticTexts["Fixture response."]
+        XCTAssertTrue(reasoning.waitForExistence(timeout: 8))
+        XCTAssertTrue(tool.waitForExistence(timeout: 3))
+        XCTAssertTrue(response.waitForExistence(timeout: 3))
+        XCTAssertLessThan(reasoning.frame.maxY, tool.frame.minY)
+        XCTAssertLessThan(tool.frame.maxY, response.frame.minY)
     }
 
     @MainActor
