@@ -12,6 +12,8 @@ ARCHIVE="$DIST/MachBoost.xcarchive"
 DERIVED_DATA="$DIST/DerivedData"
 DMG="$DIST/MachBoost-${VERSION}-arm64.dmg"
 LOCAL_BUILD=false
+DEFAULT_SPARKLE_PUBLIC_ED_KEY="AEPVQK/X1xhsRAJKfSGyFDEmwxQnf9nUhisRH8WW8i8="
+SPARKLE_PUBLIC_ED_KEY="${SPARKLE_PUBLIC_ED_KEY:-$DEFAULT_SPARKLE_PUBLIC_ED_KEY}"
 
 if [[ -z "$VERSION" ]]; then
   echo "usage: $0 VERSION [--local]" >&2
@@ -27,7 +29,6 @@ case "$MODE" in
     ;;
   --local)
     LOCAL_BUILD=true
-    SPARKLE_PUBLIC_ED_KEY="${SPARKLE_PUBLIC_ED_KEY:-}"
     ;;
   *)
     echo "usage: $0 VERSION [--local]" >&2
@@ -117,9 +118,23 @@ hdiutil create \
 hdiutil verify "$DMG"
 (cd "$DIST" && shasum -a 256 "$(basename "$DMG")" > "$(basename "$DMG").sha256")
 if $LOCAL_BUILD; then
+  if [[ -n "${SPARKLE_PRIVATE_KEY:-}" ]]; then
+    GENERATE_APPCAST="$(find "$DERIVED_DATA/SourcePackages/artifacts" -type f -name generate_appcast -perm -111 | head -1)"
+    if [[ -z "$GENERATE_APPCAST" ]]; then
+      echo "Sparkle generate_appcast tool was not found in DerivedData." >&2
+      exit 4
+    fi
+    "$GENERATE_APPCAST" \
+      --ed-key-file "$SPARKLE_PRIVATE_KEY" \
+      --download-url-prefix "https://github.com/VistritPandey/machboost/releases/download/v${VERSION}/" \
+      "$DIST"
+  fi
   echo "Local DMG ready:"
   echo "  $DMG"
   echo "  $DMG.sha256"
+  if [[ -f "$DIST/appcast.xml" ]]; then
+    echo "  $DIST/appcast.xml"
+  fi
   exit 0
 fi
 
