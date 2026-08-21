@@ -472,14 +472,21 @@ struct ChatView: View {
                 Slider(value: $temperature, in: 0...1, step: 0.05)
             }
             if selectedModel?.supportsReasoning == true {
-                Picker("Reasoning", selection: $reasoningStrength) {
-                    Text("Off").tag("off")
+                Picker("Reasoning", selection: reasoningSelection) {
+                    if !selectedModelRequiresReasoning {
+                        Text("Off").tag("off")
+                    }
                     Text("Low").tag("low")
                     Text("Medium").tag("medium")
                     Text("High").tag("high")
                     Text("Max").tag("xhigh")
                 }
                 .pickerStyle(.segmented)
+                .help(
+                    selectedModelRequiresReasoning
+                        ? "Muse Glimmer always reasons; Low is its fastest supported setting."
+                        : "Control how much reasoning the model performs."
+                )
                 Toggle("Show reasoning", isOn: $showReasoning)
             }
             if let contextLength = selectedModel?.contextLength {
@@ -770,6 +777,34 @@ struct ChatView: View {
         appState.model(named: conversation.model)
     }
 
+    private var selectedModelRequiresReasoning: Bool {
+        let identifiers = [
+            conversation.model,
+            selectedModel?.repository ?? "",
+            selectedModel?.sourceRepository ?? "",
+        ]
+        return identifiers.contains { $0.lowercased().contains("muse-glimmer") }
+    }
+
+    private var reasoningSelection: Binding<String> {
+        Binding(
+            get: {
+                selectedModelRequiresReasoning && reasoningStrength == "off"
+                    ? "low"
+                    : reasoningStrength
+            },
+            set: { reasoningStrength = $0 }
+        )
+    }
+
+    private var effectiveReasoningStrength: String? {
+        guard selectedModel?.supportsReasoning == true else { return nil }
+        if selectedModelRequiresReasoning {
+            return reasoningStrength == "off" ? "low" : reasoningStrength
+        }
+        return reasoningStrength == "off" ? nil : reasoningStrength
+    }
+
     private var selectedWorkspace: WorkspaceSummary? {
         appState.workspace(id: conversation.workspaceID)
     }
@@ -944,13 +979,15 @@ struct ChatView: View {
                 if autoSummarize {
                     await compactContextIfNeeded(force: false)
                 }
-            } catch is CancellationError {
-                assistant.wasCancelled = true
             } catch {
-                if assistant.content.isEmpty, assistant.toolCallsJSON == nil {
-                    modelContext.delete(assistant)
+                if isCancellation(error) {
+                    assistant.wasCancelled = true
+                } else {
+                    if assistant.content.isEmpty, assistant.toolCallsJSON == nil {
+                        modelContext.delete(assistant)
+                    }
+                    appState.presentedError = error.localizedDescription
                 }
-                appState.presentedError = error.localizedDescription
             }
             activeRequestID = nil
             activeAssistant = nil
@@ -970,6 +1007,16 @@ struct ChatView: View {
             _ = await appState.cancelInference(requestID: activeRequestID)
             generationTask?.cancel()
         }
+    }
+
+    private func isCancellation(_ error: Error) -> Bool {
+        if error is CancellationError { return true }
+        let message = error.localizedDescription
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        return message == "cancelled"
+            || message == "request cancelled"
+            || message == "machboost cancelled"
     }
 
     private var uiTestCodingFixtureEnabled: Bool {
@@ -1017,10 +1064,7 @@ struct ChatView: View {
                 workspaceID: appState.inferenceMode == .local && !codingActive
                     ? conversation.workspaceID
                     : nil,
-                reasoningStrength: selectedModel?.supportsReasoning == true
-                    && reasoningStrength != "off"
-                    ? reasoningStrength
-                    : nil,
+                reasoningStrength: effectiveReasoningStrength,
                 tools: codingActive ? CodingWorkspace.tools(for: permissionMode) : nil
             )
             var roundContent = ""
