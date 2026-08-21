@@ -1027,34 +1027,32 @@ struct ChatView: View {
             var roundToolCalls: [APIToolCall] = []
             for try await event in try appState.streamChat(request) {
                 if let error = event.error { throw MachBoostAPIError.stream(error) }
+                if let thinking = event.message?.thinking, !thinking.isEmpty {
+                    assistant.reasoningContent = (assistant.reasoningContent ?? "") + thinking
+                    timeline.appendText(thinking, kind: .reasoning)
+                    persist(timeline, to: assistant)
+                }
                 if let content = event.message?.content, !content.isEmpty {
                     roundContent += content
                     assistant.content += content
                     timeline.appendText(content, kind: .content)
                     persist(timeline, to: assistant)
                 }
-                if let thinking = event.message?.thinking, !thinking.isEmpty {
-                    assistant.reasoningContent = (assistant.reasoningContent ?? "") + thinking
-                    timeline.appendText(thinking, kind: .reasoning)
-                    persist(timeline, to: assistant)
-                }
                 if let calls = event.message?.toolCalls, !calls.isEmpty {
                     roundToolCalls.append(contentsOf: calls)
+                    allToolCalls.append(contentsOf: calls)
+                    if let data = try? JSONEncoder().encode(allToolCalls) {
+                        assistant.toolCallsJSON = String(decoding: data, as: UTF8.self)
+                    }
+                    let newActivities = calls.map { CodingToolActivity(call: $0) }
+                    activities.append(contentsOf: newActivities)
+                    timeline.append(
+                        AssistantTimelineEntry(kind: .tools, activities: newActivities)
+                    )
+                    persist(activities, to: assistant)
+                    persist(timeline, to: assistant)
                 }
                 if event.done { turnMetrics.absorb(event) }
-            }
-            if !roundToolCalls.isEmpty {
-                allToolCalls.append(contentsOf: roundToolCalls)
-                if let data = try? JSONEncoder().encode(allToolCalls) {
-                    assistant.toolCallsJSON = String(decoding: data, as: UTF8.self)
-                }
-                let roundActivities = roundToolCalls.map { CodingToolActivity(call: $0) }
-                activities.append(contentsOf: roundActivities)
-                timeline.append(
-                    AssistantTimelineEntry(kind: .tools, activities: roundActivities)
-                )
-                persist(activities, to: assistant)
-                persist(timeline, to: assistant)
             }
             guard codingActive, !roundToolCalls.isEmpty, let workspace else { return }
 
