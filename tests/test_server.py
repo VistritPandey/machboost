@@ -2125,6 +2125,10 @@ class HTTPServerTests(unittest.TestCase):
         self.assertEqual(reasoning, ["Checking the evidence."])
         self.assertEqual(visible, ["Muse answer"])
         self.assertTrue(events[-1]["done"])
+        self.assertEqual(
+            self.loaded[0][1].chat_calls[0]["reasoning_strength"],
+            "low",
+        )
 
     def test_muse_glimmer_openai_chat_maps_reasoning_effort_and_tool_calls(self):
         _, _, body = self.request(
