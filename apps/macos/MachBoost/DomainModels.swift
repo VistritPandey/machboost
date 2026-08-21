@@ -24,6 +24,34 @@ struct TeamHostProfile: Codable, Identifiable, Equatable, Sendable {
     var connectedAt: Date
 }
 
+enum AssistantTimelineKind: String, Codable, Sendable {
+    case reasoning
+    case content
+    case tools
+}
+
+struct AssistantTimelineEntry: Codable, Identifiable, Sendable {
+    var id = UUID()
+    var kind: AssistantTimelineKind
+    var text = ""
+    var activities: [CodingToolActivity] = []
+
+    mutating func append(_ value: String) {
+        text += value
+    }
+}
+
+extension Array where Element == AssistantTimelineEntry {
+    mutating func appendText(_ text: String, kind: AssistantTimelineKind) {
+        guard !text.isEmpty else { return }
+        if !isEmpty, self[index(before: endIndex)].kind == kind {
+            self[index(before: endIndex)].append(text)
+        } else {
+            append(AssistantTimelineEntry(kind: kind, text: text))
+        }
+    }
+}
+
 typealias MessageRole = MachBoostPersistence.MessageRole
 typealias AttachmentKind = MachBoostPersistence.AttachmentKind
 typealias Conversation = MachBoostPersistence.Conversation
