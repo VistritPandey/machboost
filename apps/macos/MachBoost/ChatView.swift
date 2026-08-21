@@ -25,6 +25,7 @@ struct ChatView: View {
     @State private var pendingPermissionMode: CodingPermissionMode?
     @State private var isCompactingContext = false
     @State private var showsWorkspaceChanges = false
+    @State private var workspaceChangeScope = WorkspaceChangeScope.conversation
     @State private var workspaceChanges = WorkspaceChangeSet.empty
     @State private var isRefreshingWorkspaceChanges = false
     @State private var workspaceChangesTask: Task<Void, Never>?
@@ -40,20 +41,26 @@ struct ChatView: View {
         CodingPermissionMode.automatic.rawValue
 
     var body: some View {
-        HSplitView {
-            chatSurface
-                .frame(minWidth: 600)
-            if showsWorkspaceChanges, let workspace = selectedWorkspace {
+        chatSurface
+            .inspector(isPresented: $showsWorkspaceChanges) {
+                if let workspace = selectedWorkspace {
                 WorkspaceChangesView(
                     snapshot: workspaceChanges,
                     workspaceRoot: workspace.path,
                     isRefreshing: isRefreshingWorkspaceChanges,
+                    scope: $workspaceChangeScope,
                     onRefresh: { refreshWorkspaceChanges() },
                     onClose: { showsWorkspaceChanges = false }
                 )
-                .frame(minWidth: 340, idealWidth: 440, maxWidth: 620)
+                .inspectorColumnWidth(min: 320, ideal: 420, max: 560)
+                } else {
+                    ContentUnavailableView(
+                        "No repository selected",
+                        systemImage: "folder.badge.questionmark"
+                    )
+                    .inspectorColumnWidth(min: 320, ideal: 420, max: 560)
+                }
             }
-        }
         .fileImporter(
             isPresented: $isImporting,
             allowedContentTypes: [.image, .plainText, .sourceCode, .folder],
@@ -126,7 +133,13 @@ struct ChatView: View {
             selectAvailableModelIfNeeded()
         }
         .onChange(of: conversation.workspaceID) {
+            workspaceChangeScope = .conversation
             workspaceChanges = .empty
+            if showsWorkspaceChanges {
+                refreshWorkspaceChanges()
+            }
+        }
+        .onChange(of: workspaceChangeScope) {
             if showsWorkspaceChanges {
                 refreshWorkspaceChanges()
             }
@@ -884,13 +897,39 @@ struct ChatView: View {
         workspaceChangesTask?.cancel()
         isRefreshingWorkspaceChanges = true
         let root = workspace.path
+        let scope = workspaceChangeScope
+        let activities = conversationCodingActivities
         workspaceChangesTask = Task { @MainActor in
             let snapshot = await Task.detached(priority: .userInitiated) {
-                WorkspaceChanges.load(workspaceRoot: root)
+                switch scope {
+                case .conversation:
+                    WorkspaceChanges.session(
+                        workspaceRoot: root,
+                        activities: activities
+                    )
+                case .workingTree:
+                    WorkspaceChanges.load(workspaceRoot: root)
+                }
             }.value
             guard !Task.isCancelled else { return }
             workspaceChanges = snapshot
             isRefreshingWorkspaceChanges = false
+        }
+    }
+
+    private var conversationCodingActivities: [CodingToolActivity] {
+        conversation.orderedMessages.flatMap { message in
+            guard
+                let json = message.toolActivityJSON,
+                let data = json.data(using: .utf8),
+                let activities = try? JSONDecoder().decode(
+                    [CodingToolActivity].self,
+                    from: data
+                )
+            else {
+                return []
+            }
+            return activities
         }
     }
 
