@@ -379,6 +379,61 @@ class MLXVLMAcceleratorTests(unittest.TestCase):
         self.assertEqual(text, "Done")
         self.assertEqual("".join(content), text)
 
+    def test_removes_initial_user_prompt_echo_from_reasoning(self):
+        self.accelerator.model.config = {
+            "model_type": "muse_glimmer",
+            "thinking_start_token": "to=self<|message|>",
+            "thinking_end_token": "<|eom|>",
+        }
+
+        def reasoning_stream(model, processor, prompt, **kwargs):
+            yield FakeGenerationRow("<|start|>assistant to=self<|message|>Inspect")
+            yield FakeGenerationRow(" this repository briefly.\n")
+            yield FakeGenerationRow("\nI should list the top-level files.")
+            yield FakeGenerationRow("<|eom|><|start|>assistant to=user<|message|>  Done")
+
+        self.accelerator._stream_generate = reasoning_stream
+        content = []
+        thinking = []
+
+        text, stats = self.accelerator.generate_chat(
+            [{"role": "user", "content": "Inspect this repository briefly."}],
+            max_tokens=32,
+            on_text=content.append,
+            on_thinking=thinking.append,
+            enable_thinking=True,
+        )
+
+        self.assertEqual("".join(thinking), "I should list the top-level files.")
+        self.assertEqual(stats.thinking, "I should list the top-level files.")
+        self.assertEqual(text, "Done")
+        self.assertEqual("".join(content), "Done")
+
+    def test_preserves_non_echo_initial_reasoning(self):
+        self.accelerator.model.config = {
+            "model_type": "muse_glimmer",
+            "thinking_start_token": "to=self<|message|>",
+            "thinking_end_token": "<|eom|>",
+        }
+
+        def reasoning_stream(model, processor, prompt, **kwargs):
+            yield FakeGenerationRow("<|start|>assistant to=self<|message|>I should inspect")
+            yield FakeGenerationRow(" the repository first.<|eom|>")
+            yield FakeGenerationRow("<|start|>assistant to=user<|message|>Done")
+
+        self.accelerator._stream_generate = reasoning_stream
+        thinking = []
+
+        text, _ = self.accelerator.generate_chat(
+            [{"role": "user", "content": "Inspect this repository briefly."}],
+            max_tokens=32,
+            on_thinking=thinking.append,
+            enable_thinking=True,
+        )
+
+        self.assertEqual("".join(thinking), "I should inspect the repository first.")
+        self.assertEqual(text, "Done")
+
     def test_reset_cache_releases_projected_features(self):
         self.accelerator.generate(
             "Describe the image.", images=[str(self.image)], max_tokens=8
