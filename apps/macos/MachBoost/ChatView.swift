@@ -112,6 +112,8 @@ struct ChatView: View {
             Text("MachBoost will approve every repository tool automatically. The model still cannot access files outside the selected repository.")
         }
         .onAppear {
+            maxTokens = ConversationCompaction.clampedMaxTokens(maxTokens)
+            summaryThreshold = ConversationCompaction.clampedThreshold(summaryThreshold)
             selectAvailableModelIfNeeded()
 #if DEBUG
             if let mode = ProcessInfo.processInfo.environment["MACHBOOST_UI_TEST_PERMISSION_MODE"],
@@ -539,6 +541,8 @@ struct ChatView: View {
                             MessageRow(
                                 message: message,
                                 showsReasoning: showReasoning,
+                                isStreaming: activeAssistant?.id == message.id
+                                    && generationTask != nil,
                                 workspaceRoot: selectedWorkspace?.path,
                                 onEdit: { edit(message) },
                                 onRegenerate: regenerateAction(
@@ -1039,17 +1043,29 @@ struct ChatView: View {
         var activities: [CodingToolActivity] = []
         var timeline: [AssistantTimelineEntry] = []
         var turnMetrics = GenerationTurnMetrics()
+        var completedToolResults: [APIToolCall.Function: String] = [:]
+        var forceFinalResponse = false
         defer {
             turnMetrics.apply(to: assistant)
         }
-        for round in 0 ..< (codingActive ? CodingWorkspace.maximumToolRounds : 1) {
+        let roundLimit = codingActive ? CodingWorkspace.maximumToolRounds + 1 : 1
+        for round in 0 ..< roundLimit {
             try Task.checkCancellation()
             let requestID = round == 0 ? requestPrefix : "\(requestPrefix)-\(round)"
             activeRequestID = requestID
+            var requestTranscript = transcript
+            if forceFinalResponse {
+                requestTranscript.append(
+                    APIChatMessage(
+                        role: MessageRole.system.rawValue,
+                        content: "The repository tool phase is complete. Answer the user now using the results already returned. Do not request another tool."
+                    )
+                )
+            }
             let request = ChatRequest(
                 requestID: requestID,
                 model: conversation.model,
-                messages: transcript,
+                messages: requestTranscript,
                 context: appState.inferenceMode == .local && !codingActive
                     ? conversation.orderedAttachments
                         .filter { $0.kind == .text }
@@ -1065,10 +1081,13 @@ struct ChatView: View {
                     ? conversation.workspaceID
                     : nil,
                 reasoningStrength: effectiveReasoningStrength,
-                tools: codingActive ? CodingWorkspace.tools(for: permissionMode) : nil
+                tools: codingActive && !forceFinalResponse
+                    ? CodingWorkspace.tools(for: permissionMode)
+                    : nil
             )
             var roundContent = ""
             var roundToolCalls: [APIToolCall] = []
+            var hasVisibleRoundContent = false
             for try await event in try appState.streamChat(request) {
                 if let error = event.error { throw MachBoostAPIError.stream(error) }
                 if let thinking = event.message?.thinking, !thinking.isEmpty {
@@ -1077,10 +1096,19 @@ struct ChatView: View {
                     persist(timeline, to: assistant)
                 }
                 if let content = event.message?.content, !content.isEmpty {
-                    roundContent += content
-                    assistant.content += content
-                    timeline.appendText(content, kind: .content)
-                    persist(timeline, to: assistant)
+                    let visibleChunk: String
+                    if hasVisibleRoundContent {
+                        visibleChunk = content
+                    } else {
+                        visibleChunk = String(content.drop(while: { $0.isWhitespace }))
+                        hasVisibleRoundContent = !visibleChunk.isEmpty
+                    }
+                    if !visibleChunk.isEmpty {
+                        roundContent += visibleChunk
+                        assistant.content += visibleChunk
+                        timeline.appendText(visibleChunk, kind: .content)
+                        persist(timeline, to: assistant)
+                    }
                 }
                 if let calls = event.message?.toolCalls, !calls.isEmpty {
                     roundToolCalls.append(contentsOf: calls)
@@ -1098,7 +1126,12 @@ struct ChatView: View {
                 }
                 if event.done { turnMetrics.absorb(event) }
             }
-            guard codingActive, !roundToolCalls.isEmpty, let workspace else { return }
+            guard
+                codingActive,
+                !forceFinalResponse,
+                !roundToolCalls.isEmpty,
+                let workspace
+            else { return }
 
             transcript.append(
                 APIChatMessage(
@@ -1108,9 +1141,28 @@ struct ChatView: View {
                 )
             )
             let activityStart = activities.count - roundToolCalls.count
+            var repeatedOnly = true
             for (offset, call) in roundToolCalls.enumerated() {
                 try Task.checkCancellation()
                 let activityIndex = activityStart + offset
+                if let priorResult = completedToolResults[call.function] {
+                    let reuseMessage = "This exact tool call already completed. Reusing its result instead of running it again."
+                    activities[activityIndex].state = .succeeded
+                    activities[activityIndex].output = reuseMessage
+                    updateTimeline(&timeline, activity: activities[activityIndex])
+                    persist(activities, to: assistant)
+                    persist(timeline, to: assistant)
+                    transcript.append(
+                        APIChatMessage(
+                            role: "tool",
+                            content: priorResult,
+                            toolName: call.function.name,
+                            toolCallID: call.id
+                        )
+                    )
+                    continue
+                }
+                repeatedOnly = false
                 let permission = CodingWorkspace.permissionDecision(
                     for: call,
                     mode: permissionMode
@@ -1163,6 +1215,7 @@ struct ChatView: View {
                     persist(activities, to: assistant)
                     persist(timeline, to: assistant)
                 }
+                completedToolResults[call.function] = result
                 transcript.append(
                     APIChatMessage(
                         role: "tool",
@@ -1172,10 +1225,8 @@ struct ChatView: View {
                     )
                 )
             }
-            if round == CodingWorkspace.maximumToolRounds - 1 {
-                throw MachBoostAPIError.stream(
-                    "Coding mode reached its tool-call limit. Start a new turn to continue."
-                )
+            if repeatedOnly || round == CodingWorkspace.maximumToolRounds - 1 {
+                forceFinalResponse = true
             }
         }
     }
@@ -1357,7 +1408,9 @@ struct ChatView: View {
     }
 
     private func compactContextIfNeeded(force: Bool) async {
-        let threshold = Double(summaryThreshold) / 100
+        let threshold = Double(
+            ConversationCompaction.clampedThreshold(summaryThreshold)
+        ) / 100
         guard force || contextUsageRatio >= threshold else { return }
         let candidates = compactionCandidates
         guard let cutoff = candidates.last?.createdAt else { return }
@@ -1390,12 +1443,15 @@ struct ChatView: View {
             ],
             context: [],
             options: .init(
-                maxTokens: min(1_024, maxTokens),
+                maxTokens: min(
+                    1_024,
+                    ConversationCompaction.clampedMaxTokens(maxTokens)
+                ),
                 temperature: 0,
                 affinityKey: conversation.workspaceID.map { "workspace:\($0)" }
                     ?? conversation.id.uuidString
             ),
-            reasoningStrength: nil
+            reasoningStrength: selectedModelRequiresReasoning ? "low" : nil
         )
 
         var summary = ""
@@ -1495,6 +1551,14 @@ struct ChatView: View {
 }
 
 enum ConversationCompaction {
+    static func clampedMaxTokens(_ value: Int) -> Int {
+        min(4_096, max(32, value))
+    }
+
+    static func clampedThreshold(_ value: Int) -> Int {
+        min(95, max(70, value))
+    }
+
     static func estimatedTokens(summary: String?, messages: [ChatMessage]) -> Int {
         let summaryCharacters = summary?.count ?? 0
         let messageCharacters = messages.reduce(0) { total, message in
@@ -1519,6 +1583,7 @@ private struct MessageRow: View {
     @Bindable var message: ChatMessage
     @State private var showsCodeChanges = false
     let showsReasoning: Bool
+    let isStreaming: Bool
     let workspaceRoot: String?
     let onEdit: () -> Void
     let onRegenerate: (() -> Void)?
@@ -1624,7 +1689,7 @@ private struct MessageRow: View {
     @ViewBuilder
     private var legacyMessageBody: some View {
         if showsReasoning, let reasoning = message.reasoningContent, !reasoning.isEmpty {
-            reasoningView(reasoning, id: "legacy")
+            reasoningView(reasoning, isActive: isStreaming)
         }
         if !visibleContent.isEmpty {
             MessageContentView(content: visibleContent)
@@ -1640,7 +1705,10 @@ private struct MessageRow: View {
                 switch entry.kind {
                 case .reasoning:
                     if showsReasoning, !entry.text.isEmpty {
-                        reasoningView(entry.text, id: entry.id.uuidString)
+                        reasoningView(
+                            entry.text,
+                            isActive: isStreaming && entry.id == timeline.last?.id
+                        )
                     }
                 case .content:
                     if !entry.text.isEmpty {
@@ -1657,14 +1725,8 @@ private struct MessageRow: View {
         }
     }
 
-    private func reasoningView(_ reasoning: String, id _: String) -> some View {
-        DisclosureGroup("Reasoning") {
-            MessageContentView(content: reasoning)
-                .padding(.top, 6)
-                .foregroundStyle(.secondary)
-        }
-        .font(.callout)
-        .accessibilityIdentifier("message-reasoning")
+    private func reasoningView(_ reasoning: String, isActive: Bool) -> some View {
+        StreamingReasoningDisclosure(reasoning: reasoning, isActive: isActive)
     }
 
     private var stats: some View {
@@ -1899,5 +1961,37 @@ private struct MessageRow: View {
     private func copyMessage() {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(visibleContent, forType: .string)
+    }
+}
+
+private struct StreamingReasoningDisclosure: View {
+    let reasoning: String
+    let isActive: Bool
+    @State private var isExpanded = false
+
+    var body: some View {
+        DisclosureGroup(isExpanded: $isExpanded) {
+            MessageContentView(content: reasoning)
+                .padding(.top, 6)
+                .foregroundStyle(.secondary)
+        } label: {
+            HStack(spacing: 7) {
+                if isActive {
+                    ProgressView()
+                        .controlSize(.mini)
+                }
+                Text("Reasoning")
+            }
+        }
+        .font(.callout)
+        .accessibilityIdentifier("message-reasoning")
+        .onAppear {
+            isExpanded = isActive
+        }
+        .onChange(of: isActive) {
+            withAnimation(.easeInOut(duration: 0.14)) {
+                isExpanded = isActive
+            }
+        }
     }
 }
