@@ -1427,10 +1427,16 @@ struct ChatView: View {
     }
 
     private func compactContextIfNeeded(force: Bool) async {
-        let threshold = Double(
-            ConversationCompaction.clampedThreshold(summaryThreshold)
-        ) / 100
-        guard force || contextUsageRatio >= threshold else { return }
+        let estimatedTokens = ConversationCompaction.estimatedTokens(
+            summary: conversation.contextSummary,
+            messages: effectiveContextMessages
+        )
+        guard force || ConversationCompaction.shouldCompact(
+            estimatedTokens: estimatedTokens,
+            contextLength: selectedModel?.contextLength ?? 32_768,
+            reservedOutputTokens: maxTokens,
+            thresholdPercent: summaryThreshold
+        ) else { return }
         let candidates = compactionCandidates
         guard let cutoff = candidates.last?.createdAt else { return }
 
@@ -1586,6 +1592,17 @@ enum ConversationCompaction {
         // Local chat tokenizers vary; three characters per token is intentionally
         // conservative so compaction runs before the backend must truncate.
         return Int(ceil(Double(summaryCharacters + messageCharacters) / 3))
+    }
+
+    static func shouldCompact(
+        estimatedTokens: Int,
+        contextLength: Int,
+        reservedOutputTokens: Int,
+        thresholdPercent: Int
+    ) -> Bool {
+        let capacity = max(1, contextLength - clampedMaxTokens(reservedOutputTokens))
+        let threshold = Double(clampedThreshold(thresholdPercent)) / 100
+        return Double(max(0, estimatedTokens)) / Double(capacity) >= threshold
     }
 
     static func candidates(
