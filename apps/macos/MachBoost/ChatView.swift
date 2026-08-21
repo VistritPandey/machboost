@@ -31,7 +31,7 @@ struct ChatView: View {
     @FocusState private var composerIsFocused: Bool
     @AppStorage("machboost.chat.maxTokens") private var maxTokens = 512
     @AppStorage("machboost.chat.temperature") private var temperature = 0.2
-    @AppStorage("machboost.chat.reasoningStrength") private var reasoningStrength = "medium"
+    @AppStorage("machboost.chat.reasoningStrength") private var reasoningStrength = "off"
     @AppStorage("machboost.chat.showReasoning") private var showReasoning = true
     @AppStorage("machboost.chat.autoSummarize") private var autoSummarize = true
     @AppStorage("machboost.chat.summaryThreshold") private var summaryThreshold = 90
@@ -1629,13 +1629,14 @@ private struct MessageRow: View {
         HStack(spacing: 10) {
             if let rate = message.tokensPerSecond {
                 Label("\(rate, specifier: "%.1f") tok/s", systemImage: "gauge.with.dots.needle.50percent")
-                    .help("Generated model tokens per decode second across the complete turn")
+                    .help("Model tokens per decode second, including reasoning and tool protocol")
             }
             if let ttft = message.timeToFirstTokenSeconds {
                 Label("\(ttft, specifier: "%.2f")s TTFT", systemImage: "timer")
             }
             if let tokens = message.generatedTokens {
-                Text("\(tokens) generated tokens")
+                Text("\(tokens) total model tokens")
+                    .help("Includes answer, reasoning, and tool protocol tokens")
             }
             if message.wasCancelled {
                 Text("Stopped")
