@@ -309,7 +309,8 @@ struct ChatView: View {
         let loaded = appState.activeLoadedModels.contains {
             $0.model == model.name || $0.model == model.repository
         }
-        let downloading = appState.downloads[model.name] != nil
+        let download = appState.downloads[model.name]
+        let downloading = download != nil
         let selected = model.name == conversation.model || model.repository == conversation.model
 
         return Button {
@@ -357,9 +358,27 @@ struct ChatView: View {
 
                 Spacer(minLength: 8)
 
-                if downloading {
-                    ProgressView()
-                        .controlSize(.small)
+                if let download {
+                    VStack(alignment: .trailing, spacing: 4) {
+                        if
+                            let completed = download.completed,
+                            let total = download.total,
+                            total > 0
+                        {
+                            ProgressView(value: Double(completed), total: Double(total))
+                                .frame(width: 90)
+                            Text("\(Int((Double(completed) / Double(total) * 100).rounded()))%")
+                                .font(.caption2.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                        } else {
+                            ProgressView()
+                                .controlSize(.small)
+                            Text(download.status ?? "Preparing")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .accessibilityIdentifier("chat-model-download-progress")
                 } else if loaded {
                     Label("Loaded", systemImage: "memorychip.fill")
                         .font(.caption.weight(.medium))
