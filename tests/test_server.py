@@ -22,6 +22,7 @@ from machboost.server import (
     OperationRegistry,
     RequestCancelled,
     RuntimeManager,
+    ToolAwareTextStream,
     download_progress_class,
     extract_tool_calls,
     load_accelerator,
@@ -34,6 +35,22 @@ from machboost.workspace import WorkspaceStore
 
 
 class ToolCallParsingTests(unittest.TestCase):
+    def test_tool_aware_stream_preserves_prose_and_hides_split_protocol(self):
+        emitted = []
+        stream = ToolAwareTextStream(emitted.append)
+
+        for chunk in (
+            "I will inspect it. ",
+            "<atem:function_",
+            "calls><atem:invoke name=\"read_file\">",
+            "<atem:parameter name=\"path\">a.py</atem:parameter>",
+            "</atem:invoke></atem:function_calls>",
+        ):
+            stream.feed(chunk)
+
+        self.assertEqual("".join(emitted), "I will inspect it.")
+        self.assertNotIn("atem", "".join(emitted))
+
     def test_extracts_muse_attribute_call_without_exposing_control_tokens(self):
         content, calls = extract_tool_calls(
             '<|start|>assistant to=list_files<|message|>'
