@@ -23,7 +23,7 @@
     <title>MachBoost — Faster local inference on Apple Silicon</title>
     <link rel="icon" href="assets/machboost-icon.webp">
     <link rel="apple-touch-icon" href="assets/machboost-icon.webp">
-    <link rel="stylesheet" href="styles.css?v=0.14.0">
+    <link rel="stylesheet" href="styles.css?v=0.15.0">
     <script
       defer
       src="https://cdn.jsdelivr.net/npm/lucide@0.468.0/dist/umd/lucide.min.js"
@@ -231,8 +231,8 @@ export OPENAI_API_KEY="mbk_employee_key"</code></pre>
         <div class="shell team-capabilities">
           <div>
             <i data-lucide="users" aria-hidden="true"></i>
-            <h3>Connect the desktop fleet</h3>
-            <p>Bonjour finds nearby hosts; scoped keys keep every connection explicit and authenticated.</p>
+            <h3>Connect inside the app</h3>
+            <p>Nearby Macs appear under Connections. Choose a device, enter its scoped key once, and select a ready model.</p>
           </div>
           <div>
             <i data-lucide="brain-circuit" aria-hidden="true"></i>
@@ -569,12 +569,12 @@ export OPENAI_API_KEY="mbk_employee_key"</code></pre>
         <div class="shell">
           <div class="section-heading">
             <p class="kicker">Community preview</p>
-            <h2>Download. Drag. Approve.</h2>
+            <h2>Download. Drag. Approve once.</h2>
             <p>
               The preview DMG is free and ad-hoc signed. Apple has not notarized it, so
               macOS asks you to approve the app manually after download. Community
-              builds check GitHub Releases automatically and expose Check Now in
-              Settings; installing an update is manual and may require approval again.
+              releases from version 0.15 onward use a signed Sparkle feed for
+              in-app download, verification, installation, and relaunch.
             </p>
           </div>
 
@@ -608,7 +608,8 @@ export OPENAI_API_KEY="mbk_employee_key"</code></pre>
                   <h3>Choose Open Anyway</h3>
                   <p>
                     Go to System Settings → Privacy &amp; Security, then approve
-                    MachBoost. Later launches of that installed version open normally.
+                    MachBoost. Later launches open normally, and signed in-app updates
+                    do not send you back through the download page.
                   </p>
                 </div>
               </li>
