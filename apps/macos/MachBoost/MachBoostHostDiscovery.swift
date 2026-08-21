@@ -51,7 +51,7 @@ final class MachBoostHostDiscovery: NSObject,
                 "path": Data("/".utf8),
             ])
         )
-        service.publish(options: .listenForConnections)
+        service.publish()
         publisher = service
     }
 
