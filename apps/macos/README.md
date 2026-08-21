@@ -121,8 +121,10 @@ edits also produce a bounded Code Changes preview with actions to open the file
 or reveal it in Finder. Read, search, and list tools run without approval;
 exact replacements and new files always require confirmation.
 
-Reasoning is disabled by default for faster ordinary chat and can be enabled
-per supported model from Generation controls. The displayed token rate counts
+Reasoning is disabled by default where the model supports that choice. Muse
+Glimmer always reasons, so the app uses its documented `low` setting as the fast
+default instead of omitting the setting and triggering Muse's `high` default.
+The displayed token rate counts
 all model-generated tokens, including reasoning and tool protocol, and divides
 them by backend decode time. It is not computed from visible answer text.
 
