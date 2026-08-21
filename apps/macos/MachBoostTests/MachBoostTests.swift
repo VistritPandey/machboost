@@ -424,6 +424,14 @@ final class MachBoostTests: XCTestCase {
         )
     }
 
+    func testConversationCompactionRepairsInvalidStoredSettings() {
+        XCTAssertEqual(ConversationCompaction.clampedMaxTokens(0), 32)
+        XCTAssertEqual(ConversationCompaction.clampedMaxTokens(8_192), 4_096)
+        XCTAssertEqual(ConversationCompaction.clampedThreshold(0), 70)
+        XCTAssertEqual(ConversationCompaction.clampedThreshold(100), 95)
+        XCTAssertEqual(ConversationCompaction.clampedThreshold(90), 90)
+    }
+
     @MainActor
     func testCommunityUpdaterRejectsPlaceholderKeyAndDefaultsToReleaseChecks() {
         let releasesURL = URL(string: "https://example.com/releases/latest")!
