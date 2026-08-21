@@ -18,16 +18,17 @@ final class MachBoostUITests: XCTestCase {
     }
 
     @MainActor
-    func testInferenceConnectionsExposeLocalAndTeamModes() {
+    func testConnectionsExposeSimpleDeviceFlow() {
         let app = launchApp()
         let connections = app.staticTexts["Connections"]
         XCTAssertTrue(connections.waitForExistence(timeout: 10))
         connections.click()
 
-        XCTAssertTrue(app.staticTexts["Inference source"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.radioButtons["This Mac"].exists)
-        XCTAssertTrue(app.radioButtons["Host pool"].exists)
-        XCTAssertTrue(app.staticTexts["Repository tools and model inference both run on this Mac."].exists)
+        XCTAssertTrue(app.staticTexts["Choose a device"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["This Mac"].exists)
+        XCTAssertTrue(app.staticTexts["Available devices"].exists)
+        XCTAssertTrue(app.disclosureTriangles["Connect by address"].exists)
+        XCTAssertFalse(app.radioButtons["Host pool"].exists)
     }
 
     @MainActor
@@ -263,6 +264,10 @@ final class MachBoostUITests: XCTestCase {
         let confirmation = app.sheets.buttons["Download"]
         XCTAssertTrue(confirmation.waitForExistence(timeout: 2))
         confirmation.click()
+        XCTAssertTrue(
+            app.descendants(matching: .any)["model-download-progress"]
+                .waitForExistence(timeout: 2)
+        )
 
         let finished = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "exists == false"),
