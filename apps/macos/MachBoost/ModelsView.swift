@@ -272,19 +272,38 @@ private struct ModelRow: View {
 
     @ViewBuilder
     private func downloadProgress(_ event: PullEvent) -> some View {
-        HStack(spacing: 8) {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 8) {
+                Text(event.file ?? event.status ?? "Preparing download")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Spacer()
+                if let detail = progressDetail(event) {
+                    Text(detail)
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+            }
             if let completed = event.completed, let total = event.total, total > 0 {
                 ProgressView(value: Double(completed), total: Double(total))
-                    .frame(maxWidth: 260)
             } else {
                 ProgressView()
                     .controlSize(.small)
             }
-            Text(event.file ?? event.status ?? "Downloading")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
         }
+        .accessibilityIdentifier("model-download-progress")
+    }
+
+    private func progressDetail(_ event: PullEvent) -> String? {
+        guard let completed = event.completed, let total = event.total, total > 0 else {
+            return nil
+        }
+        let percent = Int((Double(completed) / Double(total) * 100).rounded())
+        guard event.unit == "bytes" else { return "\(percent)%" }
+        let completedText = ByteCountFormatter.string(fromByteCount: completed, countStyle: .file)
+        let totalText = ByteCountFormatter.string(fromByteCount: total, countStyle: .file)
+        return "\(percent)%  \(completedText) / \(totalText)"
     }
 }
 
