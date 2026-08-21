@@ -307,7 +307,7 @@ final class UITestMachBoostAPI: MachBoostAPIProtocol, @unchecked Sendable {
                         error: nil
                     )
                 )
-                try? await Task.sleep(for: .milliseconds(400))
+                try? await Task.sleep(for: .seconds(3))
                 _ = lock.withLock { downloadedModels.insert(model) }
                 continuation.yield(
                     PullEvent(
