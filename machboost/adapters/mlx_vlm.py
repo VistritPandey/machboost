@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import re
 import threading
 import time
 from collections import OrderedDict
@@ -175,6 +176,57 @@ class ThinkingStreamSplitter:
         return text
 
 
+class InitialReasoningEchoFilter:
+    """Remove a model's verbatim prompt echo from the first reasoning paragraph."""
+
+    _PARAGRAPH_BREAK = re.compile(r"\n[ \t]*\n")
+
+    def __init__(self, candidates: Sequence[str]) -> None:
+        normalized = (_collapsed_whitespace(value) for value in candidates)
+        self.candidates = tuple(dict.fromkeys(value for value in normalized if value))
+        self.buffer = ""
+        self.decided = not self.candidates
+
+    def feed(self, text: str, *, final: bool = False) -> str:
+        if self.decided:
+            return text
+        self.buffer += text
+        match = self._PARAGRAPH_BREAK.search(self.buffer)
+        if match is not None:
+            paragraph = self.buffer[: match.start()]
+            remainder = self.buffer[match.end() :]
+            self.buffer = ""
+            self.decided = True
+            if _collapsed_whitespace(paragraph) in self.candidates:
+                return remainder.lstrip("\n")
+            return paragraph + self.buffered_separator(match) + remainder
+
+        current = _collapsed_whitespace(self.buffer)
+        can_still_match = any(candidate.startswith(current) for candidate in self.candidates)
+        already_continued = any(
+            current.startswith(candidate) and current != candidate
+            for candidate in self.candidates
+        )
+        if current and (not can_still_match or already_continued):
+            return self._release()
+        if final:
+            if current in self.candidates:
+                self.buffer = ""
+                self.decided = True
+                return ""
+            return self._release()
+        return ""
+
+    def _release(self) -> str:
+        value = self.buffer
+        self.buffer = ""
+        self.decided = True
+        return value
+
+    @staticmethod
+    def buffered_separator(match: re.Match[str]) -> str:
+        return match.group(0)
+
 class MLXVLMAccelerator:
     """Resident MLX-VLM runner with content-addressed projected-feature reuse."""
 
@@ -321,6 +373,7 @@ class MLXVLMAccelerator:
             vision_token_bucket=vision_token_bucket,
             vision_calibration=vision_calibration,
             policy_prompt=_latest_user_text(normalized),
+            reasoning_echoes=_user_texts(normalized),
         )
 
     def _format_chat_prompt(
@@ -433,6 +486,7 @@ class MLXVLMAccelerator:
             vision_token_bucket=vision_token_bucket,
             vision_calibration=vision_calibration,
             policy_prompt=prompt,
+            reasoning_echoes=(prompt,),
         )
 
     def _generate(
@@ -454,6 +508,7 @@ class MLXVLMAccelerator:
         vision_token_bucket: Optional[int],
         vision_calibration: Optional[dict[str, Any]],
         policy_prompt: str,
+        reasoning_echoes: Sequence[str],
     ) -> tuple[str, VisionRunStats]:
         if self._closed:
             raise RuntimeError("MLX vision accelerator is closed")
@@ -475,6 +530,7 @@ class MLXVLMAccelerator:
             vision_token_bucket=vision_token_bucket,
             vision_calibration=vision_calibration,
             policy_prompt=policy_prompt,
+            reasoning_echoes=reasoning_echoes,
         )
         return future.result()
 
@@ -497,6 +553,7 @@ class MLXVLMAccelerator:
         vision_token_bucket: Optional[int],
         vision_calibration: Optional[dict[str, Any]],
         policy_prompt: str,
+        reasoning_echoes: Sequence[str],
     ) -> tuple[str, VisionRunStats]:
         with self._generation_lock:
             self._bind_thread_local_stream()
@@ -589,16 +646,24 @@ class MLXVLMAccelerator:
                 start_marker=thinking_start,
                 end_marker=thinking_end,
             )
+            echo_filter = InitialReasoningEchoFilter(reasoning_echoes)
+            has_visible_content = False
 
-            def emit_split(delta: ThinkingDelta) -> None:
-                if delta.reasoning:
-                    thinking_parts.append(delta.reasoning)
+            def emit_split(delta: ThinkingDelta, *, final: bool = False) -> None:
+                nonlocal has_visible_content
+                reasoning = echo_filter.feed(delta.reasoning, final=final)
+                if reasoning:
+                    thinking_parts.append(reasoning)
                     if on_thinking is not None:
-                        on_thinking(delta.reasoning)
-                if delta.content:
-                    parts.append(delta.content)
+                        on_thinking(reasoning)
+                content = delta.content
+                if content and not has_visible_content:
+                    content = content.lstrip()
+                    has_visible_content = bool(content)
+                if content:
+                    parts.append(content)
                     if on_text is not None:
-                        on_text(delta.content)
+                        on_text(content)
 
             for row in rows:
                 last = row
@@ -622,7 +687,7 @@ class MLXVLMAccelerator:
                 if first_text_at is None:
                     first_text_at = time.perf_counter()
                 emit_split(splitter.feed(text))
-            emit_split(splitter.feed("", final=True))
+            emit_split(splitter.feed("", final=True), final=True)
             if apc_manager is not None:
                 apc_matched_after = int(
                     apc_manager.stats_snapshot().get("matched_tokens", 0)
@@ -855,6 +920,18 @@ def _latest_user_text(messages: Sequence[dict[str, str]]) -> str:
         if message.get("role") == "user":
             return str(message.get("content") or "")
     return str(messages[-1].get("content") or "") if messages else ""
+
+
+def _user_texts(messages: Sequence[dict[str, str]]) -> tuple[str, ...]:
+    return tuple(
+        str(message.get("content") or "")
+        for message in reversed(messages)
+        if message.get("role") == "user" and message.get("content")
+    )
+
+
+def _collapsed_whitespace(value: str) -> str:
+    return " ".join(value.split())
 
 
 def _resolution_scoped_images(
