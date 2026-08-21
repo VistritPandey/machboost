@@ -30,8 +30,8 @@ a separate MachBoost installation.
 - automatic conversation compaction near a configurable context threshold
 - Bonjour discovery and a load-aware host pool that can route requests across
   compatible MachBoost Macs, with optional local participation
-- menu-bar lifecycle, optional launch at login, automatic update checks, and a
-  manual **Check Now** action
+- menu-bar lifecycle, optional launch at login, EdDSA-verified Sparkle updates,
+  automatic checks, and a manual **Check Now** action
 - localhost serving by default; authenticated LAN serving is opt-in
 
 Chat history and imported attachment copies stay under MachBoost Application
@@ -204,10 +204,12 @@ The Models view and **Server → Overview/Developer** can explicitly load a
 downloaded model, choose its keep-alive window, and run a compile warm-up before
 the first client request.
 
-## Desktop Host Pool
+## Device Connections
 
-Open **Connections → Host pool** to discover nearby MachBoost servers or add
-them by endpoint and scoped key. Each host remains an independent authenticated
+Open **Connections** to see this Mac, saved devices, and nearby MachBoost hosts.
+Choosing **Connect** on a discovered device asks for its scoped key and switches
+inference to that device. If Bonjour discovery is unavailable, expand
+**Connect by address** and enter the LAN endpoint and key. Each host remains an independent authenticated
 daemon with its own model files, memory, queue, and admission limits. The app
 polls catalog and load metrics, prefers an already-resident compatible model,
 and spills a new request to another host when queue pressure or immediately
@@ -264,16 +266,18 @@ Build an ad-hoc signed DMG for local packaging and runtime tests without Apple
 credentials:
 
 ```sh
-./scripts/release_macos.sh 0.14.0-local --local
-open dist/macos/MachBoost-0.14.0-local-arm64.dmg
+./scripts/release_macos.sh 0.15.0-local --local
+open dist/macos/MachBoost-0.15.0-local-arm64.dmg
 ```
 
 Local mode builds the locked runtime, archives the arm64 app, embeds and signs
 every native runtime binary, verifies the app and disk image, and writes a
-SHA-256 checksum. It deliberately skips notarization, stapling, and Sparkle
-appcast generation. These builds expose **View Latest Release** instead of
-starting Sparkle. Gatekeeper does not recognize them as notarized software, so
-community users must approve the app manually after each downloaded update.
+SHA-256 checksum. It skips notarization and stapling. Local builds embed the
+project's Sparkle public key; when `SPARKLE_PRIVATE_KEY` is supplied, the script
+also creates a signed appcast. Gatekeeper does not recognize an ad-hoc signed
+build as notarized software, so the first downloaded install still needs manual
+approval. Version 0.15.0 and later community releases use EdDSA-signed Sparkle
+updates for in-app download, verification, installation, and relaunch.
 
 Public DMG releases need Vistrit Pandey's Developer ID, Apple team and
 notarization credentials, and Sparkle EdDSA keys:
@@ -284,14 +288,14 @@ export MACHBOOST_DEVELOPER_ID='Developer ID Application: ...'
 export MACHBOOST_NOTARY_PROFILE=...
 export SPARKLE_PUBLIC_ED_KEY=...
 export SPARKLE_PRIVATE_KEY=/secure/path/to/sparkle-private-key
-./scripts/release_macos.sh 0.14.0
-./scripts/publish_macos_release.sh 0.14.0 ./release-notes/0.14.0.md
+./scripts/release_macos.sh 0.15.0
+./scripts/publish_macos_release.sh 0.15.0 ./release-notes/0.15.0.md
 ```
 
 The release script builds the embedded runtime, archives the arm64 app, signs
 nested Mach-O files and the app, creates and notarizes a DMG, staples the
 ticket, runs Gatekeeper verification, writes a SHA-256 checksum, and produces a
-signed Sparkle appcast. The publisher requires an existing `v0.14.0` tag, an
+signed Sparkle appcast. The publisher requires an existing `v0.15.0` tag, an
 authenticated GitHub CLI session, and an explicit release-notes file. It refuses
 to overwrite an existing release and uploads the DMG, checksum, and appcast to
 the matching GitHub release.
@@ -308,14 +312,14 @@ tag or starting the workflow manually:
 - `MACOS_CERTIFICATE_PASSWORD`
 - `MACOS_CI_KEYCHAIN_PASSWORD`
 - `MACOS_DEVELOPER_ID`
-- `SPARKLE_PRIVATE_KEY_BASE64`
+- `SPARKLE_PRIVATE_KEY_BASE64` for Developer ID releases
+- `SPARKLE_PRIVATE_KEY` for community releases
 - `SPARKLE_PUBLIC_ED_KEY`
 
-For automatic signed releases on `v*` tag pushes, also set the repository
-variable `MACHBOOST_SIGNED_RELEASES` to `true`. Without that variable, tag
-pushes skip the credential-gated signing job so unsigned community releases can
-be published separately. Manual workflow dispatch remains available regardless
-of the variable.
+For Developer ID releases on `v*` tag pushes, set the repository variable
+`MACHBOOST_SIGNED_RELEASES` to `true`. Without that variable, the workflow builds
+an ad-hoc signed community DMG and an EdDSA-signed appcast, then publishes both
+to the tagged GitHub release. Manual dispatch follows the same variable.
 
 The workflow imports signing material into a temporary Keychain, builds and
 notarizes the DMG, validates the bundled runtime without invoking host Python,
