@@ -18,11 +18,11 @@ struct RootView: View {
     var body: some View {
         NavigationSplitView {
             sidebar
-                .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 340)
+                .navigationSplitViewColumnWidth(min: 190, ideal: 230, max: 300)
         } detail: {
             detail
         }
-        .frame(minWidth: 980, minHeight: 680)
+        .frame(minWidth: 760, minHeight: 560)
         .task {
             if conversations.isEmpty {
                 newConversation()
@@ -103,10 +103,12 @@ struct RootView: View {
                 Text(appState.inferenceMode == .team ? appState.inferenceLabel : (appState.serverIsRunning ? "Local ready" : "Local offline"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
                 Spacer()
                 Text("\(appState.activeLoadedModels.count) loaded")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
             .padding(12)
         }
