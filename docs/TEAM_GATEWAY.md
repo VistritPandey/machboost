@@ -129,9 +129,10 @@ agent and its permission system.
 
 ### Connect MachBoost Desktop Apps
 
-An employee can choose **Connections → Team host** in the native app and enter
-the LAN endpoint plus an employee key. The token is stored in that Mac's
-Keychain. The host enrollment response contains only compatible models that are
+An employee opens **Connections** in the native app and chooses **Connect** next
+to an automatically discovered device. The app asks for the employee key and
+stores it in that Mac's Keychain. If Bonjour discovery is unavailable,
+**Connect by address** accepts the LAN endpoint and key. The host enrollment response contains only compatible models that are
 already cached on the host and allowed for that key. The employee can submit a
 model request, but only the host administrator can approve the download from
 **Server → Team**.
