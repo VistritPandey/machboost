@@ -10,6 +10,7 @@ final class AppState {
     private static let inferenceModeKey = "machboost.inference.mode.v1"
     private static let deviceIDKey = "machboost.device.id.v1"
     private static let includeLocalPoolKey = "machboost.team.include-local.v1"
+    private static let localPoolID = UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
 
     let daemon = DaemonManager()
     let hostDiscovery = MachBoostHostDiscovery()
@@ -47,6 +48,9 @@ final class AppState {
     private var heartbeatTask: Task<Void, Never>?
     private var teamAPIs: [UUID: any MachBoostAPIProtocol] = [:]
     private var requestAPIs: [String: any MachBoostAPIProtocol] = [:]
+    private var requestHostIDs: [String: UUID] = [:]
+    private var reservedRequests: [UUID: Int] = [:]
+    private var lastPresenceAt: [UUID: Date] = [:]
     let deviceID: String
     var showOnboarding = false
     var presentedError: String?
@@ -673,9 +677,11 @@ final class AppState {
     }
 
     func streamChat(_ request: ChatRequest) throws -> AsyncThrowingStream<ChatEvent, Error> {
-        let selected = try inferenceAPI(for: request.model)
-        requestAPIs[request.requestID] = selected
-        let source = selected.streamChat(request)
+        let selected = try inferenceSelection(for: request.model)
+        requestAPIs[request.requestID] = selected.api
+        requestHostIDs[request.requestID] = selected.hostID
+        reservedRequests[selected.hostID, default: 0] += 1
+        let source = selected.api.streamChat(request)
         return AsyncThrowingStream { continuation in
             let task = Task {
                 do {
@@ -688,6 +694,12 @@ final class AppState {
                 }
                 _ = await MainActor.run {
                     self.requestAPIs.removeValue(forKey: request.requestID)
+                    if let hostID = self.requestHostIDs.removeValue(forKey: request.requestID) {
+                        self.reservedRequests[hostID] = max(
+                            0,
+                            (self.reservedRequests[hostID] ?? 1) - 1
+                        )
+                    }
                 }
             }
             continuation.onTermination = { _ in task.cancel() }
@@ -815,6 +827,19 @@ final class AppState {
                 lastError: nil,
                 updatedAt: .now
             )
+            if Date().timeIntervalSince(lastPresenceAt[profile.id] ?? .distantPast) >= 30 {
+                _ = try? await remote.reportTeamPresence(
+                    deviceID: deviceID,
+                    deviceName: Host.current().localizedName ?? ProcessInfo.processInfo.hostName,
+                    appVersion: Bundle.main.object(
+                        forInfoDictionaryKey: "CFBundleShortVersionString"
+                    ) as? String ?? "development",
+                    workspaceName: nil,
+                    workspaceFingerprint: nil,
+                    model: nil
+                )
+                lastPresenceAt[profile.id] = .now
+            }
         } catch {
             teamHostSnapshots[profile.id] = TeamHostSnapshot(
                 profile: profile,
@@ -846,26 +871,39 @@ final class AppState {
         Self.saveTeamProfiles(teamHosts)
     }
 
-    private func inferenceAPI(for model: String) throws -> any MachBoostAPIProtocol {
-        guard inferenceMode == .team else { return api }
-        var candidates: [(score: Double, api: any MachBoostAPIProtocol, profile: TeamHostProfile?)] = []
+    private func inferenceSelection(
+        for model: String
+    ) throws -> (api: any MachBoostAPIProtocol, hostID: UUID) {
+        guard inferenceMode == .team else { return (api, Self.localPoolID) }
+        var candidates: [(
+            score: Double,
+            api: any MachBoostAPIProtocol,
+            profile: TeamHostProfile?,
+            hostID: UUID
+        )] = []
         if includeLocalInHostPool,
            catalog.contains(where: {
                ($0.name == model || $0.repository == model) && $0.cached && $0.support == "ready"
            }) {
             let loaded = loadedModels.contains { $0.model == model }
-            let score = HostRoutingPolicy.score(metrics: metrics, modelLoaded: loaded)
-            candidates.append((score, api, nil))
+            let score = HostRoutingPolicy.score(
+                metrics: metrics,
+                modelLoaded: loaded,
+                reservedRequests: reservedRequests[Self.localPoolID] ?? 0
+            )
+            candidates.append((score, api, nil, Self.localPoolID))
         }
         for snapshot in teamHostSnapshots.values where snapshot.isOnline && snapshot.supports(model: model) {
             guard let remote = teamAPIs[snapshot.id] else { continue }
             candidates.append((
                 HostRoutingPolicy.score(
                     metrics: snapshot.metrics,
-                    modelLoaded: snapshot.hasLoaded(model: model)
+                    modelLoaded: snapshot.hasLoaded(model: model),
+                    reservedRequests: reservedRequests[snapshot.id] ?? 0
                 ),
                 remote,
-                snapshot.profile
+                snapshot.profile,
+                snapshot.id
             ))
         }
         guard let selected = candidates.min(by: { $0.score < $1.score }) else {
@@ -878,7 +916,7 @@ final class AppState {
             inferenceAPI = selected.api
             Self.saveTeamProfile(profile)
         }
-        return selected.api
+        return (selected.api, selected.hostID)
     }
 
     private func updateHostAdvertisement() {
