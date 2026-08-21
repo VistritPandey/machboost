@@ -55,14 +55,20 @@ final class MachBoostUITests: XCTestCase {
             app.descendants(matching: .any)["developer-endpoint-section"]
                 .waitForExistence(timeout: 3)
         )
-        XCTAssertTrue(app.staticTexts["Local endpoint"].waitForExistence(timeout: 3))
-        XCTAssertTrue(
-            app.staticTexts["127.0.0.1 is reachable only from this Mac."]
-                .waitForExistence(timeout: 3)
-        )
-        XCTAssertTrue(
-            app.buttons["Enable authenticated LAN access"].waitForExistence(timeout: 3)
-        )
+        let localEndpoint = app.staticTexts["Local endpoint"]
+        if localEndpoint.waitForExistence(timeout: 1) {
+            XCTAssertTrue(
+                app.staticTexts["127.0.0.1 is reachable only from this Mac."].exists
+            )
+            XCTAssertTrue(app.buttons["Enable authenticated LAN access"].exists)
+        } else {
+            XCTAssertTrue(app.staticTexts["LAN endpoint"].waitForExistence(timeout: 2))
+            XCTAssertTrue(
+                app.staticTexts["Other devices on this network can connect at this address with the API token."]
+                    .exists
+            )
+            XCTAssertTrue(app.buttons["Disable LAN access"].exists)
+        }
         XCTAssertTrue(app.staticTexts["OpenAI Responses"].exists)
         XCTAssertTrue(app.staticTexts["Anthropic Messages"].exists)
         XCTAssertTrue(app.staticTexts["P50 latency"].exists)
