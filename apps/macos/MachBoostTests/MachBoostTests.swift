@@ -5,6 +5,43 @@ import XCTest
 @testable import MachBoost
 
 final class MachBoostTests: XCTestCase {
+    func testAssistantTimelinePreservesInterleavedReasoningContentAndTools() throws {
+        let call = APIToolCall(function: .init(name: "read_file", arguments: .object([:])))
+        let expected = [
+            AssistantTimelineEntry(kind: .reasoning, text: "Inspecting."),
+            AssistantTimelineEntry(kind: .content, text: "I will read it."),
+            AssistantTimelineEntry(
+                kind: .tools,
+                activities: [CodingToolActivity(call: call, state: .succeeded)]
+            ),
+            AssistantTimelineEntry(kind: .reasoning, text: "Checking result."),
+            AssistantTimelineEntry(kind: .content, text: "Done."),
+        ]
+
+        let decoded = try JSONDecoder().decode(
+            [AssistantTimelineEntry].self,
+            from: JSONEncoder().encode(expected)
+        )
+
+        XCTAssertEqual(decoded.map(\.kind), [.reasoning, .content, .tools, .reasoning, .content])
+        XCTAssertEqual(decoded[2].activities.first?.call.function.name, "read_file")
+    }
+
+    func testHostRoutingPrefersResidentModelUntilQueuePressureRequiresSpillover() {
+        let availableResident = serverMetrics(active: 1, queued: 2, p50: 0.2)
+        let saturatedResident = serverMetrics(active: 1, queued: 20, p50: 0.2)
+        let idleColdHost = serverMetrics(active: 0, queued: 0, p50: 0.1)
+
+        XCTAssertLessThan(
+            HostRoutingPolicy.score(metrics: availableResident, modelLoaded: true),
+            HostRoutingPolicy.score(metrics: idleColdHost, modelLoaded: false)
+        )
+        XCTAssertGreaterThan(
+            HostRoutingPolicy.score(metrics: saturatedResident, modelLoaded: true),
+            HostRoutingPolicy.score(metrics: idleColdHost, modelLoaded: false)
+        )
+    }
+
     func testTurnMetricsAggregateEveryToolRound() {
         var metrics = GenerationTurnMetrics()
         metrics.absorb(
@@ -1309,6 +1346,31 @@ final class MachBoostTests: XCTestCase {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [MockURLProtocol.self]
         return URLSession(configuration: configuration)
+    }
+
+    private func serverMetrics(active: Int, queued: Int, p50: Double) -> ServerMetrics {
+        ServerMetrics(
+            schema: "machboost.metrics.v1",
+            operations: .init(
+                activeCount: active,
+                totals: .init(
+                    started: 0,
+                    completed: 0,
+                    cancelled: 0,
+                    failed: 0,
+                    generatedTokens: 0
+                ),
+                latencySeconds: .init(p50: p50, p95: p50),
+                generationTokensPerSecond: 0
+            ),
+            models: [],
+            scheduler: .init(
+                activeRequests: active,
+                queuedRequests: queued,
+                rejectedRequests: 0
+            ),
+            process: .init(peakResidentMemoryBytes: 0)
+        )
     }
 
     private func response(
