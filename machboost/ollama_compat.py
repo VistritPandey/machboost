@@ -40,6 +40,8 @@ def normalize_ollama_options(payload: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(think, (bool, str)):
             raise ValueError("think must be a boolean or level string")
         options["_think"] = think
+        if isinstance(think, str):
+            options["_reasoning_strength"] = think
     if "raw" in payload:
         options["_raw"] = bool(payload["raw"])
     if "system" in payload:
