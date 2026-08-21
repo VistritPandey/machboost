@@ -967,7 +967,7 @@ struct ChatView: View {
         activeAssistant?.wasCancelled = true
         try? modelContext.save()
         Task { @MainActor in
-            _ = try? await appState.inferenceAPI.cancel(requestID: activeRequestID)
+            _ = await appState.cancelInference(requestID: activeRequestID)
             generationTask?.cancel()
         }
     }
@@ -1025,7 +1025,7 @@ struct ChatView: View {
             )
             var roundContent = ""
             var roundToolCalls: [APIToolCall] = []
-            for try await event in appState.inferenceAPI.streamChat(request) {
+            for try await event in try appState.streamChat(request) {
                 if let error = event.error { throw MachBoostAPIError.stream(error) }
                 if let content = event.message?.content, !content.isEmpty {
                     roundContent += content
@@ -1358,7 +1358,7 @@ struct ChatView: View {
 
         var summary = ""
         do {
-            for try await event in appState.inferenceAPI.streamChat(request) {
+            for try await event in try appState.streamChat(request) {
                 if let error = event.error { throw MachBoostAPIError.stream(error) }
                 summary += event.message?.content ?? ""
             }
@@ -1615,14 +1615,14 @@ private struct MessageRow: View {
         }
     }
 
-    private func reasoningView(_ reasoning: String, id: String) -> some View {
+    private func reasoningView(_ reasoning: String, id _: String) -> some View {
         DisclosureGroup("Reasoning") {
             MessageContentView(content: reasoning)
                 .padding(.top, 6)
                 .foregroundStyle(.secondary)
         }
         .font(.callout)
-        .accessibilityIdentifier("message-reasoning-\(id)")
+        .accessibilityIdentifier("message-reasoning")
     }
 
     private var stats: some View {
