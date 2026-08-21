@@ -134,9 +134,12 @@ final class MachBoostUITests: XCTestCase {
         ])
         let controls = app.buttons["Generation controls"]
         XCTAssertTrue(controls.waitForExistence(timeout: 10))
-        controls.click()
+        focus(controls)
 
         XCTAssertTrue(app.staticTexts["Reasoning"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.radioButtons["Low"].exists)
+        XCTAssertEqual(app.radioButtons["Low"].value as? Int, 1)
+        XCTAssertFalse(app.radioButtons["Off"].exists)
         XCTAssertTrue(app.staticTexts["Context window"].exists)
         controls.click()
 
@@ -245,6 +248,7 @@ final class MachBoostUITests: XCTestCase {
         stop.click()
 
         XCTAssertTrue(app.staticTexts["Stopped"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.sheets.staticTexts["MachBoost cancelled"].exists)
     }
 
     @MainActor
