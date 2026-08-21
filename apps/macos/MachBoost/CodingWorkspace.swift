@@ -190,7 +190,7 @@ enum CodingWorkspace {
             policy = "Repository tools are approved automatically, but the selected repository boundary remains mandatory."
         }
         return """
-        Coding mode is active for a repository selected by the user. Use repository tools to inspect relevant files before answering questions about the code. Prefer targeted searches and small reads. Never claim a file was changed unless a write tool succeeds. \(policy) Do not request secrets, dependency caches, build output, or .git data. Keep changes focused and report the paths changed.
+        Coding mode is active for a repository selected by the user. Use repository tools only when they are needed, and stay within the user's requested scope. Prefer one targeted search or listing followed by only the necessary reads; batch independent calls in the same round. Once there is enough evidence to answer, stop exploring and answer immediately. Never claim a file was changed unless a write tool succeeds. \(policy) Do not request secrets, dependency caches, build output, or .git data. Keep changes focused and report the paths changed.
         """
     }
 
