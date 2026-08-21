@@ -212,10 +212,15 @@ class InitialReasoningEchoFilter:
             paragraph = self.buffer[: match.start()]
             remainder = self.buffer[match.end() :]
             self.buffer = ""
-            self.decided = True
             cleaned, removed = self._strip_leading_echo(paragraph)
             if removed and not cleaned:
-                return remainder.lstrip("\n")
+                trailing = remainder.lstrip("\n")
+                if trailing:
+                    return self.feed(trailing, final=final)
+                if final:
+                    self.decided = True
+                return ""
+            self.decided = True
             if removed:
                 return cleaned + self.buffered_separator(match) + remainder
             return paragraph + self.buffered_separator(match) + remainder
