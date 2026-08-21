@@ -9,7 +9,8 @@ a separate MachBoost installation.
 ## Product Scope
 
 - SwiftUI chat with streaming Markdown, code copy, stop, regenerate, edit and
-  resend, persistent attachments, and generation statistics
+  resend, persistent attachments, chronological reasoning/tool/prose events,
+  and backend-derived generation statistics
 - local SwiftData conversation history with search, rename, Markdown export,
   and delete
 - tested-model catalog, explicit downloads, architecture preflight, load state,
@@ -27,6 +28,8 @@ a separate MachBoost installation.
   savings, external OpenAI-compatible providers, monthly budgets, and Keychain
   secrets
 - automatic conversation compaction near a configurable context threshold
+- Bonjour discovery and a load-aware host pool that can route requests across
+  compatible MachBoost Macs, with optional local participation
 - menu-bar lifecycle, optional launch at login, automatic update checks, and a
   manual **Check Now** action
 - localhost serving by default; authenticated LAN serving is opt-in
@@ -112,10 +115,16 @@ menu can refresh the index after code changes or remove MachBoost's local index.
 Removing a workspace never deletes or modifies the source repository.
 
 Coding activity appears as collapsible human-readable rows instead of model
-protocol text. Each row records its result and completion state. Approved file
+protocol text. Reasoning, visible prose, and one or more tool rounds remain in
+their streamed order. Each row records its result and completion state. Approved file
 edits also produce a bounded Code Changes preview with actions to open the file
 or reveal it in Finder. Read, search, and list tools run without approval;
 exact replacements and new files always require confirmation.
+
+Reasoning is disabled by default for faster ordinary chat and can be enabled
+per supported model from Generation controls. The displayed token rate counts
+all model-generated tokens, including reasoning and tool protocol, and divides
+them by backend decode time. It is not computed from visible answer text.
 
 MachBoost does not place every file into the model context. The bundled daemon:
 
@@ -193,6 +202,23 @@ The Models view and **Server → Overview/Developer** can explicitly load a
 downloaded model, choose its keep-alive window, and run a compile warm-up before
 the first client request.
 
+## Desktop Host Pool
+
+Open **Connections → Host pool** to discover nearby MachBoost servers or add
+them by endpoint and scoped key. Each host remains an independent authenticated
+daemon with its own model files, memory, queue, and admission limits. The app
+polls catalog and load metrics, prefers an already-resident compatible model,
+and spills a new request to another host when queue pressure or immediately
+reserved requests make that host the better choice. This Mac can participate
+when it has the selected model ready.
+
+Host selection happens once before streaming begins. A response is never moved
+between hosts mid-generation, and MachBoost does not pool unified memory across
+machines. Bonjour provides discovery, not authentication; the user must still
+enter a host-issued API key, which is stored in Keychain. Generic OpenAI,
+Anthropic, and Ollama clients continue to use the endpoint they are configured
+to call; automatic multi-host selection is currently a desktop-app feature.
+
 LAN traffic is authenticated but not encrypted. Use only a trusted private
 network, or terminate TLS in an authenticated reverse proxy. Never expose the
 plain HTTP listener directly to the public internet.
@@ -236,8 +262,8 @@ Build an ad-hoc signed DMG for local packaging and runtime tests without Apple
 credentials:
 
 ```sh
-./scripts/release_macos.sh 0.13.3-local --local
-open dist/macos/MachBoost-0.13.3-local-arm64.dmg
+./scripts/release_macos.sh 0.14.0-local --local
+open dist/macos/MachBoost-0.14.0-local-arm64.dmg
 ```
 
 Local mode builds the locked runtime, archives the arm64 app, embeds and signs
@@ -256,14 +282,14 @@ export MACHBOOST_DEVELOPER_ID='Developer ID Application: ...'
 export MACHBOOST_NOTARY_PROFILE=...
 export SPARKLE_PUBLIC_ED_KEY=...
 export SPARKLE_PRIVATE_KEY=/secure/path/to/sparkle-private-key
-./scripts/release_macos.sh 0.13.3
-./scripts/publish_macos_release.sh 0.13.3 ./release-notes/0.13.3.md
+./scripts/release_macos.sh 0.14.0
+./scripts/publish_macos_release.sh 0.14.0 ./release-notes/0.14.0.md
 ```
 
 The release script builds the embedded runtime, archives the arm64 app, signs
 nested Mach-O files and the app, creates and notarizes a DMG, staples the
 ticket, runs Gatekeeper verification, writes a SHA-256 checksum, and produces a
-signed Sparkle appcast. The publisher requires an existing `v0.13.3` tag, an
+signed Sparkle appcast. The publisher requires an existing `v0.14.0` tag, an
 authenticated GitHub CLI session, and an explicit release-notes file. It refuses
 to overwrite an existing release and uploads the DMG, checksum, and appcast to
 the matching GitHub release.
