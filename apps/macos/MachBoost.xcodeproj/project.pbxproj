@@ -14,6 +14,7 @@
 		27E688AF9676E42DED5E32D6 /* PersistenceModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = E17FDB86433150ABA6AF28AD /* PersistenceModels.swift */; };
 		2AE014D9F9C0E3D500A7EF6C /* UITestMachBoostAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48709DA45E2A1AFBF0DCD64A /* UITestMachBoostAPI.swift */; };
 		30B2BB9AEE8AFDD0B4CEBBBA /* ConnectionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CBD9A214BE09A2CA78F95549 /* ConnectionsView.swift */; };
+		3746FD87157D34B034B053C8 /* MachBoostHostDiscovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1710768B3904362005E5F087 /* MachBoostHostDiscovery.swift */; };
 		3D12F0E0FE2E28C6A5468B14 /* GenerationTurnMetrics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 260C7716A7D19DA6CD1CCADE /* GenerationTurnMetrics.swift */; };
 		4850300E156305AF616FE930 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = E284163CFFA3CC2C71B3C1CC /* Sparkle */; };
 		4A7F15708786794B3614BA7F /* AttachmentStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2661046B65C78C18FAFBFED /* AttachmentStore.swift */; };
@@ -89,6 +90,7 @@
 		0EFA8AE4D369703004BF4868 /* ModelsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelsView.swift; sourceTree = "<group>"; };
 		10ECC494BAAC1C4D1DDC8EED /* MachBoostTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MachBoostTests.swift; sourceTree = "<group>"; };
 		13CE4549CB3CD9BB10752FD5 /* MachBoost.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = MachBoost.entitlements; sourceTree = "<group>"; };
+		1710768B3904362005E5F087 /* MachBoostHostDiscovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MachBoostHostDiscovery.swift; sourceTree = "<group>"; };
 		1B0DFBEEC996B812905DFC15 /* MachBoost.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MachBoost.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		2436F81998E2D43F6056D376 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		260C7716A7D19DA6CD1CCADE /* GenerationTurnMetrics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenerationTurnMetrics.swift; sourceTree = "<group>"; };
@@ -177,6 +179,7 @@
 				897AC5550FBF95B6362AB6E6 /* KeychainStore.swift */,
 				13CE4549CB3CD9BB10752FD5 /* MachBoost.entitlements */,
 				714090FF416A6EA959EEC39B /* MachBoostApp.swift */,
+				1710768B3904362005E5F087 /* MachBoostHostDiscovery.swift */,
 				5C62A9D5540E53785741BB3B /* MessageContentView.swift */,
 				0EFA8AE4D369703004BF4868 /* ModelsView.swift */,
 				2436F81998E2D43F6056D376 /* RootView.swift */,
@@ -408,6 +411,7 @@
 				3D12F0E0FE2E28C6A5468B14 /* GenerationTurnMetrics.swift in Sources */,
 				B4C476FB19A204404CC5DF12 /* KeychainStore.swift in Sources */,
 				6C23074F0BD6603DD259ADFC /* MachBoostApp.swift in Sources */,
+				3746FD87157D34B034B053C8 /* MachBoostHostDiscovery.swift in Sources */,
 				62465861BCFFAEA08CA9DEC6 /* MessageContentView.swift in Sources */,
 				5DD9B55F557ACFA7AAF581A1 /* ModelsView.swift in Sources */,
 				4CABF47F885FDD74C37117E1 /* RootView.swift in Sources */,
