@@ -11,6 +11,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
 
+from .connections import active_connection, active_connection_token
 from .server import DEFAULT_HOST, DEFAULT_PORT
 
 
@@ -30,7 +31,8 @@ class MachBoostAPIError(RuntimeError):
 def default_endpoint() -> str:
     value = os.environ.get("MACHBOOST_HOST", "").strip()
     if not value:
-        return f"http://{DEFAULT_HOST}:{DEFAULT_PORT}"
+        profile = active_connection()
+        return profile.endpoint if profile else f"http://{DEFAULT_HOST}:{DEFAULT_PORT}"
     if "://" not in value:
         value = f"http://{value}"
     return value.rstrip("/")
@@ -48,6 +50,8 @@ class MachBoostClient:
         self.endpoint = (endpoint or default_endpoint()).rstrip("/")
         self.timeout = float(timeout)
         self.api_token = api_token if api_token is not None else os.environ.get("MACHBOOST_API_TOKEN")
+        if self.api_token is None and endpoint is None:
+            self.api_token = active_connection_token()
         self.device_id = str(device_id or "").strip() or None
 
     def health(self) -> dict[str, Any]:
