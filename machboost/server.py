@@ -2579,6 +2579,67 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                 context = merge_memory_draft_context(context, memory_context)
             options["_cache_namespace"] = memory_context.cache_namespace.key
         request_id = request_identifier(payload, "chat")
+        route_mode, provider_id = self.route_config(payload)
+
+        def external_response(external: ProviderResult) -> dict[str, Any]:
+            content, thinking, tool_calls = openai_response_message(external.response)
+            message: dict[str, Any] = {"role": "assistant", "content": content}
+            if thinking:
+                message["thinking"] = thinking
+            if tool_calls:
+                message["tool_calls"] = tool_calls
+            usage = external.response.get("usage")
+            usage = usage if isinstance(usage, dict) else {}
+            latency_ns = int(external.latency_seconds * 1_000_000_000)
+            return {
+                "request_id": request_id,
+                "model": model,
+                "created_at": utc_timestamp(),
+                "message": message,
+                "done": True,
+                "done_reason": "tool_calls" if tool_calls else "stop",
+                "total_duration": latency_ns,
+                "load_duration": 0,
+                "prompt_eval_count": int(usage.get("prompt_tokens") or 0),
+                "prompt_eval_duration": 0,
+                "eval_count": int(usage.get("completion_tokens") or 0),
+                "eval_duration": latency_ns,
+                "machboost": {
+                    **machboost_context_result(workspace, memory_context),
+                    "backend": "external",
+                    "route": {
+                        "source": "external",
+                        "provider_id": external.provider_id,
+                        "latency_seconds": external.latency_seconds,
+                        "cost_usd": external.cost_usd,
+                        "buffered_upstream": True,
+                    },
+                },
+            }
+
+        def send_external_stream(external: ProviderResult) -> None:
+            body = external_response(external)
+            message = dict(body["message"])
+            self.remember_exchange(
+                memory_context,
+                workspace,
+                user_text=user_query,
+                assistant_text=str(message.get("content") or ""),
+            )
+            self.start_stream("application/x-ndjson")
+            if message.get("content") or message.get("thinking") or message.get("tool_calls"):
+                self.write_json_line(
+                    {
+                        "request_id": request_id,
+                        "model": model,
+                        "created_at": body["created_at"],
+                        "message": message,
+                        "done": False,
+                    }
+                )
+            body["message"] = {"role": "assistant", "content": ""}
+            self.write_json_line(body)
+
         if not bool(payload.get("stream", True)):
             cached = self.exact_cache_get(memory_context, model=model, payload=payload)
             if cached is not None:
@@ -2592,20 +2653,39 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                 }
                 self.send_json(body)
                 return
-            result = self.run_traced_operation(
-                request_id,
-                "chat",
-                model,
-                lambda cancel_event: self.runtime.chat(
-                    runtime_model,
-                    messages,
-                    options=options,
-                    keep_alive=payload.get("keep_alive"),
-                    context=context,
-                    cancel_event=cancel_event,
+            source, routed = route_with_fallback(
+                route_mode,
+                local=lambda: self.run_traced_operation(
+                    request_id,
+                    "chat",
+                    model,
+                    lambda cancel_event: self.runtime.chat(
+                        runtime_model,
+                        messages,
+                        options=options,
+                        keep_alive=payload.get("keep_alive"),
+                        context=context,
+                        cancel_event=cancel_event,
+                    ),
+                    input_data=messages,
                 ),
-                input_data=messages,
+                external=lambda: self.external_chat(
+                    payload,
+                    messages=messages,
+                    provider_id=provider_id,
+                ),
             )
+            if source == "external":
+                body = external_response(routed)
+                self.remember_exchange(
+                    memory_context,
+                    workspace,
+                    user_text=user_query,
+                    assistant_text=str(body["message"].get("content") or ""),
+                )
+                self.send_json(body)
+                return
+            result = routed
             content, tool_calls = result_content_and_tool_calls(result)
             self.remember_exchange(
                 memory_context,
@@ -2636,6 +2716,20 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
             )
             self.send_json(body)
             return
+
+        if route_mode in {"external_first", "external_only"}:
+            try:
+                external = self.external_chat(
+                    payload,
+                    messages=messages,
+                    provider_id=provider_id,
+                )
+            except ProviderError as exc:
+                if route_mode == "external_only" or not exc.transient:
+                    raise
+            else:
+                send_external_stream(external)
+                return
 
         stream_started = False
 
@@ -2690,7 +2784,20 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                 ),
                 input_data=messages,
             )
-        except RequestAdmissionError:
+        except RequestAdmissionError as exc:
+            if (
+                route_mode == "local_first"
+                and not stream_started
+                and exc.reason
+                in {"queue_full", "queue_timeout", "request_timeout", "server_unavailable"}
+            ):
+                external = self.external_chat(
+                    payload,
+                    messages=messages,
+                    provider_id=provider_id,
+                )
+                send_external_stream(external)
+                return
             raise
         except RequestCancelled:
             if not stream_started:
@@ -5031,6 +5138,25 @@ def openai_response_text(response: dict[str, Any]) -> str:
         if isinstance(content, str):
             return content
     return str(choice.get("text") or "")
+
+
+def openai_response_message(
+    response: dict[str, Any],
+) -> tuple[str, str, list[dict[str, Any]]]:
+    choices = response.get("choices")
+    if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+        return openai_response_text(response), "", []
+    message = choices[0].get("message")
+    if not isinstance(message, dict):
+        return openai_response_text(response), "", []
+    content = message.get("content")
+    thinking = message.get("reasoning_content") or message.get("thinking")
+    calls = message.get("tool_calls")
+    return (
+        content if isinstance(content, str) else "",
+        thinking if isinstance(thinking, str) else "",
+        ollama_tool_calls(calls if isinstance(calls, list) else []),
+    )
 
 
 def openai_machboost_result(
