@@ -934,7 +934,8 @@ final class AppState {
         if configuration.lanEnabled {
             hostDiscovery.publish(
                 name: Host.current().localizedName ?? ProcessInfo.processInfo.hostName,
-                port: configuration.port
+                port: configuration.port,
+                deviceID: deviceID
             )
         } else {
             hostDiscovery.stopPublishing()
