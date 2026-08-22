@@ -46,26 +46,7 @@ struct ChatView: View {
     @AppStorage("machboost.chat.providerModel") private var providerModel = ""
 
     var body: some View {
-        chatSurface
-            .inspector(isPresented: $showsWorkspaceChanges) {
-                if let workspace = selectedWorkspace {
-                WorkspaceChangesView(
-                    snapshot: workspaceChanges,
-                    workspaceRoot: workspace.path,
-                    isRefreshing: isRefreshingWorkspaceChanges,
-                    scope: $workspaceChangeScope,
-                    onRefresh: { refreshWorkspaceChanges() },
-                    onClose: { showsWorkspaceChanges = false }
-                )
-                .inspectorColumnWidth(min: 320, ideal: 420, max: 560)
-                } else {
-                    ContentUnavailableView(
-                        "No repository selected",
-                        systemImage: "folder.badge.questionmark"
-                    )
-                    .inspectorColumnWidth(min: 320, ideal: 420, max: 560)
-                }
-            }
+        responsiveChatSurface
         .fileImporter(
             isPresented: $isImporting,
             allowedContentTypes: [.image, .plainText, .sourceCode, .folder],
@@ -159,6 +140,52 @@ struct ChatView: View {
         }
     }
 
+    private var responsiveChatSurface: some View {
+        GeometryReader { geometry in
+            if showsWorkspaceChanges, geometry.size.width < 880 {
+                workspaceChangesPanel
+                    .transition(.move(edge: .trailing))
+            } else {
+                HStack(spacing: 0) {
+                    chatSurface
+                        .frame(minWidth: 0, maxWidth: .infinity)
+
+                    if showsWorkspaceChanges {
+                        Divider()
+                        workspaceChangesPanel
+                            .frame(
+                                width: min(
+                                    440,
+                                    max(320, geometry.size.width * 0.32)
+                                )
+                            )
+                            .transition(.move(edge: .trailing))
+                    }
+                }
+            }
+        }
+        .animation(.easeInOut(duration: 0.18), value: showsWorkspaceChanges)
+    }
+
+    @ViewBuilder
+    private var workspaceChangesPanel: some View {
+        if let workspace = selectedWorkspace {
+            WorkspaceChangesView(
+                snapshot: workspaceChanges,
+                workspaceRoot: workspace.path,
+                isRefreshing: isRefreshingWorkspaceChanges,
+                scope: $workspaceChangeScope,
+                onRefresh: { refreshWorkspaceChanges() },
+                onClose: { showsWorkspaceChanges = false }
+            )
+        } else {
+            ContentUnavailableView(
+                "No repository selected",
+                systemImage: "folder.badge.questionmark"
+            )
+        }
+    }
+
     private var chatSurface: some View {
         VStack(spacing: 0) {
             header
@@ -221,17 +248,6 @@ struct ChatView: View {
                 }
 
                 workspaceMenu(compact: narrow)
-
-                Button {
-                    codingMode.toggle()
-                } label: {
-                    Image(systemName: codingMode ? "hammer.fill" : "hammer")
-                        .foregroundStyle(codingMode ? Color.green : Color.secondary)
-                }
-                .buttonStyle(.plain)
-                .disabled(selectedWorkspace == nil || selectedModel?.supportsTools != true)
-                .accessibilityLabel("Coding mode")
-                .help("Coding mode")
 
                 if codingSessionAvailable {
                     Button {
@@ -856,26 +872,59 @@ struct ChatView: View {
                 .frame(width: 52, height: 36)
             }
 
-            if codingSessionAvailable {
-                HStack(spacing: 8) {
+            HStack(spacing: 8) {
+                developerModeButton
+                if codingSessionAvailable {
+                    Divider()
+                        .frame(height: 14)
                     permissionMenu
-                    Text(permissionMode.subtitle)
+                }
+                Spacer()
+                if let selectedWorkspace {
+                    Label(selectedWorkspace.name, systemImage: "folder")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
-                    Spacer()
-                    Label(selectedWorkspace?.name ?? "Repository", systemImage: "folder")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
                 }
-                .padding(.leading, 36)
-                .padding(.trailing, 52)
             }
+            .padding(.leading, 36)
+            .padding(.trailing, 52)
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 14)
         .frame(maxWidth: 980)
         .frame(maxWidth: .infinity)
+    }
+
+    private var developerModeButton: some View {
+        Button {
+            guard selectedWorkspace != nil else {
+                codingMode = true
+                chooseWorkspace()
+                return
+            }
+            guard selectedModel?.supportsTools == true || uiTestCodingFixtureEnabled else {
+                appState.presentedError = "Choose a model with tool support to use Dev mode."
+                return
+            }
+            codingMode.toggle()
+            if !codingMode {
+                showsWorkspaceChanges = false
+            }
+        } label: {
+            Label("Dev mode", systemImage: "terminal")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(codingSessionAvailable ? Color.green : Color.secondary)
+        }
+        .buttonStyle(.borderless)
+        .fixedSize()
+        .accessibilityLabel("Developer mode")
+        .accessibilityValue(codingSessionAvailable ? "On" : "Off")
+        .help(
+            selectedWorkspace == nil
+                ? "Choose a repository and enable developer tools"
+                : "Allow the model to inspect and edit the selected repository"
+        )
     }
 
     private var permissionMenu: some View {
