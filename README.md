@@ -477,6 +477,19 @@ export ANTHROPIC_BASE_URL="http://192.168.1.50:11435"
 export ANTHROPIC_AUTH_TOKEN="YOUR_MACHBOOST_KEY"
 ```
 
+The MachBoost CLI can save the same host without persistent shell variables.
+The token prompt writes to macOS Keychain; the profile file contains only the
+name and endpoint:
+
+```sh
+machboost connect 192.168.1.50:11435 --name studio
+machboost connections
+machboost use studio
+machboost run qwen2.5:7b
+machboost use local
+machboost disconnect studio
+```
+
 The address above is illustrative; the app displays the current host Mac's
 reachable LAN address. The client and server must be able to reach each other
 on the selected network and port.
@@ -525,11 +538,12 @@ export OPENAI_BASE_URL="http://TEAM-MAC:11435/v1"
 export OPENAI_API_KEY="mbk_employee_key"
 ```
 
-MachBoost desktop clients connect from **Connections**. Nearby hosts appear as
-available devices through Bonjour; choosing **Connect** asks only for the scoped
-API key. **Connect by address** is available when discovery is blocked. The app
-stores keys in Keychain and shows each device's loaded models, active requests,
-and queue depth. A request is routed only to an online host where the
+MachBoost desktop clients connect from **Connections**. The inference-pool view
+shows this Mac and saved remote hosts separately; this Mac is never offered as a
+remote connection. Nearby hosts appear through Bonjour, while **Connect by
+address** remains available when discovery is blocked. The app stores keys in
+Keychain and shows each device's loaded models, active requests, and queue
+depth. A request is routed only to an online host where the
 selected model is ready. A resident copy is preferred until measured queue
 pressure or immediately reserved in-flight requests make an idle compatible host
 the better choice. The employee Mac can also join the pool when it has the model.
@@ -616,6 +630,33 @@ Administrators can configure an OpenAI-compatible provider as `local_first`,
 failures such as queue overload or timeout; authentication, validation, and
 budget errors fail closed. API keys live in process memory, an environment
 variable, or the macOS Keychain, never in the team database.
+
+The native chat route menu and CLI can map a local model to a different paid
+provider model. The response records whether local or external inference was
+used, provider latency, and configured cost. External responses are currently
+buffered before MachBoost emits compatible stream events, so this fallback is a
+resilience/capacity control rather than a local-inference speedup claim.
+
+```sh
+machboost run qwen2.5:7b \
+  --route local_first \
+  --provider production \
+  --provider-model paid-model
+```
+
+```json
+{
+  "model": "qwen2.5:7b",
+  "messages": [{"role": "user", "content": "Summarize the incident."}],
+  "machboost": {
+    "route": {
+      "mode": "local_first",
+      "provider_id": "production",
+      "model": "paid-model"
+    }
+  }
+}
+```
 
 Run the deterministic five-developer isolation/reuse benchmark with:
 
@@ -869,6 +910,9 @@ machboost run qwen2.5:3b
 machboost run qwen2.5-vl:3b --image ./image.png
 machboost run qwen3-vl:8b --video ./clip.mp4 --vision-tokens auto
 machboost chat qwen2.5:3b
+machboost connect 192.168.1.50:11435 --name studio
+machboost connections
+machboost use studio
 machboost complete qwen2.5-coder:3b "def parse_config(text):"
 machboost ps
 machboost show qwen2.5:3b
@@ -877,7 +921,7 @@ machboost rm company-coder:staging
 machboost shutdown
 ```
 
-`machboost list` shows cached Hugging Face and MLX models, backend readiness, and available short aliases. `machboost run MODEL` connects to the resident server, loads the model before accepting input, builds a draft corpus from any `--context` files or directories, and opens a streaming interactive chat. Use `/?` for commands, `/clear` to reset history, `/bye` to exit while keeping the idle window, `Ctrl-C` to stop a reply, and `Ctrl-D` or `/unload` to unload and exit.
+`machboost list` shows cached Hugging Face and MLX models, backend readiness, and available short aliases. `machboost run MODEL` connects to the active local or saved server, loads the model before accepting input, builds a draft corpus from any `--context` files or directories, and opens a streaming interactive chat. Use `/?` for commands, `/status` for the active host and route, `/stats on|off` for response metrics, `/clear` to reset history, `/bye` to exit while keeping the idle window, `Ctrl-C` to stop a reply, and `Ctrl-D` or `/unload` to unload and exit.
 
 Run the server in the foreground when integrating it with another application or process manager:
 
