@@ -179,6 +179,9 @@ final class MachBoostUITests: XCTestCase {
         let permissionMode = app.descendants(matching: .any)["coding-permission-mode"]
         XCTAssertTrue(permissionMode.waitForExistence(timeout: 3))
         XCTAssertEqual(permissionMode.value as? String, "Manual")
+        let developerMode = app.buttons["Developer mode"]
+        XCTAssertTrue(developerMode.exists)
+        XCTAssertEqual(developerMode.value as? String, "On")
 
         send("Exercise coding agent", in: app)
 
@@ -204,6 +207,7 @@ final class MachBoostUITests: XCTestCase {
         )
         let changes = app.buttons["code-changes"]
         XCTAssertTrue(changes.waitForExistence(timeout: 3))
+        let widthBeforeChanges = app.windows.firstMatch.frame.width
         changes.click()
         XCTAssertTrue(app.buttons["Open File"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.buttons["Reveal"].exists)
@@ -213,7 +217,12 @@ final class MachBoostUITests: XCTestCase {
             app.descendants(matching: .any)["workspace-changes-panel"]
                 .waitForExistence(timeout: 5)
         )
-        XCTAssertTrue(app.staticTexts["main → working tree"].exists)
+        XCTAssertEqual(
+            app.windows.firstMatch.frame.width,
+            widthBeforeChanges,
+            accuracy: 2
+        )
+        XCTAssertTrue(app.staticTexts["main"].exists)
         XCTAssertTrue(app.staticTexts["Sources/App.swift"].exists)
         XCTAssertFalse(
             app.staticTexts.containing(
