@@ -5,6 +5,22 @@ struct DiscoveredMachBoostHost: Identifiable, Equatable, Sendable {
     let id: String
     let name: String
     let endpoint: URL
+    let deviceID: String?
+    let version: String?
+
+    init(
+        id: String,
+        name: String,
+        endpoint: URL,
+        deviceID: String? = nil,
+        version: String? = nil
+    ) {
+        self.id = id
+        self.name = name
+        self.endpoint = endpoint
+        self.deviceID = deviceID
+        self.version = version
+    }
 }
 
 @MainActor
@@ -16,6 +32,7 @@ final class MachBoostHostDiscovery: NSObject,
     private let browser = NetServiceBrowser()
     private var services: [String: NetService] = [:]
     private var publisher: NetService?
+    private var localDeviceID: String?
     private(set) var hosts: [DiscoveredMachBoostHost] = []
 
     override init() {
@@ -35,8 +52,9 @@ final class MachBoostHostDiscovery: NSObject,
         stopPublishing()
     }
 
-    func publish(name: String, port: Int) {
+    func publish(name: String, port: Int, deviceID: String? = nil) {
         stopPublishing()
+        localDeviceID = deviceID
         let service = NetService(
             domain: "local.",
             type: "_machboost._tcp.",
@@ -49,6 +67,7 @@ final class MachBoostHostDiscovery: NSObject,
                     forInfoDictionaryKey: "CFBundleShortVersionString"
                 ) as? String ?? "development").utf8),
                 "path": Data("/".utf8),
+                "device_id": Data((deviceID ?? "").utf8),
             ])
         )
         service.publish()
@@ -58,6 +77,7 @@ final class MachBoostHostDiscovery: NSObject,
     func stopPublishing() {
         publisher?.stop()
         publisher = nil
+        localDeviceID = nil
     }
 
     func netServiceBrowser(
@@ -84,10 +104,19 @@ final class MachBoostHostDiscovery: NSObject,
     func netServiceDidResolveAddress(_ sender: NetService) {
         guard let endpoint = endpoint(for: sender) else { return }
         let key = serviceKey(sender)
+        let metadata = serviceMetadata(sender)
+        guard !Self.isSelf(deviceID: metadata.deviceID, localDeviceID: localDeviceID) else {
+            services.removeValue(forKey: key)
+            hosts.removeAll { $0.id == key }
+            sender.stop()
+            return
+        }
         let host = DiscoveredMachBoostHost(
             id: key,
             name: sender.name,
-            endpoint: endpoint
+            endpoint: endpoint,
+            deviceID: metadata.deviceID,
+            version: metadata.version
         )
         hosts.removeAll { $0.id == key }
         hosts.append(host)
@@ -107,5 +136,28 @@ final class MachBoostHostDiscovery: NSObject,
         components.host = rawHost
         components.port = service.port
         return components.url
+    }
+
+    private func serviceMetadata(_ service: NetService) -> (deviceID: String?, version: String?) {
+        guard let data = service.txtRecordData() else { return (nil, nil) }
+        let record = NetService.dictionary(fromTXTRecord: data)
+        return (
+            decodedTXTValue(record["device_id"]),
+            decodedTXTValue(record["version"])
+        )
+    }
+
+    private func decodedTXTValue(_ data: Data?) -> String? {
+        guard
+            let data,
+            let value = String(data: data, encoding: .utf8),
+            !value.isEmpty
+        else { return nil }
+        return value
+    }
+
+    static func isSelf(deviceID: String?, localDeviceID: String?) -> Bool {
+        guard let deviceID, let localDeviceID else { return false }
+        return deviceID == localDeviceID
     }
 }
