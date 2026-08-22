@@ -112,7 +112,7 @@ as a routing control rather than a release claim.
 Reproduce the shippable 4B row with:
 
 ```sh
-python3 -m pip install "machboost[dflash] @ git+https://github.com/VistritPandey/machboost.git"
+python3 -m pip install "machboost[dflash]"
 machboost bench-decode qwen3.5:4b \
   --prompt-file benchmarks/unique_decode_prompts.jsonl \
   --draft-quant w4:gs64 \
