@@ -554,6 +554,41 @@ class CLITests(unittest.TestCase):
         self.assertEqual(client.load_calls[0][2], "5m")
         self.assertTrue(client.load_calls[0][3])
 
+    def test_resident_run_forwards_paid_api_route(self):
+        output = io.StringIO()
+        prompts = iter(["hello", "/bye"])
+        client = FakeResidentClient()
+
+        with patch.object(cli, "connect_resident", return_value=client):
+            code = cli.run_resident_chat(
+                cli.build_parser().parse_args(
+                    [
+                        "run",
+                        "mlx-community/example",
+                        "--route",
+                        "local_first",
+                        "--provider",
+                        "production",
+                        "--provider-model",
+                        "paid-model",
+                    ]
+                ),
+                input_func=lambda prompt: next(prompts),
+                output_stream=output,
+            )
+
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            client.chat_calls[0][6],
+            {
+                "route": {
+                    "mode": "local_first",
+                    "provider_id": "production",
+                    "model": "paid-model",
+                }
+            },
+        )
+
     def test_resident_completion_streams_raw_output(self):
         output = io.StringIO()
         errors = io.StringIO()
@@ -947,7 +982,7 @@ class CLITests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("thinking> I should use the weather tool.", rendered)
         self.assertIn("assistant> Checking now.", rendered)
-        self.assertIn('"name": "get_weather"', rendered)
+        self.assertIn("tool> get_weather(city='Chicago')", rendered)
         options = client.chat_calls[0][2]
         self.assertEqual(options["_think"], "high")
         self.assertEqual(options["_reasoning_strength"], "high")
@@ -1150,8 +1185,8 @@ class FakeResidentClient:
     def is_healthy(self):
         return True
 
-    def chat(self, model, messages, *, options, keep_alive, stream, images=None):
-        self.chat_calls.append((model, messages, options, keep_alive, stream, images))
+    def chat(self, model, messages, *, options, keep_alive, stream, images=None, machboost=None):
+        self.chat_calls.append((model, messages, options, keep_alive, stream, images, machboost))
         backend = "mlx-vlm" if images else "mlx"
         stats = {
             "generated_tokens": 2,
