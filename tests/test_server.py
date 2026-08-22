@@ -2739,6 +2739,77 @@ class TeamGatewayHTTPTests(unittest.TestCase):
         self.assertEqual(providers["providers"][0]["id"], "fallback")
         self.assertEqual(usage["usage"][0]["requests"], 1)
 
+    def test_ollama_chat_can_route_directly_to_external_provider(self) -> None:
+        self.request(
+            "/api/providers",
+            {
+                "id": "fallback",
+                "name": "Fallback API",
+                "base_url": "https://inference.example.com",
+                "models": ["mlx-community/example"],
+                "api_key": "provider-secret",
+            },
+        )
+
+        _, response = self.request(
+            "/api/chat",
+            {
+                "model": "mlx-community/example",
+                "messages": [{"role": "user", "content": "hello"}],
+                "stream": False,
+                "machboost": {
+                    "route": {
+                        "mode": "external_only",
+                        "provider_id": "fallback",
+                    }
+                },
+            },
+        )
+
+        self.assertEqual(response["message"]["content"], "external answer")
+        self.assertTrue(response["done"])
+        self.assertEqual(response["machboost"]["backend"], "external")
+        self.assertEqual(response["machboost"]["route"]["source"], "external")
+        self.assertEqual(response["eval_count"], 2)
+
+    def test_ollama_chat_external_stream_preserves_ndjson_contract(self) -> None:
+        self.request(
+            "/api/providers",
+            {
+                "id": "fallback",
+                "name": "Fallback API",
+                "base_url": "https://inference.example.com",
+                "models": ["mlx-community/example"],
+                "api_key": "provider-secret",
+            },
+        )
+
+        _, headers, body = self.request(
+            "/api/chat",
+            {
+                "model": "mlx-community/example",
+                "messages": [{"role": "user", "content": "hello"}],
+                "stream": True,
+                "request_id": "chat-route-test",
+                "machboost": {
+                    "route": {
+                        "mode": "external_only",
+                        "provider_id": "fallback",
+                    }
+                },
+            },
+            raw=True,
+        )
+        events = [json.loads(line) for line in body.decode("utf-8").splitlines()]
+
+        self.assertEqual(headers.get_content_type(), "application/x-ndjson")
+        self.assertEqual(events[0]["request_id"], "chat-route-test")
+        self.assertEqual(events[0]["message"]["content"], "external answer")
+        self.assertFalse(events[0]["done"])
+        self.assertTrue(events[-1]["done"])
+        self.assertEqual(events[-1]["machboost"]["route"]["provider_id"], "fallback")
+        self.assertTrue(events[-1]["machboost"]["route"]["buffered_upstream"])
+
     def test_external_provider_streaming_route_emits_compatible_sse(self) -> None:
         self.request(
             "/api/providers",
