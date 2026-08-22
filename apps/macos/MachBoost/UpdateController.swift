@@ -22,16 +22,13 @@ final class UpdateController: ObservableObject {
 
     private static let automaticCommunityChecksKey =
         "MachBoostAutomaticallyChecksCommunityReleases"
+    private static let fallbackRepository = "machboost/machboost"
 
     init(
         startingUpdater: Bool = true,
         publicKey: String? = nil,
-        releasesURL: URL = URL(
-            string: "https://github.com/VistritPandey/machboost/releases/latest"
-        )!,
-        latestReleaseURL: URL = URL(
-            string: "https://api.github.com/repos/VistritPandey/machboost/releases/latest"
-        )!,
+        releasesURL: URL? = nil,
+        latestReleaseURL: URL? = nil,
         openRelease: @escaping (URL) -> Void = { _ = NSWorkspace.shared.open($0) },
         defaults: UserDefaults = .standard,
         currentVersion: String = Bundle.main.object(
@@ -39,8 +36,13 @@ final class UpdateController: ObservableObject {
         ) as? String ?? "0.0.0",
         fetchLatestRelease: LatestReleaseFetcher? = nil
     ) {
-        self.releasesURL = releasesURL
-        self.latestReleaseURL = latestReleaseURL
+        let repository = Self.configuredRepository
+        self.releasesURL = releasesURL ?? URL(
+            string: "https://github.com/\(repository)/releases/latest"
+        )!
+        self.latestReleaseURL = latestReleaseURL ?? URL(
+            string: "https://api.github.com/repos/\(repository)/releases/latest"
+        )!
         self.openRelease = openRelease
         self.defaults = defaults
         self.currentVersion = currentVersion
@@ -176,6 +178,18 @@ final class UpdateController: ObservableObject {
             return false
         }
         return decoded.count == 32
+    }
+
+    private static var configuredRepository: String {
+        let value = (Bundle.main.object(forInfoDictionaryKey: "MachBoostRepository") as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard
+            !value.contains("$("),
+            value.split(separator: "/", omittingEmptySubsequences: false).count == 2
+        else {
+            return fallbackRepository
+        }
+        return value
     }
 
     private static func isVersion(_ candidate: String, newerThan current: String) -> Bool {
