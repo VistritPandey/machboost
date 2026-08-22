@@ -71,6 +71,10 @@ public final class ChatMessage {
     public var timeToFirstTokenSeconds: Double?
     public var generatedTokens: Int?
     public var tokensPerSecond: Double?
+    public var inferenceSource: String?
+    public var providerID: String?
+    public var providerLatencySeconds: Double?
+    public var providerCostUSD: Double?
     public var wasCancelled: Bool
     public var conversation: Conversation?
 
@@ -93,6 +97,10 @@ public final class ChatMessage {
         self.toolActivityJSON = toolActivityJSON
         self.timelineJSON = timelineJSON
         self.createdAt = createdAt
+        self.inferenceSource = nil
+        self.providerID = nil
+        self.providerLatencySeconds = nil
+        self.providerCostUSD = nil
         self.wasCancelled = false
         self.conversation = conversation
     }
