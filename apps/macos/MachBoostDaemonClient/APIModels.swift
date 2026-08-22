@@ -794,15 +794,18 @@ public struct ChatRequest: Encodable, Sendable {
         public struct Route: Encodable, Sendable {
             public let mode: String
             public let providerID: String?
+            public let model: String?
 
-            public init(mode: String, providerID: String? = nil) {
+            public init(mode: String, providerID: String? = nil, model: String? = nil) {
                 self.mode = mode
                 self.providerID = providerID
+                self.model = model
             }
 
             enum CodingKeys: String, CodingKey {
                 case mode
                 case providerID = "provider_id"
+                case model
             }
         }
     }
