@@ -486,7 +486,7 @@
 					"@executable_path/../Frameworks",
 					"@loader_path/../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.vistritpandey.MachBoostTests;
+				PRODUCT_BUNDLE_IDENTIFIER = io.machboost.MachBoostTests;
 				SDKROOT = macosx;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/MachBoost.app/Contents/MacOS/MachBoost";
 			};
@@ -504,7 +504,7 @@
 					"@executable_path/Frameworks",
 					"@loader_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.vistritpandey.MachBoostUITests;
+				PRODUCT_BUNDLE_IDENTIFIER = io.machboost.MachBoostUITests;
 				SDKROOT = macosx;
 				TEST_TARGET_NAME = MachBoost;
 			};
@@ -561,6 +561,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				GENERATE_INFOPLIST_FILE = NO;
+				MACHBOOST_REPOSITORY = machboost/machboost;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 0.15.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
@@ -585,7 +586,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.vistritpandey.MachBoost;
+				PRODUCT_BUNDLE_IDENTIFIER = io.machboost.MachBoost;
 				PRODUCT_NAME = MachBoost;
 				SDKROOT = macosx;
 			};
@@ -607,7 +608,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.vistritpandey.MachBoostDaemonClient;
+				PRODUCT_BUNDLE_IDENTIFIER = io.machboost.MachBoostDaemonClient;
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
 				VERSIONING_SYSTEM = "apple-generic";
@@ -671,6 +672,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				GENERATE_INFOPLIST_FILE = NO;
+				MACHBOOST_REPOSITORY = machboost/machboost;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 0.15.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
@@ -701,7 +703,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.vistritpandey.MachBoostPersistence;
+				PRODUCT_BUNDLE_IDENTIFIER = io.machboost.MachBoostPersistence;
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
 				VERSIONING_SYSTEM = "apple-generic";
@@ -724,7 +726,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.vistritpandey.MachBoostPersistence;
+				PRODUCT_BUNDLE_IDENTIFIER = io.machboost.MachBoostPersistence;
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
 				VERSIONING_SYSTEM = "apple-generic";
@@ -742,7 +744,7 @@
 					"@executable_path/../Frameworks",
 					"@loader_path/../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.vistritpandey.MachBoostTests;
+				PRODUCT_BUNDLE_IDENTIFIER = io.machboost.MachBoostTests;
 				SDKROOT = macosx;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/MachBoost.app/Contents/MacOS/MachBoost";
 			};
@@ -759,7 +761,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.vistritpandey.MachBoost;
+				PRODUCT_BUNDLE_IDENTIFIER = io.machboost.MachBoost;
 				PRODUCT_NAME = MachBoost;
 				SDKROOT = macosx;
 			};
@@ -781,7 +783,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.vistritpandey.MachBoostDaemonClient;
+				PRODUCT_BUNDLE_IDENTIFIER = io.machboost.MachBoostDaemonClient;
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
 				VERSIONING_SYSTEM = "apple-generic";
@@ -800,7 +802,7 @@
 					"@executable_path/Frameworks",
 					"@loader_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.vistritpandey.MachBoostUITests;
+				PRODUCT_BUNDLE_IDENTIFIER = io.machboost.MachBoostUITests;
 				SDKROOT = macosx;
 				TEST_TARGET_NAME = MachBoost;
 			};
