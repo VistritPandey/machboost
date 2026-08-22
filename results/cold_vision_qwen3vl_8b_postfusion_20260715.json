@@ -77,7 +77,7 @@
     {
       "dataset": "textvqa",
       "index": 0,
-      "image": "/Users/Vis/Documents/Ideation/results/tmp/cold_vision/textvqa/87d6e22dc51607343e1522e0c0447eec296ff837c550a942a6441de30a858ccf.png",
+      "image": "results/tmp/cold_vision/textvqa/87d6e22dc51607343e1522e0c0447eec296ff837c550a942a6441de30a858ccf.png",
       "image_digest": "87d6e22dc51607343e1522e0c0447eec296ff837c550a942a6441de30a858ccf",
       "question": "what is the brand of this camera?",
       "answers": [
@@ -134,7 +134,7 @@
     {
       "dataset": "textvqa",
       "index": 0,
-      "image": "/Users/Vis/Documents/Ideation/results/tmp/cold_vision/textvqa/87d6e22dc51607343e1522e0c0447eec296ff837c550a942a6441de30a858ccf.png",
+      "image": "results/tmp/cold_vision/textvqa/87d6e22dc51607343e1522e0c0447eec296ff837c550a942a6441de30a858ccf.png",
       "image_digest": "87d6e22dc51607343e1522e0c0447eec296ff837c550a942a6441de30a858ccf",
       "question": "what is the brand of this camera?",
       "answers": [
@@ -193,7 +193,7 @@
     {
       "dataset": "textvqa",
       "index": 1,
-      "image": "/Users/Vis/Documents/Ideation/results/tmp/cold_vision/textvqa/00be6157a7d69b9b98baec4695905c68ef99ce7b48fc5b3f6df09fe387997e0b.png",
+      "image": "results/tmp/cold_vision/textvqa/00be6157a7d69b9b98baec4695905c68ef99ce7b48fc5b3f6df09fe387997e0b.png",
       "image_digest": "00be6157a7d69b9b98baec4695905c68ef99ce7b48fc5b3f6df09fe387997e0b",
       "question": "what does the small white text spell?",
       "answers": [
@@ -253,7 +253,7 @@
     {
       "dataset": "textvqa",
       "index": 1,
-      "image": "/Users/Vis/Documents/Ideation/results/tmp/cold_vision/textvqa/00be6157a7d69b9b98baec4695905c68ef99ce7b48fc5b3f6df09fe387997e0b.png",
+      "image": "results/tmp/cold_vision/textvqa/00be6157a7d69b9b98baec4695905c68ef99ce7b48fc5b3f6df09fe387997e0b.png",
       "image_digest": "00be6157a7d69b9b98baec4695905c68ef99ce7b48fc5b3f6df09fe387997e0b",
       "question": "what does the small white text spell?",
       "answers": [
@@ -313,7 +313,7 @@
     {
       "dataset": "textvqa",
       "index": 2,
-      "image": "/Users/Vis/Documents/Ideation/results/tmp/cold_vision/textvqa/5f14c0579b036574c0dcd0dfd750370be184d1586c1dfe7a1fa628f2d149f5a4.png",
+      "image": "results/tmp/cold_vision/textvqa/5f14c0579b036574c0dcd0dfd750370be184d1586c1dfe7a1fa628f2d149f5a4.png",
       "image_digest": "5f14c0579b036574c0dcd0dfd750370be184d1586c1dfe7a1fa628f2d149f5a4",
       "question": "what kind of beer is this?",
       "answers": [
@@ -373,7 +373,7 @@
     {
       "dataset": "textvqa",
       "index": 2,
-      "image": "/Users/Vis/Documents/Ideation/results/tmp/cold_vision/textvqa/5f14c0579b036574c0dcd0dfd750370be184d1586c1dfe7a1fa628f2d149f5a4.png",
+      "image": "results/tmp/cold_vision/textvqa/5f14c0579b036574c0dcd0dfd750370be184d1586c1dfe7a1fa628f2d149f5a4.png",
       "image_digest": "5f14c0579b036574c0dcd0dfd750370be184d1586c1dfe7a1fa628f2d149f5a4",
       "question": "what kind of beer is this?",
       "answers": [
@@ -433,7 +433,7 @@
     {
       "dataset": "textvqa",
       "index": 3,
-      "image": "/Users/Vis/Documents/Ideation/results/tmp/cold_vision/textvqa/9746af853ec1c070808f785e292424d40519762b6a14337ce6e663802834e1e3.png",
+      "image": "results/tmp/cold_vision/textvqa/9746af853ec1c070808f785e292424d40519762b6a14337ce6e663802834e1e3.png",
       "image_digest": "9746af853ec1c070808f785e292424d40519762b6a14337ce6e663802834e1e3",
       "question": "what brand liquor is on the right?",
       "answers": [
@@ -493,7 +493,7 @@
     {
       "dataset": "textvqa",
       "index": 3,
-      "image": "/Users/Vis/Documents/Ideation/results/tmp/cold_vision/textvqa/9746af853ec1c070808f785e292424d40519762b6a14337ce6e663802834e1e3.png",
+      "image": "results/tmp/cold_vision/textvqa/9746af853ec1c070808f785e292424d40519762b6a14337ce6e663802834e1e3.png",
       "image_digest": "9746af853ec1c070808f785e292424d40519762b6a14337ce6e663802834e1e3",
       "question": "what brand liquor is on the right?",
       "answers": [
@@ -553,7 +553,7 @@
     {
       "dataset": "textvqa",
       "index": 5,
-      "image": "/Users/Vis/Documents/Ideation/results/tmp/cold_vision/textvqa/54574c24d3acfd7a888c06c4871ef45fa1db09ead49e8b569678e82925381d94.png",
+      "image": "results/tmp/cold_vision/textvqa/54574c24d3acfd7a888c06c4871ef45fa1db09ead49e8b569678e82925381d94.png",
       "image_digest": "54574c24d3acfd7a888c06c4871ef45fa1db09ead49e8b569678e82925381d94",
       "question": "what number is on the player's jersey?",
       "answers": [
@@ -613,7 +613,7 @@
     {
       "dataset": "textvqa",
       "index": 5,
-      "image": "/Users/Vis/Documents/Ideation/results/tmp/cold_vision/textvqa/54574c24d3acfd7a888c06c4871ef45fa1db09ead49e8b569678e82925381d94.png",
+      "image": "results/tmp/cold_vision/textvqa/54574c24d3acfd7a888c06c4871ef45fa1db09ead49e8b569678e82925381d94.png",
       "image_digest": "54574c24d3acfd7a888c06c4871ef45fa1db09ead49e8b569678e82925381d94",
       "question": "what number is on the player's jersey?",
       "answers": [
@@ -673,7 +673,7 @@
     {
       "dataset": "textvqa",
       "index": 6,
-      "image": "/Users/Vis/Documents/Ideation/results/tmp/cold_vision/textvqa/6bb280a80186796a68c8a3aa1314c8bb729d8435940c16fa690f84fc48bb9e27.png",
+      "image": "results/tmp/cold_vision/textvqa/6bb280a80186796a68c8a3aa1314c8bb729d8435940c16fa690f84fc48bb9e27.png",
       "image_digest": "6bb280a80186796a68c8a3aa1314c8bb729d8435940c16fa690f84fc48bb9e27",
       "question": "what is the time?",
       "answers": [
@@ -733,7 +733,7 @@
     {
       "dataset": "textvqa",
       "index": 6,
-      "image": "/Users/Vis/Documents/Ideation/results/tmp/cold_vision/textvqa/6bb280a80186796a68c8a3aa1314c8bb729d8435940c16fa690f84fc48bb9e27.png",
+      "image": "results/tmp/cold_vision/textvqa/6bb280a80186796a68c8a3aa1314c8bb729d8435940c16fa690f84fc48bb9e27.png",
       "image_digest": "6bb280a80186796a68c8a3aa1314c8bb729d8435940c16fa690f84fc48bb9e27",
       "question": "what is the time?",
       "answers": [
@@ -793,7 +793,7 @@
     {
       "dataset": "textvqa",
       "index": 8,
-      "image": "/Users/Vis/Documents/Ideation/results/tmp/cold_vision/textvqa/ab87ce013a0e73fd9b69ca4be412be4c2e654a42b63e392590f6ae319c71618a.png",
+      "image": "results/tmp/cold_vision/textvqa/ab87ce013a0e73fd9b69ca4be412be4c2e654a42b63e392590f6ae319c71618a.png",
       "image_digest": "ab87ce013a0e73fd9b69ca4be412be4c2e654a42b63e392590f6ae319c71618a",
       "question": "who is at the center of all of this?",
       "answers": [
@@ -853,7 +853,7 @@
     {
       "dataset": "textvqa",
       "index": 8,
-      "image": "/Users/Vis/Documents/Ideation/results/tmp/cold_vision/textvqa/ab87ce013a0e73fd9b69ca4be412be4c2e654a42b63e392590f6ae319c71618a.png",
+      "image": "results/tmp/cold_vision/textvqa/ab87ce013a0e73fd9b69ca4be412be4c2e654a42b63e392590f6ae319c71618a.png",
       "image_digest": "ab87ce013a0e73fd9b69ca4be412be4c2e654a42b63e392590f6ae319c71618a",
       "question": "who is at the center of all of this?",
       "answers": [
@@ -913,7 +913,7 @@
     {
       "dataset": "textvqa",
       "index": 9,
-      "image": "/Users/Vis/Documents/Ideation/results/tmp/cold_vision/textvqa/2cd92b6d430032ad40a9333c268ad062951847ade9bec0db53e9dff118d50a0e.png",
+      "image": "results/tmp/cold_vision/textvqa/2cd92b6d430032ad40a9333c268ad062951847ade9bec0db53e9dff118d50a0e.png",
       "image_digest": "2cd92b6d430032ad40a9333c268ad062951847ade9bec0db53e9dff118d50a0e",
       "question": "who was the photographer?",
       "answers": [
@@ -973,7 +973,7 @@
     {
       "dataset": "textvqa",
       "index": 9,
-      "image": "/Users/Vis/Documents/Ideation/results/tmp/cold_vision/textvqa/2cd92b6d430032ad40a9333c268ad062951847ade9bec0db53e9dff118d50a0e.png",
+      "image": "results/tmp/cold_vision/textvqa/2cd92b6d430032ad40a9333c268ad062951847ade9bec0db53e9dff118d50a0e.png",
       "image_digest": "2cd92b6d430032ad40a9333c268ad062951847ade9bec0db53e9dff118d50a0e",
       "question": "who was the photographer?",
       "answers": [
@@ -1033,7 +1033,7 @@
     {
       "dataset": "textvqa",
       "index": 10,
-      "image": "/Users/Vis/Documents/Ideation/results/tmp/cold_vision/textvqa/ebdeb2acff7b9de320ef6a84115c58df442a7aead0a981223d6427a693469c56.png",
+      "image": "results/tmp/cold_vision/textvqa/ebdeb2acff7b9de320ef6a84115c58df442a7aead0a981223d6427a693469c56.png",
       "image_digest": "ebdeb2acff7b9de320ef6a84115c58df442a7aead0a981223d6427a693469c56",
       "question": "are these switches on or off?",
       "answers": [
@@ -1093,7 +1093,7 @@
     {
       "dataset": "textvqa",
       "index": 10,
-      "image": "/Users/Vis/Documents/Ideation/results/tmp/cold_vision/textvqa/ebdeb2acff7b9de320ef6a84115c58df442a7aead0a981223d6427a693469c56.png",
+      "image": "results/tmp/cold_vision/textvqa/ebdeb2acff7b9de320ef6a84115c58df442a7aead0a981223d6427a693469c56.png",
       "image_digest": "ebdeb2acff7b9de320ef6a84115c58df442a7aead0a981223d6427a693469c56",
       "question": "are these switches on or off?",
       "answers": [
@@ -1153,7 +1153,7 @@
     {
       "dataset": "textvqa",
       "index": 11,
-      "image": "/Users/Vis/Documents/Ideation/results/tmp/cold_vision/textvqa/90feb7fc729d465ecfec60dec6211a176a66f6b448f88cfaa5a09399500637d5.png",
+      "image": "results/tmp/cold_vision/textvqa/90feb7fc729d465ecfec60dec6211a176a66f6b448f88cfaa5a09399500637d5.png",
       "image_digest": "90feb7fc729d465ecfec60dec6211a176a66f6b448f88cfaa5a09399500637d5",
       "question": "what candy bar is down there on the bottom?",
       "answers": [
@@ -1213,7 +1213,7 @@
     {
       "dataset": "textvqa",
       "index": 11,
-      "image": "/Users/Vis/Documents/Ideation/results/tmp/cold_vision/textvqa/90feb7fc729d465ecfec60dec6211a176a66f6b448f88cfaa5a09399500637d5.png",
+      "image": "results/tmp/cold_vision/textvqa/90feb7fc729d465ecfec60dec6211a176a66f6b448f88cfaa5a09399500637d5.png",
       "image_digest": "90feb7fc729d465ecfec60dec6211a176a66f6b448f88cfaa5a09399500637d5",
       "question": "what candy bar is down there on the bottom?",
       "answers": [
@@ -1273,7 +1273,7 @@
     {
       "dataset": "textvqa",
       "index": 12,
-      "image": "/Users/Vis/Documents/Ideation/results/tmp/cold_vision/textvqa/bddb538fcbbac46ab1672e352add5324b31ca9d873bd31c39f4f8ccdd58e3592.png",
+      "image": "results/tmp/cold_vision/textvqa/bddb538fcbbac46ab1672e352add5324b31ca9d873bd31c39f4f8ccdd58e3592.png",
       "image_digest": "bddb538fcbbac46ab1672e352add5324b31ca9d873bd31c39f4f8ccdd58e3592",
       "question": "what does the light sign read on the farthest right window?",
       "answers": [
@@ -1333,7 +1333,7 @@
     {
       "dataset": "textvqa",
       "index": 12,
-      "image": "/Users/Vis/Documents/Ideation/results/tmp/cold_vision/textvqa/bddb538fcbbac46ab1672e352add5324b31ca9d873bd31c39f4f8ccdd58e3592.png",
+      "image": "results/tmp/cold_vision/textvqa/bddb538fcbbac46ab1672e352add5324b31ca9d873bd31c39f4f8ccdd58e3592.png",
       "image_digest": "bddb538fcbbac46ab1672e352add5324b31ca9d873bd31c39f4f8ccdd58e3592",
       "question": "what does the light sign read on the farthest right window?",
       "answers": [
