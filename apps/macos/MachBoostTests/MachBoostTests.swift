@@ -95,6 +95,37 @@ final class MachBoostTests: XCTestCase {
         XCTAssertTrue(message.wasCancelled)
     }
 
+    func testTurnMetricsPersistPaidProviderMetadata() throws {
+        let event = try JSONDecoder().decode(
+            ChatEvent.self,
+            from: Data(
+                #"{"request_id":"route-1","message":{"role":"assistant","content":""},"done":true,"total_duration":800000000,"eval_duration":800000000,"eval_count":20,"machboost":{"backend":"external","route":{"source":"external","provider_id":"paid-1","latency_seconds":0.8,"cost_usd":0.00125,"buffered_upstream":true}}}"#.utf8
+            )
+        )
+        var metrics = GenerationTurnMetrics()
+        metrics.absorb(event)
+        let message = ChatMessage(role: .assistant, content: "Done")
+
+        metrics.apply(to: message)
+
+        XCTAssertEqual(message.inferenceSource, "external")
+        XCTAssertEqual(message.providerID, "paid-1")
+        XCTAssertEqual(message.providerLatencySeconds, 0.8)
+        XCTAssertEqual(message.providerCostUSD, 0.00125)
+        XCTAssertEqual(message.tokensPerSecond, 25)
+    }
+
+    @MainActor
+    func testHostDiscoveryRecognizesOnlyMatchingDeviceIdentityAsSelf() {
+        XCTAssertTrue(
+            MachBoostHostDiscovery.isSelf(deviceID: "device-a", localDeviceID: "device-a")
+        )
+        XCTAssertFalse(
+            MachBoostHostDiscovery.isSelf(deviceID: "device-b", localDeviceID: "device-a")
+        )
+        XCTAssertFalse(MachBoostHostDiscovery.isSelf(deviceID: nil, localDeviceID: "device-a"))
+    }
+
     func testCodingPermissionModesApplyDistinctWritePolicies() {
         let smallEdit = APIToolCall(
             function: .init(
@@ -203,6 +234,39 @@ final class MachBoostTests: XCTestCase {
         XCTAssertEqual(snapshot.changes.first { $0.path == "new.txt" }?.status, "Untracked")
     }
 
+    func testWorkspaceChangesSessionExcludesUnrelatedWorkingTreeFiles() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("machboost-session-changes-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        process.arguments = ["-C", root.path, "init", "-b", "main"]
+        process.standardOutput = Pipe()
+        process.standardError = Pipe()
+        try process.run()
+        process.waitUntilExit()
+        XCTAssertEqual(process.terminationStatus, 0)
+        try Data("unrelated\n".utf8).write(to: root.appendingPathComponent("other.txt"))
+
+        var activity = CodingToolActivity(
+            call: APIToolCall(function: .init(name: "create_file", arguments: .object([:])))
+        )
+        activity.state = .succeeded
+        activity.changedPath = "Sources/New.swift"
+        activity.changePatch = "--- /dev/null\n+++ b/Sources/New.swift\n@@ -0,0 +1 @@\n+let ready = true"
+
+        let snapshot = WorkspaceChanges.session(
+            workspaceRoot: root.path,
+            activities: [activity]
+        )
+
+        XCTAssertEqual(snapshot.changes.map(\.path), ["Sources/New.swift"])
+        XCTAssertEqual(snapshot.changes.first?.status, "Created")
+        XCTAssertFalse(snapshot.changes.contains { $0.path == "other.txt" })
+    }
+
     func testCatalogSchemaDecodesDesktopFields() throws {
         let data = Data(
             """
@@ -261,6 +325,33 @@ final class MachBoostTests: XCTestCase {
         XCTAssertEqual(object["workspace_id"] as? String, "workspace-123")
         XCTAssertEqual(options["num_predict"] as? Int, 64)
         XCTAssertEqual(options["affinity_key"] as? String, "thread-1")
+    }
+
+    func testChatRequestEncodesPaidProviderModelRoute() throws {
+        let request = ChatRequest(
+            requestID: "chat-route-1",
+            model: "mlx-community/Muse-Glimmer-30B-4bit",
+            messages: [.init(role: "user", content: "Hello")],
+            context: [],
+            options: .init(maxTokens: 64, temperature: 0.2, affinityKey: nil),
+            machboost: .init(
+                route: .init(
+                    mode: "local_first",
+                    providerID: "production",
+                    model: "gpt-5-mini"
+                )
+            )
+        )
+
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? [String: Any]
+        )
+        let extensionObject = try XCTUnwrap(object["machboost"] as? [String: Any])
+        let route = try XCTUnwrap(extensionObject["route"] as? [String: Any])
+
+        XCTAssertEqual(route["mode"] as? String, "local_first")
+        XCTAssertEqual(route["provider_id"] as? String, "production")
+        XCTAssertEqual(route["model"] as? String, "gpt-5-mini")
     }
 
     func testMuseCatalogAndRequestExposeNativeCapabilities() throws {
