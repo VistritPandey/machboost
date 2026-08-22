@@ -17,7 +17,7 @@
       "transformers": "5.5.4",
       "Pillow": "11.2.1"
     },
-    "image": "/Users/Vis/Documents/Ideation/results/tmp/vision_cache_fixture.png",
+    "image": "results/tmp/vision_cache_fixture.png",
     "image_sha256": "aa4cf33c7836bf192bd58ef5c6dc8ff7cb29e5ba4e7c61d25b066d5cc9bc27a0",
     "image_bytes": 37119,
     "prompts": 4,
