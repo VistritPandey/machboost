@@ -2,7 +2,7 @@ import Foundation
 import Security
 
 enum KeychainStore {
-    private static let service = "com.vistritpandey.MachBoost"
+    private static let service = "io.machboost.MachBoost"
     private static let account = "lan-api-token"
 
     static func token() -> String? {
