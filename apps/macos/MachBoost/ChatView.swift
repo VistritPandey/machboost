@@ -19,6 +19,7 @@ struct ChatView: View {
     @State private var showsGenerationControls = false
     @State private var showsModelBrowser = false
     @State private var modelSearch = ""
+    @State private var modelFilter = ModelBrowserFilter.all
     @State private var pendingModelDownload: CatalogModel?
     @State private var pendingToolApproval: APIToolCall?
     @State private var toolApprovalContinuation: CheckedContinuation<Bool, Never>?
@@ -162,107 +163,121 @@ struct ChatView: View {
     }
 
     private var header: some View {
-        HStack(spacing: 12) {
-            Button {
-                showsModelBrowser.toggle()
-            } label: {
-                HStack(spacing: 9) {
-                    Image(systemName: modelIcon(selectedModel))
-                        .foregroundStyle(.green)
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(selectedModel?.displayName ?? conversation.model)
-                            .font(.body.weight(.medium))
-                            .lineLimit(1)
-                        if let selectedModel {
-                            Text(modelSubtitle(selectedModel))
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
-                    }
-                    Spacer(minLength: 8)
-                    Image(systemName: "chevron.up.chevron.down")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .padding(.horizontal, 10)
-            .frame(width: 330, height: 36)
-            .background(Color(nsColor: .controlBackgroundColor))
-            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
-            }
-            .accessibilityIdentifier("chat-model-picker")
-            .popover(isPresented: $showsModelBrowser, arrowEdge: .bottom) {
-                modelBrowser
-            }
-
-            workspaceMenu
-
-            Button {
-                codingMode.toggle()
-            } label: {
-                Image(systemName: codingMode ? "hammer.fill" : "hammer")
-                    .foregroundStyle(codingMode ? Color.green : Color.secondary)
-            }
-            .buttonStyle(.plain)
-            .disabled(selectedWorkspace == nil || selectedModel?.supportsTools != true)
-            .accessibilityLabel("Coding mode")
-            .help("Coding mode")
-
-            if codingSessionAvailable {
+        GeometryReader { geometry in
+            let compact = geometry.size.width < 780
+            let narrow = geometry.size.width < 590
+            HStack(spacing: compact ? 8 : 12) {
                 Button {
-                    showsWorkspaceChanges.toggle()
-                    if showsWorkspaceChanges {
-                        refreshWorkspaceChanges()
-                    }
+                    showsModelBrowser.toggle()
                 } label: {
-                    Image(systemName: showsWorkspaceChanges ? "sidebar.trailing" : "sidebar.trailing")
-                        .foregroundStyle(showsWorkspaceChanges ? Color.green : Color.secondary)
+                    HStack(spacing: 9) {
+                        Image(systemName: modelIcon(selectedModel))
+                            .font(.body.weight(.semibold))
+                            .foregroundStyle(.green)
+                            .frame(width: 28, height: 28)
+                            .background(Color.green.opacity(0.12))
+                            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(selectedModel?.displayName ?? conversation.model)
+                                .font(.body.weight(.semibold))
+                                .lineLimit(1)
+                            if !compact, let selectedModel {
+                                Text(modelSubtitle(selectedModel))
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                        }
+                        Spacer(minLength: 4)
+                        Image(systemName: "chevron.down")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Workspace changes")
-                .accessibilityIdentifier("workspace-changes-toggle")
-                .help("Show workspace changes")
-            }
+                .padding(.horizontal, 7)
+                .frame(
+                    width: narrow ? 190 : (compact ? 250 : min(330, geometry.size.width * 0.38)),
+                    height: 40
+                )
+                .background(Color(nsColor: .controlBackgroundColor))
+                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
+                }
+                .accessibilityIdentifier("chat-model-picker")
+                .popover(isPresented: $showsModelBrowser, arrowEdge: .bottom) {
+                    modelBrowser
+                }
 
-            Spacer()
+                workspaceMenu(compact: narrow)
 
-            Label(
-                appState.inferenceLabel,
-                systemImage: appState.inferenceMode == .team ? "network" : "desktopcomputer"
-            )
-            .font(.caption)
-            .foregroundStyle(appState.inferenceMode == .team ? Color.green : Color.secondary)
+                Button {
+                    codingMode.toggle()
+                } label: {
+                    Image(systemName: codingMode ? "hammer.fill" : "hammer")
+                        .foregroundStyle(codingMode ? Color.green : Color.secondary)
+                }
+                .buttonStyle(.plain)
+                .disabled(selectedWorkspace == nil || selectedModel?.supportsTools != true)
+                .accessibilityLabel("Coding mode")
+                .help("Coding mode")
 
-            Button {
-                showsGenerationControls.toggle()
-            } label: {
-                Image(systemName: "slider.horizontal.3")
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Generation controls")
-            .help("Generation controls")
-            .popover(isPresented: $showsGenerationControls, arrowEdge: .bottom) {
-                generationControls
-            }
+                if codingSessionAvailable {
+                    Button {
+                        showsWorkspaceChanges.toggle()
+                        if showsWorkspaceChanges {
+                            refreshWorkspaceChanges()
+                        }
+                    } label: {
+                        Image(systemName: "sidebar.trailing")
+                            .foregroundStyle(showsWorkspaceChanges ? Color.green : Color.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Workspace changes")
+                    .accessibilityIdentifier("workspace-changes-toggle")
+                    .help("Show workspace changes")
+                }
 
-            if isCompactingContext {
-                Label("Summarizing", systemImage: "text.append")
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.green)
-            } else if let activeRequestID {
-                Text(activeRequestID.suffix(8))
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+
+                if !compact {
+                    Label(
+                        appState.inferenceLabel,
+                        systemImage: appState.inferenceMode == .team ? "network" : "desktopcomputer"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(appState.inferenceMode == .team ? Color.green : Color.secondary)
+                    .lineLimit(1)
+                }
+
+                Button {
+                    showsGenerationControls.toggle()
+                } label: {
+                    Image(systemName: "slider.horizontal.3")
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Generation controls")
+                .help("Generation controls")
+                .popover(isPresented: $showsGenerationControls, arrowEdge: .bottom) {
+                    generationControls
+                }
+
+                if !compact, isCompactingContext {
+                    Label("Summarizing", systemImage: "text.append")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.green)
+                } else if !compact, let activeRequestID {
+                    Text(activeRequestID.suffix(8))
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                }
             }
+            .padding(.horizontal, compact ? 10 : 16)
         }
-        .padding(.horizontal, 16)
-        .frame(height: 48)
+        .frame(height: 52)
     }
 
     private var modelBrowser: some View {
@@ -281,6 +296,16 @@ struct ChatView: View {
                 .help("Refresh model catalog")
             }
             .padding(12)
+
+            Picker("Model filter", selection: $modelFilter) {
+                ForEach(ModelBrowserFilter.allCases) { filter in
+                    Label(filter.title, systemImage: filter.icon).tag(filter)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .padding(.horizontal, 12)
+            .padding(.bottom, 10)
 
             Divider()
 
@@ -340,7 +365,9 @@ struct ChatView: View {
                 Image(systemName: modelIcon(model))
                     .font(.title3)
                     .foregroundStyle(model.supportsReasoning ? Color.green : Color.accentColor)
-                    .frame(width: 30)
+                    .frame(width: 30, height: 30)
+                    .background(Color.green.opacity(selected ? 0.18 : 0.08))
+                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
 
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 7) {
@@ -410,13 +437,14 @@ struct ChatView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
+            .background(selected ? Color.green.opacity(0.08) : Color.clear)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel("\(model.displayName), \(model.cached ? "ready" : "download")")
     }
 
-    private var workspaceMenu: some View {
+    private func workspaceMenu(compact: Bool) -> some View {
         Menu {
             Button {
                 conversation.workspaceID = nil
@@ -477,12 +505,14 @@ struct ChatView: View {
                 } else {
                     Image(systemName: "folder")
                 }
-                Text(selectedWorkspace?.name ?? "Repository")
-                    .lineLimit(1)
-                if let workspace = selectedWorkspace {
-                    Text("\(workspace.fileCount)")
-                        .foregroundStyle(.secondary)
-                        .monospacedDigit()
+                if !compact {
+                    Text(selectedWorkspace?.name ?? "Repository")
+                        .lineLimit(1)
+                    if let workspace = selectedWorkspace {
+                        Text("\(workspace.fileCount)")
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    }
                 }
             }
         }
@@ -794,10 +824,25 @@ struct ChatView: View {
                 else {
                     return false
                 }
-                return query.isEmpty
+                let matchesSearch = query.isEmpty
                     || model.name.lowercased().contains(query)
                     || model.displayName.lowercased().contains(query)
                     || (model.repository?.lowercased().contains(query) ?? false)
+                guard matchesSearch else { return false }
+                switch modelFilter {
+                case .all:
+                    return true
+                case .ready:
+                    return model.cached
+                case .loaded:
+                    return appState.activeLoadedModels.contains {
+                        $0.model == model.name || $0.model == model.repository
+                    }
+                case .vision:
+                    return model.supportsVision
+                case .tools:
+                    return model.supportsTools
+                }
             }
             .sorted { lhs, rhs in
                 if lhs.cached != rhs.cached { return lhs.cached }
@@ -927,7 +972,7 @@ struct ChatView: View {
                     from: data
                 )
             else {
-                return []
+                return [CodingToolActivity]()
             }
             return activities
         }
@@ -1651,6 +1696,36 @@ enum ConversationCompaction {
         let completed = messages.filter { !$0.content.isEmpty && !$0.wasCancelled }
         guard completed.count > keepRecent else { return [] }
         return Array(completed.dropLast(keepRecent))
+    }
+}
+
+private enum ModelBrowserFilter: String, CaseIterable, Identifiable {
+    case all
+    case ready
+    case loaded
+    case vision
+    case tools
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .all: "All"
+        case .ready: "Ready"
+        case .loaded: "Loaded"
+        case .vision: "Vision"
+        case .tools: "Tools"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .all: "square.grid.2x2"
+        case .ready: "checkmark.circle"
+        case .loaded: "memorychip"
+        case .vision: "eye"
+        case .tools: "wrench.and.screwdriver"
+        }
     }
 }
 
