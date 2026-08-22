@@ -2023,6 +2023,7 @@ private struct MessageRow: View {
     private var hasStats: Bool {
         message.tokensPerSecond != nil
             || message.timeToFirstTokenSeconds != nil
+            || message.inferenceSource != nil
             || message.wasCancelled
     }
 
@@ -2077,9 +2078,23 @@ private struct MessageRow: View {
 
     private var stats: some View {
         HStack(spacing: 10) {
+            if let source = message.inferenceSource {
+                Label(
+                    source == "external" ? "Paid API" : (source == "mixed" ? "Mixed route" : "Local"),
+                    systemImage: source == "external" ? "cloud" : "desktopcomputer"
+                )
+                .help(message.providerID.map { "Provider: \($0)" } ?? "MachBoost local inference")
+            }
             if let rate = message.tokensPerSecond {
-                Label("\(rate, specifier: "%.1f") tok/s", systemImage: "gauge.with.dots.needle.50percent")
-                    .help("Model tokens per decode second, including reasoning and tool protocol")
+                Label(
+                    "\(rate, specifier: "%.1f") \(message.inferenceSource == "external" ? "effective tok/s" : "tok/s")",
+                    systemImage: "gauge.with.dots.needle.50percent"
+                )
+                .help(
+                    message.inferenceSource == "external"
+                        ? "Completion tokens divided by paid-provider request latency; upstream decode time was not reported"
+                        : "Model tokens per decode second, including reasoning and tool protocol"
+                )
             }
             if let ttft = message.timeToFirstTokenSeconds {
                 Label("\(ttft, specifier: "%.2f")s TTFT", systemImage: "timer")
@@ -2087,6 +2102,13 @@ private struct MessageRow: View {
             if let tokens = message.generatedTokens {
                 Text("\(tokens) total model tokens")
                     .help("Includes answer, reasoning, and tool protocol tokens")
+            }
+            if let latency = message.providerLatencySeconds {
+                Text("\(latency, specifier: "%.2f")s API")
+            }
+            if let cost = message.providerCostUSD, cost > 0 {
+                Text(cost, format: .currency(code: "USD").precision(.fractionLength(4...6)))
+                    .help("Estimated provider cost from configured token pricing")
             }
             if message.wasCancelled {
                 Text("Stopped")
