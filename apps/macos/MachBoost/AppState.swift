@@ -63,8 +63,21 @@ final class AppState {
             || environment["MACHBOOST_TESTING"] == "1"
             || environment["XCTestConfigurationFilePath"] != nil
         let storedProfile = isTesting ? nil : Self.loadTeamProfile()
-        let storedProfiles = isTesting ? [] : Self.loadTeamProfiles(fallback: storedProfile)
-        let selectedProfile = storedProfile ?? storedProfiles.first
+        let loadedProfiles = isTesting ? [] : Self.loadTeamProfiles(fallback: storedProfile)
+        let storedProfiles = loadedProfiles.filter {
+            !Self.isLocalTeamEndpoint($0.endpoint)
+        }
+        let selectedProfile = storedProfile.flatMap { selected in
+            storedProfiles.first { $0.id == selected.id }
+        } ?? storedProfiles.first
+        if !isTesting, storedProfiles.count != loadedProfiles.count {
+            Self.saveTeamProfiles(storedProfiles)
+            if let selectedProfile {
+                Self.saveTeamProfile(selectedProfile)
+            } else {
+                UserDefaults.standard.removeObject(forKey: Self.teamProfileKey)
+            }
+        }
         let storedMode = InferenceMode(
             rawValue: UserDefaults.standard.string(forKey: Self.inferenceModeKey) ?? "local"
         ) ?? .local
@@ -128,6 +141,11 @@ final class AppState {
     func connectToTeamHost(endpoint rawEndpoint: String, token: String) async {
         do {
             let endpoint = try Self.normalizedTeamEndpoint(rawEndpoint)
+            guard !Self.isLocalTeamEndpoint(endpoint) else {
+                throw AppStateError.invalidTeamHost(
+                    "This address belongs to this Mac. Use This Mac in the inference pool instead."
+                )
+            }
             let normalizedToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !normalizedToken.isEmpty else {
                 throw AppStateError.invalidTeamHost("Enter the API key created by the host.")
@@ -1015,6 +1033,33 @@ final class AppState {
             throw AppStateError.invalidTeamHost("Enter a valid Team host URL.")
         }
         return url
+    }
+
+    static func isLocalTeamEndpoint(
+        _ endpoint: URL,
+        localNames: Set<String>? = nil,
+        localAddresses: Set<String>? = nil
+    ) -> Bool {
+        guard let rawHost = endpoint.host else { return false }
+        let host = normalizedHost(rawHost)
+        var names = localNames ?? [
+            ProcessInfo.processInfo.hostName,
+            Host.current().name ?? "",
+        ]
+        names.formUnion(["localhost", "localhost.localdomain"])
+        let addresses = localAddresses ?? Set(Host.current().addresses)
+        let normalizedNames = Set(names.map(normalizedHost).filter { !$0.isEmpty })
+        let normalizedAddresses = Set(addresses.map(normalizedHost).filter { !$0.isEmpty })
+        return normalizedNames.contains(host)
+            || normalizedAddresses.contains(host)
+            || host == "127.0.0.1"
+            || host == "::1"
+    }
+
+    private static func normalizedHost(_ value: String) -> String {
+        value.trimmingCharacters(in: CharacterSet(charactersIn: "[] "))
+            .trimmingCharacters(in: CharacterSet(charactersIn: "."))
+            .lowercased()
     }
 }
 
