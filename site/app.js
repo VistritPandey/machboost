@@ -1,5 +1,20 @@
-const repository = "VistritPandey/machboost";
-const latestReleaseURL = `https://github.com/${repository}/releases/latest`;
+const configuredRepository = document.documentElement.dataset.repository?.trim() ?? "";
+const pageOwner = window.location.hostname.endsWith(".github.io")
+  ? window.location.hostname.split(".")[0]
+  : "";
+const pageProject = window.location.pathname.split("/").filter(Boolean)[0] ?? "";
+const inferredRepository = pageOwner && pageProject ? `${pageOwner}/${pageProject}` : "";
+const repository = /^[^/\s]+\/[^/\s]+$/.test(configuredRepository)
+  ? configuredRepository
+  : inferredRepository;
+const repositoryURL = repository ? `https://github.com/${repository}` : "https://github.com";
+const latestReleaseURL = `${repositoryURL}/releases/latest`;
+
+function initializeRepositoryLinks() {
+  document.querySelectorAll("[data-repository-path]").forEach((link) => {
+    link.href = `${repositoryURL}${link.dataset.repositoryPath ?? ""}`;
+  });
+}
 
 function formatBytes(bytes) {
   if (!Number.isFinite(bytes) || bytes <= 0) {
@@ -64,6 +79,13 @@ async function initializeRelease() {
   downloadButtons.forEach((button) => {
     button.href = latestReleaseURL;
   });
+
+  if (!repository) {
+    if (releaseStatus) {
+      releaseStatus.textContent = "Open the project on GitHub to find the latest macOS release";
+    }
+    return;
+  }
 
   try {
     const response = await fetch(`https://api.github.com/repos/${repository}/releases/latest`, {
@@ -155,6 +177,7 @@ function initializeCopyButtons() {
 document.addEventListener("DOMContentLoaded", () => {
   initializeIcons();
   initializeMobileNavigation();
+  initializeRepositoryLinks();
   initializeCopyButtons();
   initializeRelease();
 });
