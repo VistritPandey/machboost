@@ -11,18 +11,18 @@ struct ConnectionsView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 28) {
+            VStack(alignment: .leading, spacing: 24) {
                 header
-                currentDevice
+                inferencePool
                 availableDevices
-                connectedDevices
                 advancedConnection
                 if appState.inferenceMode == .team, !appState.teamCatalog.isEmpty {
                     remoteModels
                 }
             }
-            .padding(28)
-            .frame(maxWidth: 920, alignment: .leading)
+            .padding(24)
+            .frame(maxWidth: 1120, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .navigationTitle("Connections")
         .sheet(item: $pendingNearbyHost) { host in
@@ -48,47 +48,177 @@ struct ConnectionsView: View {
     }
 
     private var header: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .top, spacing: 14) {
+                connectionHeader
+                Spacer(minLength: 16)
+                connectionBadge
+            }
+            VStack(alignment: .leading, spacing: 12) {
+                connectionHeader
+                connectionBadge
+            }
+        }
+    }
+
+    private var connectionHeader: some View {
         HStack(alignment: .top, spacing: 14) {
             Image(systemName: "point.3.connected.trianglepath.dotted")
                 .font(.title2)
                 .foregroundStyle(.green)
                 .frame(width: 34, height: 34)
             VStack(alignment: .leading, spacing: 4) {
-                Text("Choose a device")
+                Text("Inference devices")
                     .font(.title2.weight(.semibold))
-                Text("Run models here or connect to another MachBoost Mac on your network.")
+                Text("Use this Mac, connect to another Mac, or let the pool route around busy hosts.")
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            Spacer()
-            connectionBadge
         }
     }
 
-    private var currentDevice: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            sectionTitle("This Mac", systemImage: "desktopcomputer")
-            HStack(spacing: 14) {
-                statusIndicator(active: appState.inferenceMode == .local)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(Host.current().localizedName ?? "This Mac")
-                        .font(.body.weight(.medium))
-                    Text("\(appState.catalog.filter(\.cached).count) models ready, \(appState.loadedModels.count) loaded")
+    private var inferencePool: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline) {
+                sectionTitle("Your inference pool", systemImage: "point.3.filled.connected.trianglepath.dotted")
+                Spacer()
+                Toggle("Use this Mac as backup", isOn: includeLocalBinding)
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .help("Route work here when connected devices are busy")
+            }
+            Text("MachBoost prefers a host where the model is already loaded, then spills work to an available host when queues grow.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+
+            ScrollView(.horizontal) {
+                HStack(alignment: .center, spacing: 10) {
+                    localHostNode
+                    ForEach(appState.teamHosts) { host in
+                        Image(systemName: "arrow.left.arrow.right")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .accessibilityHidden(true)
+                        remoteHostNode(host)
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+            .scrollIndicators(.hidden)
+        }
+    }
+
+    private var localHostNode: some View {
+        let useAction: (() -> Void)? = appState.inferenceMode == .local
+            ? nil
+            : { appState.useLocalInference() }
+        return hostNode(
+            name: Host.current().localizedName ?? "This Mac",
+            subtitle: "This Mac",
+            online: true,
+            selected: appState.inferenceMode == .local,
+            active: appState.metrics?.scheduler.activeRequests ?? 0,
+            queued: appState.metrics?.scheduler.queuedRequests ?? 0,
+            models: appState.catalog.filter(\.cached).count,
+            loaded: appState.loadedModels.count,
+            useAction: useAction,
+            removeAction: nil
+        )
+    }
+
+    private func remoteHostNode(_ host: TeamHostProfile) -> some View {
+        let snapshot = appState.teamHostSnapshots[host.id]
+        let selected = appState.inferenceMode == .team && appState.teamHost?.id == host.id
+        let useAction: (() -> Void)? = snapshot?.isOnline == true && !selected
+            ? { appState.selectTeamHost(host) }
+            : nil
+        return hostNode(
+            name: host.hostName,
+            subtitle: snapshot?.isOnline == true ? host.endpoint.host ?? "Remote Mac" : "Unavailable",
+            online: snapshot?.isOnline == true,
+            selected: selected,
+            active: snapshot?.activeRequests ?? 0,
+            queued: snapshot?.queuedRequests ?? 0,
+            models: snapshot?.catalog.filter(\.cached).count ?? 0,
+            loaded: snapshot?.loadedModels.count ?? 0,
+            useAction: useAction,
+            removeAction: { appState.removeTeamHost(host) }
+        )
+    }
+
+    private func hostNode(
+        name: String,
+        subtitle: String,
+        online: Bool,
+        selected: Bool,
+        active: Int,
+        queued: Int,
+        models: Int,
+        loaded: Int,
+        useAction: (() -> Void)?,
+        removeAction: (() -> Void)?
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 9) {
+                Image(systemName: "desktopcomputer")
+                    .foregroundStyle(selected ? Color.green : Color.secondary)
+                    .frame(width: 28, height: 28)
+                    .background(selected ? Color.green.opacity(0.12) : Color.secondary.opacity(0.08))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(name)
+                        .font(.body.weight(.semibold))
+                        .lineLimit(1)
+                    HStack(spacing: 5) {
+                        statusIndicator(active: online)
+                        Text(subtitle)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+                Spacer(minLength: 4)
+                if selected {
+                    Text("IN USE")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(.green)
+                }
+            }
+
+            HStack(spacing: 16) {
+                compactMetric("Active", value: active)
+                compactMetric("Queued", value: queued)
+                compactMetric("Ready", value: models)
+                compactMetric("Loaded", value: loaded)
+            }
+
+            HStack {
+                if let useAction {
+                    Button("Use Device", action: useAction)
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                } else {
+                    Text(selected ? "Handling new requests" : "Available for spillover")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                if appState.inferenceMode == .local {
-                    Label("In use", systemImage: "checkmark.circle.fill")
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(.green)
-                } else {
-                    Button("Use This Mac") {
-                        appState.useLocalInference()
+                if let removeAction {
+                    Button(role: .destructive, action: removeAction) {
+                        Image(systemName: "trash")
                     }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.borderless)
+                    .help("Forget device")
                 }
             }
-            .padding(.vertical, 8)
+        }
+        .padding(14)
+        .frame(width: 280, height: 146, alignment: .topLeading)
+        .background(Color(nsColor: .controlBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(selected ? Color.green.opacity(0.7) : Color(nsColor: .separatorColor), lineWidth: 1)
         }
     }
 
@@ -104,98 +234,57 @@ struct ConnectionsView: View {
             }
 
             if nearbyHosts.isEmpty {
-                Text("No new MachBoost devices found yet. Make sure LAN access is enabled on the host, or connect by address below.")
+                Text("No other MachBoost devices found yet. LAN access must be enabled on the host. This Mac is intentionally hidden from this list.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             } else {
-                VStack(spacing: 0) {
+                LazyVGrid(
+                    columns: [GridItem(.adaptive(minimum: 250, maximum: 360), spacing: 12)],
+                    alignment: .leading,
+                    spacing: 12
+                ) {
                     ForEach(nearbyHosts) { host in
-                        HStack(spacing: 14) {
-                            Image(systemName: "desktopcomputer.and.arrow.down")
-                                .foregroundStyle(.green)
-                                .frame(width: 24)
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(host.name)
-                                    .font(.body.weight(.medium))
-                                Text(host.endpoint.absoluteString)
-                                    .font(.caption.monospaced())
-                                    .foregroundStyle(.secondary)
+                        VStack(alignment: .leading, spacing: 12) {
+                            HStack(spacing: 10) {
+                                Image(systemName: "desktopcomputer.and.arrow.down")
+                                    .foregroundStyle(.green)
+                                    .frame(width: 28, height: 28)
+                                    .background(Color.green.opacity(0.1))
+                                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(host.name)
+                                        .font(.body.weight(.semibold))
+                                        .lineLimit(1)
+                                    Text(host.version.map { "MachBoost \($0)" } ?? "MachBoost host")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
                             }
-                            Spacer()
-                            Button("Connect") {
+                            Text(host.endpoint.absoluteString)
+                                .font(.caption.monospaced())
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .textSelection(.enabled)
+                            Button {
                                 pendingNearbyHost = host
+                            } label: {
+                                Label("Connect", systemImage: "link.badge.plus")
+                                    .frame(maxWidth: .infinity)
                             }
                             .buttonStyle(.borderedProminent)
                             .tint(.green)
                         }
-                        .padding(.vertical, 10)
-                        if host.id != nearbyHosts.last?.id { Divider() }
+                        .padding(14)
+                        .background(Color(nsColor: .controlBackgroundColor))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 8)
+                                .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
+                        }
                     }
                 }
             }
         }
-    }
-
-    @ViewBuilder
-    private var connectedDevices: some View {
-        if !appState.teamHosts.isEmpty {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    sectionTitle("Connected devices", systemImage: "link")
-                    Spacer()
-                    Toggle("Use this Mac as backup", isOn: includeLocalBinding)
-                        .toggleStyle(.switch)
-                        .help("Route work here when connected devices are busy")
-                }
-                VStack(spacing: 0) {
-                    ForEach(appState.teamHosts) { host in
-                        connectedHostRow(host)
-                        if host.id != appState.teamHosts.last?.id { Divider() }
-                    }
-                }
-            }
-        }
-    }
-
-    private func connectedHostRow(_ host: TeamHostProfile) -> some View {
-        let snapshot = appState.teamHostSnapshots[host.id]
-        let selected = appState.inferenceMode == .team && appState.teamHost?.id == host.id
-        return HStack(spacing: 14) {
-            statusIndicator(active: snapshot?.isOnline == true)
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 7) {
-                    Text(host.hostName).font(.body.weight(.medium))
-                    if selected {
-                        Text("In use")
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(.green)
-                    }
-                }
-                Text(host.endpoint.absoluteString)
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-            }
-            Spacer()
-            if let snapshot {
-                metric("Active", value: "\(snapshot.activeRequests)")
-                metric("Queued", value: "\(snapshot.queuedRequests)")
-                metric("Models", value: "\(snapshot.catalog.filter(\.cached).count)")
-            }
-            Button(selected ? "Using" : "Use") {
-                appState.selectTeamHost(host)
-            }
-            .buttonStyle(.bordered)
-            .disabled(snapshot?.isOnline != true || selected)
-            Button(role: .destructive) {
-                appState.removeTeamHost(host)
-            } label: {
-                Image(systemName: "trash")
-            }
-            .buttonStyle(.borderless)
-            .help("Forget device")
-        }
-        .padding(.vertical, 10)
     }
 
     private var advancedConnection: some View {
@@ -268,21 +357,13 @@ struct ConnectionsView: View {
             VStack(alignment: .leading, spacing: 10) {
                 Text("Ask the host for another model")
                     .font(.headline)
-                HStack(spacing: 10) {
-                    TextField("MLX repository or model alias", text: $requestedModel)
-                        .textFieldStyle(.roundedBorder)
-                    TextField("Reason (optional)", text: $requestNote)
-                        .textFieldStyle(.roundedBorder)
-                    Button {
-                        let model = requestedModel
-                        let note = requestNote
-                        requestedModel = ""
-                        requestNote = ""
-                        Task { await appState.requestModelFromHost(model, note: note) }
-                    } label: {
-                        Label("Request", systemImage: "paperplane")
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 10) {
+                        modelRequestFields
                     }
-                    .disabled(requestedModel.trimmingCharacters(in: .whitespaces).isEmpty)
+                    VStack(alignment: .leading, spacing: 10) {
+                        modelRequestFields
+                    }
                 }
             }
         }
@@ -290,7 +371,9 @@ struct ConnectionsView: View {
 
     private var nearbyHosts: [DiscoveredMachBoostHost] {
         let saved = Set(appState.teamHosts.map { $0.endpoint.absoluteString })
-        return appState.hostDiscovery.hosts.filter { !saved.contains($0.endpoint.absoluteString) }
+        return appState.hostDiscovery.hosts.filter {
+            $0.deviceID != appState.deviceID && !saved.contains($0.endpoint.absoluteString)
+        }
     }
 
     private func connect(endpoint: String, token: String, onSuccess: (() -> Void)? = nil) {
@@ -337,15 +420,34 @@ struct ConnectionsView: View {
             .font(.headline)
     }
 
-    private func metric(_ label: String, value: String) -> some View {
+    private func compactMetric(_ label: String, value: Int) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(label)
-                .font(.caption)
+                .font(.caption2)
                 .foregroundStyle(.secondary)
-            Text(value)
+            Text("\(value)")
                 .font(.callout.weight(.medium))
+                .monospacedDigit()
                 .lineLimit(1)
         }
+    }
+
+    @ViewBuilder
+    private var modelRequestFields: some View {
+        TextField("MLX repository or model alias", text: $requestedModel)
+            .textFieldStyle(.roundedBorder)
+        TextField("Reason (optional)", text: $requestNote)
+            .textFieldStyle(.roundedBorder)
+        Button {
+            let model = requestedModel
+            let note = requestNote
+            requestedModel = ""
+            requestNote = ""
+            Task { await appState.requestModelFromHost(model, note: note) }
+        } label: {
+            Label("Request", systemImage: "paperplane")
+        }
+        .disabled(requestedModel.trimmingCharacters(in: .whitespaces).isEmpty)
     }
 }
 
