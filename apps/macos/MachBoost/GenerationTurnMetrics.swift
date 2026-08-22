@@ -7,6 +7,10 @@ struct GenerationTurnMetrics: Equatable {
     private(set) var timeToFirstTokenSeconds: Double?
     private(set) var wasCancelled = false
     private(set) var rounds = 0
+    private(set) var inferenceSource: String?
+    private(set) var providerID: String?
+    private(set) var providerLatencySeconds: Double?
+    private(set) var providerCostUSD: Double?
 
     mutating func absorb(_ event: ChatEvent) {
         guard event.done else { return }
@@ -29,6 +33,18 @@ struct GenerationTurnMetrics: Equatable {
         if timeToFirstTokenSeconds == nil {
             timeToFirstTokenSeconds = event.machboost?.timeToFirstTokenSeconds
         }
+        if let route = event.machboost?.route {
+            recordInferenceSource(route.source)
+            providerID = route.providerID ?? providerID
+            if let latency = route.latencySeconds {
+                providerLatencySeconds = (providerLatencySeconds ?? 0) + latency
+            }
+            if let cost = route.costUSD {
+                providerCostUSD = (providerCostUSD ?? 0) + cost
+            }
+        } else if event.machboost?.backend != nil {
+            recordInferenceSource("local")
+        }
     }
 
     var tokensPerSecond: Double? {
@@ -42,5 +58,18 @@ struct GenerationTurnMetrics: Equatable {
         message.timeToFirstTokenSeconds = timeToFirstTokenSeconds
         message.generatedTokens = generatedTokens > 0 ? generatedTokens : nil
         message.tokensPerSecond = tokensPerSecond
+        message.inferenceSource = inferenceSource
+        message.providerID = providerID
+        message.providerLatencySeconds = providerLatencySeconds
+        message.providerCostUSD = providerCostUSD
+    }
+
+    private mutating func recordInferenceSource(_ source: String) {
+        guard !source.isEmpty else { return }
+        if let inferenceSource, inferenceSource != source {
+            self.inferenceSource = "mixed"
+        } else {
+            self.inferenceSource = source
+        }
     }
 }
