@@ -180,7 +180,8 @@
               <h3>Drop-in APIs</h3>
               <p>
                 Connect through OpenAI Chat Completions and Responses, Anthropic
-                Messages, Ollama-compatible routes, or the Python client.
+                Messages, Ollama-compatible routes, the Python client, or a named
+                CLI device profile whose token stays in macOS Keychain.
               </p>
             </li>
           </ul>
@@ -202,7 +203,7 @@
               reuse validated repository knowledge without exposing private work,
               while exact reusable prefixes can avoid repeated prefill when requests
               genuinely overlap. Budgeted external providers remain an explicit
-              fallback.
+              fallback, with a separate provider-model mapping and recorded cost.
             </p>
             <a
               class="text-link"
@@ -232,7 +233,7 @@ export OPENAI_API_KEY="mbk_employee_key"</code></pre>
           <div>
             <i data-lucide="users" aria-hidden="true"></i>
             <h3>Connect inside the app</h3>
-            <p>Nearby Macs appear under Connections. Choose a device, enter its scoped key once, and select a ready model.</p>
+            <p>The inference pool separates this Mac from nearby hosts, shows live queues, and stores each scoped key once.</p>
           </div>
           <div>
             <i data-lucide="brain-circuit" aria-hidden="true"></i>
