@@ -32,7 +32,9 @@
 		<true/>
 	</dict>
 	<key>NSHumanReadableCopyright</key>
-	<string>Copyright © 2026 Vistrit Pandey. MIT licensed.</string>
+	<string>Copyright © 2026 MachBoost contributors. MIT licensed.</string>
+	<key>MachBoostRepository</key>
+	<string>$(MACHBOOST_REPOSITORY)</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>MachBoost discovers and connects to inference hosts on your local network.</string>
 	<key>NSBonjourServices</key>
@@ -46,7 +48,7 @@
 	<key>SUAutomaticallyUpdate</key>
 	<true/>
 	<key>SUFeedURL</key>
-	<string>https://github.com/VistritPandey/machboost/releases/latest/download/appcast.xml</string>
+	<string>https://github.com/$(MACHBOOST_REPOSITORY)/releases/latest/download/appcast.xml</string>
 	<key>SUPublicEDKey</key>
 	<string>$(SPARKLE_PUBLIC_ED_KEY)</string>
 </dict>
