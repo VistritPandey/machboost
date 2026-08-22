@@ -1,22 +1,26 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 import hashlib
 import importlib.util
 import json
 import os
 import platform
+import shutil
 import sys
 import time
 from dataclasses import asdict, dataclass
 from importlib import metadata
 from pathlib import Path
 from typing import Optional, Sequence
+from urllib.parse import urlparse
 
 from . import __version__, machboost
 from .accelerator import Accelerator, read_context_paths, resolve_context
 from .adapters.ollama import OllamaHTTPAdapter, OllamaHTTPError
 from .client import MachBoostAPIError, MachBoostClient, ensure_server
+from .connections import ConnectionStore, normalize_endpoint
 from .context_bench import benchmark_context_acceleration, context_fingerprint
 from .latency import benchmark_chat_latency
 from .models import alias_rows, backend_available, catalog_rows, resolve_model
@@ -36,6 +40,9 @@ from .vision_auto import VISION_TOKEN_REQUEST_MODES, load_vision_calibration
 DEFAULT_CHAT_SYSTEM = "Answer directly and concisely. Do not reveal hidden reasoning."
 CHAT_HELP = """Commands:
   /? or /help       show this help
+  /status           show model, host, route, and active context
+  /stats on|off     toggle per-response performance statistics
+  /route            show local/API routing for this session
   /clear            reset chat history
   /image PATH       attach an image
   /video PATH       attach sampled video frames
@@ -466,6 +473,86 @@ def print_human_model_list(data: dict) -> None:
     print("remote examples:")
     for example in data["examples"]:
         print(f"  {example['command']}")
+
+
+def run_connect(args: argparse.Namespace, *, output_stream=None, error_stream=None) -> int:
+    output_stream = output_stream or sys.stdout
+    error_stream = error_stream or sys.stderr
+    try:
+        endpoint = normalize_endpoint(args.endpoint)
+        name = args.name or (urlparse(endpoint).hostname or "host").replace(".", "-")
+        token = os.environ.get("MACHBOOST_API_TOKEN") or getpass.getpass(
+            f"API key for {endpoint}: "
+        )
+        if not token.strip():
+            raise ValueError("an API key is required for a remote MachBoost host")
+        client = MachBoostClient(endpoint, api_token=token, timeout=args.timeout)
+        health = client.health()
+        profile = ConnectionStore().save(name, endpoint, api_token=token)
+    except (MachBoostAPIError, RuntimeError, ValueError) as exc:
+        print(f"machboost connect error: {exc}", file=error_stream)
+        return 2
+    print(f"connected to {profile.name} ({profile.endpoint})", file=output_stream)
+    print(f"server {health.get('version') or health.get('status') or 'ready'}", file=output_stream)
+    return 0
+
+
+def run_connections(args: argparse.Namespace, *, output_stream=None, error_stream=None) -> int:
+    output_stream = output_stream or sys.stdout
+    error_stream = error_stream or sys.stderr
+    try:
+        store = ConnectionStore()
+        active = store.active()
+        profiles = store.list()
+    except ValueError as exc:
+        print(f"machboost connections error: {exc}", file=error_stream)
+        return 2
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "schema": "machboost.connections.v1",
+                    "active": active.id if active else "local",
+                    "connections": [asdict(profile) for profile in profiles],
+                },
+                indent=2,
+            ),
+            file=output_stream,
+        )
+        return 0
+    print("ACTIVE  NAME                 ENDPOINT", file=output_stream)
+    print(f"{'*' if active is None else ' ':<7} local                http://{DEFAULT_HOST}:{DEFAULT_PORT}", file=output_stream)
+    for profile in profiles:
+        marker = "*" if active and active.id == profile.id else " "
+        print(f"{marker:<7} {profile.name:<20} {profile.endpoint}", file=output_stream)
+    return 0
+
+
+def run_use_connection(args: argparse.Namespace, *, output_stream=None, error_stream=None) -> int:
+    output_stream = output_stream or sys.stdout
+    error_stream = error_stream or sys.stderr
+    try:
+        profile = ConnectionStore().select(args.name)
+    except (KeyError, ValueError) as exc:
+        print(f"machboost use error: connection {exc} was not found", file=error_stream)
+        return 2
+    if profile is None:
+        print("using local MachBoost server", file=output_stream)
+    else:
+        print(f"using {profile.name} ({profile.endpoint})", file=output_stream)
+    return 0
+
+
+def run_disconnect(args: argparse.Namespace, *, output_stream=None, error_stream=None) -> int:
+    output_stream = output_stream or sys.stdout
+    error_stream = error_stream or sys.stderr
+    try:
+        profile = ConnectionStore().remove(args.name)
+    except (KeyError, ValueError) as exc:
+        print(f"machboost disconnect error: connection {exc} was not found", file=error_stream)
+        return 2
+    print(f"forgot {profile.name}; its API key was removed from Keychain", file=output_stream)
+    return 0
 
 
 def select_native_backend(model: str, backend: str) -> str:
@@ -956,6 +1043,39 @@ def video_prompt(prompt: str) -> str:
     )
 
 
+def chat_route_options(args: argparse.Namespace) -> Optional[dict[str, dict[str, str]]]:
+    mode = str(getattr(args, "route", "local_only"))
+    if mode == "local_only":
+        return None
+    route = {"mode": mode}
+    if getattr(args, "provider", None):
+        route["provider_id"] = args.provider
+    if getattr(args, "provider_model", None):
+        route["model"] = args.provider_model
+    return {"route": route}
+
+
+def print_tool_call_summary(tool_calls: Sequence[dict], *, stream=None) -> None:
+    stream = stream or sys.stdout
+    for call in tool_calls:
+        function = call.get("function") if isinstance(call, dict) else None
+        function = function if isinstance(function, dict) else {}
+        name = str(function.get("name") or "tool")
+        arguments = function.get("arguments")
+        if isinstance(arguments, str):
+            try:
+                arguments = json.loads(arguments)
+            except json.JSONDecodeError:
+                arguments = {"input": arguments}
+        if isinstance(arguments, dict):
+            fields = ", ".join(
+                f"{key}={str(value)[:80]!r}" for key, value in list(arguments.items())[:4]
+            )
+        else:
+            fields = str(arguments or "")[:160]
+        print(f"tool> {name}({fields})", file=stream)
+
+
 def run_resident_chat(
     args: argparse.Namespace,
     *,
@@ -997,14 +1117,20 @@ def run_resident_chat(
         print(f"video input error: {exc}", file=error_stream)
         return 2
     turns: list[dict[str, str]] = []
+    show_stats = bool(args.show_stats)
     state = f"load {model_load:.2f}s" if model_load > 0 else "resident"
     if warmup_duration > 0:
         state += f" | compile {warmup_duration:.2f}s"
-    print(f"MachBoost {args.model} [{backend}]", file=output_stream)
+    width = max(48, min(88, shutil.get_terminal_size((80, 24)).columns))
+    print("-" * width, file=output_stream)
+    print(f"MachBoost  {args.model}", file=output_stream)
     print(
-        f"{state} | wall {preload_wall:.2f}s | keep alive {args.keep_alive} | /? help",
+        f"{backend} | {state} | wall {preload_wall:.2f}s | {client.endpoint}",
         file=output_stream,
     )
+    route_name = str(getattr(args, "route", "local_only"))
+    print(f"route {route_name.replace('_', ' ')} | /help for commands", file=output_stream)
+    print("-" * width, file=output_stream)
     if resolved_model != args.model and args.show_stats:
         print(f"model: {resolved_model}", file=output_stream)
     print("", file=output_stream)
@@ -1027,6 +1153,28 @@ def run_resident_chat(
             return 0
         if command in {"/?", "/help"}:
             print(CHAT_HELP, file=output_stream)
+            continue
+        if command == "/status":
+            print(
+                f"model={resolved_model} backend={backend} host={client.endpoint} "
+                f"route={route_name} turns={len(turns) // 2} images={len(active_images)}",
+                file=output_stream,
+            )
+            continue
+        if command == "/route":
+            route = chat_route_options(args)
+            print(
+                "route: " + (json.dumps(route["route"], sort_keys=True) if route else "local_only"),
+                file=output_stream,
+            )
+            continue
+        if command.startswith("/stats"):
+            setting = command.partition(" ")[2].strip().lower()
+            if setting in {"on", "off"}:
+                show_stats = setting == "on"
+            else:
+                show_stats = not show_stats
+            print(f"response stats {'on' if show_stats else 'off'}", file=output_stream)
             continue
         if command == "/unload":
             unload_resident_model(client, args.model, stream=output_stream)
@@ -1100,6 +1248,9 @@ def run_resident_chat(
             }
             if active_images:
                 request_options["images"] = active_images
+            route = chat_route_options(args)
+            if route is not None:
+                request_options["machboost"] = route
             rows = client.chat(args.model, messages, **request_options)
             for row in rows:
                 message = row.get("message") or {}
@@ -1133,11 +1284,8 @@ def run_resident_chat(
             print("", flush=True, file=output_stream)
         response = "".join(response_parts).strip()
         if tool_calls:
-            print(
-                "tool calls: " + json.dumps(tool_calls, ensure_ascii=True),
-                file=output_stream,
-            )
-        if args.show_stats:
+            print_tool_call_summary(tool_calls, stream=output_stream)
+        if show_stats:
             print_resident_stats(final_row, time.perf_counter() - started, stream=output_stream)
         turns.append({"role": "assistant", "content": response})
 
@@ -2058,9 +2206,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     native_run = subcommands.add_parser("run", help="Chat with a native model through the resident MachBoost server.")
     add_native_run_arguments(native_run)
+    add_chat_route_arguments(native_run)
 
     chat = subcommands.add_parser("chat", help="Alias for resident native `machboost run`.")
     add_native_run_arguments(chat)
+    add_chat_route_arguments(chat)
 
     complete = subcommands.add_parser("complete", help="Stream raw text or code completion from a resident model.")
     add_native_run_arguments(complete)
@@ -2285,6 +2435,20 @@ def build_parser() -> argparse.ArgumentParser:
     ollama_run = ollama_subcommands.add_parser("run", help="Pull if needed, then chat with a model.")
     add_ollama_run_arguments(ollama_run)
 
+    connect = subcommands.add_parser("connect", help="Save and use another MachBoost Mac.")
+    connect.add_argument("endpoint", help="Remote MachBoost URL or host:port.")
+    connect.add_argument("--name", help="Short name for this connection.")
+    connect.add_argument("--timeout", type=float, default=10.0)
+
+    connections = subcommands.add_parser("connections", help="List saved MachBoost devices.")
+    connections.add_argument("--json", action="store_true")
+
+    use_connection = subcommands.add_parser("use", help="Use local or a saved MachBoost device.")
+    use_connection.add_argument("name", help="Connection name, or local.")
+
+    disconnect = subcommands.add_parser("disconnect", help="Forget a saved MachBoost device.")
+    disconnect.add_argument("name", help="Connection name to forget.")
+
     subcommands.add_parser("version", help="Print the installed MachBoost version.")
     return parser
 
@@ -2436,6 +2600,17 @@ def add_native_run_arguments(parser: argparse.ArgumentParser) -> None:
     add_server_connection_arguments(parser, include_autostart=True)
 
 
+def add_chat_route_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--route",
+        choices=["local_only", "local_first", "external_first", "external_only"],
+        default="local_only",
+        help="Choose local inference, a paid API, or a transient-failure fallback order.",
+    )
+    parser.add_argument("--provider", help="Configured paid-provider ID.")
+    parser.add_argument("--provider-model", help="Paid API model name used instead of the local model ID.")
+
+
 def add_server_connection_arguments(parser: argparse.ArgumentParser, *, include_autostart: bool = False) -> None:
     parser.add_argument("--endpoint", default=None, help="MachBoost server URL. Defaults to MACHBOOST_HOST or localhost:11435.")
     parser.add_argument("--timeout", type=float, default=300.0, help="Server request timeout in seconds.")
@@ -2499,6 +2674,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if args.command == "version":
         print(__version__)
         return 0
+    if args.command == "connect":
+        return run_connect(args)
+    if args.command == "connections":
+        return run_connections(args)
+    if args.command == "use":
+        return run_use_connection(args)
+    if args.command == "disconnect":
+        return run_disconnect(args)
     if args.command == "run":
         return run_native_chat(args) if args.direct else run_resident_chat(args)
     if args.command == "chat":
