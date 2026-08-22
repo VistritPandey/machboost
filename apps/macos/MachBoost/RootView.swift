@@ -23,6 +23,11 @@ struct RootView: View {
             detail
         }
         .frame(minWidth: 760, minHeight: 560)
+        .onAppear {
+            DispatchQueue.main.async {
+                constrainWindowToVisibleScreen()
+            }
+        }
         .task {
             if conversations.isEmpty {
                 newConversation()
@@ -43,6 +48,25 @@ struct RootView: View {
         } message: {
             Text(appState.presentedError ?? "Unknown error")
         }
+    }
+
+    private func constrainWindowToVisibleScreen() {
+        guard
+            let window = NSApplication.shared.keyWindow
+                ?? NSApplication.shared.windows.first(where: { $0.isVisible }),
+            !window.styleMask.contains(.fullScreen),
+            let screen = window.screen ?? NSScreen.main
+        else {
+            return
+        }
+        let visible = screen.visibleFrame
+        var frame = window.frame
+        frame.size.width = min(frame.width, visible.width)
+        frame.size.height = min(frame.height, visible.height)
+        frame.origin.x = min(max(frame.minX, visible.minX), visible.maxX - frame.width)
+        frame.origin.y = min(max(frame.minY, visible.minY), visible.maxY - frame.height)
+        guard frame != window.frame else { return }
+        window.setFrame(frame, display: true)
     }
 
     private var sidebar: some View {
