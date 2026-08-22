@@ -279,7 +279,7 @@ build as notarized software, so the first downloaded install still needs manual
 approval. Version 0.15.0 and later community releases use EdDSA-signed Sparkle
 updates for in-app download, verification, installation, and relaunch.
 
-Public DMG releases need Vistrit Pandey's Developer ID, Apple team and
+Public DMG releases need a Developer ID Application certificate, Apple team,
 notarization credentials, and Sparkle EdDSA keys:
 
 ```sh
