@@ -126,6 +126,41 @@ final class MachBoostTests: XCTestCase {
         XCTAssertFalse(MachBoostHostDiscovery.isSelf(deviceID: nil, localDeviceID: "device-a"))
     }
 
+    @MainActor
+    func testTeamConnectionRejectsLocalAliasesButKeepsRemoteHosts() throws {
+        let names: Set<String> = ["workstation.local"]
+        let addresses: Set<String> = ["192.168.1.25"]
+
+        XCTAssertTrue(
+            AppState.isLocalTeamEndpoint(
+                try XCTUnwrap(URL(string: "http://workstation.local:11435")),
+                localNames: names,
+                localAddresses: addresses
+            )
+        )
+        XCTAssertTrue(
+            AppState.isLocalTeamEndpoint(
+                try XCTUnwrap(URL(string: "http://192.168.1.25:11435")),
+                localNames: names,
+                localAddresses: addresses
+            )
+        )
+        XCTAssertTrue(
+            AppState.isLocalTeamEndpoint(
+                try XCTUnwrap(URL(string: "http://127.0.0.1:11435")),
+                localNames: names,
+                localAddresses: addresses
+            )
+        )
+        XCTAssertFalse(
+            AppState.isLocalTeamEndpoint(
+                try XCTUnwrap(URL(string: "http://studio.local:11435")),
+                localNames: names,
+                localAddresses: addresses
+            )
+        )
+    }
+
     func testCodingPermissionModesApplyDistinctWritePolicies() {
         let smallEdit = APIToolCall(
             function: .init(
