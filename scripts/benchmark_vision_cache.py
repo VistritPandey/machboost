@@ -252,7 +252,7 @@ def create_fixture(path: Path) -> None:
     draw.text((120, 230), "Project: ATLAS", font=body, fill="#1b4d8f")
     draw.text((120, 305), "Status: READY", font=body, fill="#137333")
     draw.text((120, 380), "Budget: $42,700", font=body, fill="#8a2c0d")
-    draw.text((120, 455), "Owner: Vistrit", font=body, fill="#111111")
+    draw.text((120, 455), "Dataset: synthetic", font=body, fill="#111111")
     draw.rectangle((700, 250, 860, 410), fill="#1976d2")
     draw.text((710, 440), "BLUE SQUARE", font=body, fill="#111111")
     image.save(path)
