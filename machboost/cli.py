@@ -488,6 +488,7 @@ def run_connect(args: argparse.Namespace, *, output_stream=None, error_stream=No
             raise ValueError("an API key is required for a remote MachBoost host")
         client = MachBoostClient(endpoint, api_token=token, timeout=args.timeout)
         health = client.health()
+        client.catalog()
         profile = ConnectionStore().save(name, endpoint, api_token=token)
     except (MachBoostAPIError, RuntimeError, ValueError) as exc:
         print(f"machboost connect error: {exc}", file=error_stream)
