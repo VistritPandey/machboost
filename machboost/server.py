@@ -1736,7 +1736,9 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
             request=cache_request_payload(payload),
         )
 
-    def route_config(self, payload: dict[str, Any]) -> tuple[str, Optional[str]]:
+    def route_config(
+        self, payload: dict[str, Any]
+    ) -> tuple[str, Optional[str], Optional[str]]:
         extension = payload.get("machboost")
         extension = extension if isinstance(extension, dict) else {}
         route = extension.get("route") or {}
@@ -1747,6 +1749,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
         return (
             str(route.get("mode") or "local_only").strip().lower(),
             str(route.get("provider_id") or "").strip() or None,
+            str(route.get("model") or "").strip() or None,
         )
 
     def resolve_local_model(
@@ -1765,6 +1768,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
         *,
         messages: Sequence[dict[str, Any]],
         provider_id: Optional[str],
+        provider_model: Optional[str] = None,
     ) -> ProviderResult:
         if self.providers is None:
             raise ValueError("external providers require serving with --team-db")
@@ -1775,6 +1779,8 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
         }
         upstream["messages"] = [dict(message) for message in messages]
         upstream["stream"] = False
+        if provider_model:
+            upstream["model"] = provider_model
         return self.providers.chat(upstream, provider_id=provider_id)
 
     def exact_cache_put(
@@ -2579,7 +2585,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                 context = merge_memory_draft_context(context, memory_context)
             options["_cache_namespace"] = memory_context.cache_namespace.key
         request_id = request_identifier(payload, "chat")
-        route_mode, provider_id = self.route_config(payload)
+        route_mode, provider_id, provider_model = self.route_config(payload)
 
         def external_response(external: ProviderResult) -> dict[str, Any]:
             content, thinking, tool_calls = openai_response_message(external.response)
@@ -2673,6 +2679,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                     payload,
                     messages=messages,
                     provider_id=provider_id,
+                    provider_model=provider_model,
                 ),
             )
             if source == "external":
@@ -2723,6 +2730,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                     payload,
                     messages=messages,
                     provider_id=provider_id,
+                    provider_model=provider_model,
                 )
             except ProviderError as exc:
                 if route_mode == "external_only" or not exc.transient:
@@ -2795,6 +2803,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                     payload,
                     messages=messages,
                     provider_id=provider_id,
+                    provider_model=provider_model,
                 )
                 send_external_stream(external)
                 return
@@ -3585,7 +3594,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                 }
                 self.send_json(body)
                 return
-            route_mode, provider_id = self.route_config(payload)
+            route_mode, provider_id, provider_model = self.route_config(payload)
             source, routed = route_with_fallback(
                 route_mode,
                 local=lambda: self.run_traced_operation(
@@ -3605,6 +3614,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                     payload,
                     messages=messages,
                     provider_id=provider_id,
+                    provider_model=provider_model,
                 ),
             )
             if source == "external":
@@ -3674,7 +3684,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
             self.send_json(body)
             return
 
-        route_mode, provider_id = self.route_config(payload)
+        route_mode, provider_id, provider_model = self.route_config(payload)
 
         def send_external_stream(external: ProviderResult) -> None:
             content = openai_response_text(external.response)
@@ -3728,6 +3738,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                     payload,
                     messages=messages,
                     provider_id=provider_id,
+                    provider_model=provider_model,
                 )
             except ProviderError as exc:
                 if route_mode == "external_only" or not exc.transient:
@@ -3799,6 +3810,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                     payload,
                     messages=messages,
                     provider_id=provider_id,
+                    provider_model=provider_model,
                 )
                 send_external_stream(external)
                 return
