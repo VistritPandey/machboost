@@ -4,7 +4,7 @@
   "model": "qwen2.5-vl:3b",
   "resolved_model": "mlx-community/Qwen2.5-VL-3B-Instruct-4bit",
   "backend": "mlx-vlm",
-  "image": "/Users/Vis/Documents/Ideation/results/tmp/vision_cache_fixture.png",
+  "image": "results/tmp/vision_cache_fixture.png",
   "image_bytes": 37119,
   "repeats": 3,
   "max_tokens": 16,
