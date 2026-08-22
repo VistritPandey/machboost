@@ -1454,9 +1454,6 @@ struct ChatView: View {
                         activities[activityIndex].output = toolResult.content
                         activities[activityIndex].changedPath = toolResult.changedPath
                         activities[activityIndex].changePatch = toolResult.changePatch
-                        if toolResult.changedPath != nil {
-                            refreshWorkspaceChanges(show: true)
-                        }
                     } catch {
                         result = toolError(error.localizedDescription)
                         activities[activityIndex].state = .failed
@@ -1465,6 +1462,9 @@ struct ChatView: View {
                     updateTimeline(&timeline, activity: activities[activityIndex])
                     persist(activities, to: assistant)
                     persist(timeline, to: assistant)
+                    if activities[activityIndex].changedPath != nil {
+                        refreshWorkspaceChanges(show: true)
+                    }
                 }
                 completedToolResults[call.function] = result
                 transcript.append(
