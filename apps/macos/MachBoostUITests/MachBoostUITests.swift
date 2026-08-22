@@ -24,9 +24,10 @@ final class MachBoostUITests: XCTestCase {
         XCTAssertTrue(connections.waitForExistence(timeout: 10))
         connections.click()
 
-        XCTAssertTrue(app.staticTexts["Choose a device"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Inference devices"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["This Mac"].exists)
         XCTAssertTrue(app.staticTexts["Available devices"].exists)
+        XCTAssertTrue(app.staticTexts["Your inference pool"].exists)
         XCTAssertTrue(app.disclosureTriangles["Connect by address"].exists)
         XCTAssertFalse(app.radioButtons["Host pool"].exists)
     }
