@@ -14,6 +14,21 @@ DMG="$DIST/MachBoost-${VERSION}-arm64.dmg"
 LOCAL_BUILD=false
 DEFAULT_SPARKLE_PUBLIC_ED_KEY="AEPVQK/X1xhsRAJKfSGyFDEmwxQnf9nUhisRH8WW8i8="
 SPARKLE_PUBLIC_ED_KEY="${SPARKLE_PUBLIC_ED_KEY:-$DEFAULT_SPARKLE_PUBLIC_ED_KEY}"
+REPOSITORY="${MACHBOOST_REPOSITORY:-${GITHUB_REPOSITORY:-}}"
+
+if [[ -z "$REPOSITORY" ]]; then
+  ORIGIN="$(git -C "$ROOT" remote get-url origin 2>/dev/null || true)"
+  case "$ORIGIN" in
+    https://github.com/*) REPOSITORY="${ORIGIN#https://github.com/}" ;;
+    git@github.com:*) REPOSITORY="${ORIGIN#git@github.com:}" ;;
+    ssh://git@github.com/*) REPOSITORY="${ORIGIN#ssh://git@github.com/}" ;;
+  esac
+  REPOSITORY="${REPOSITORY%.git}"
+fi
+if [[ ! "$REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+  echo "Set MACHBOOST_REPOSITORY to the GitHub owner/repository slug." >&2
+  exit 2
+fi
 
 if [[ -z "$VERSION" ]]; then
   echo "usage: $0 VERSION [--local]" >&2
@@ -71,6 +86,7 @@ xcodebuild \
   ARCHS=arm64 \
   MARKETING_VERSION="$VERSION" \
   CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
+  MACHBOOST_REPOSITORY="$REPOSITORY" \
   SPARKLE_PUBLIC_ED_KEY="$SPARKLE_PUBLIC_ED_KEY" \
   archive
 
@@ -126,7 +142,7 @@ if $LOCAL_BUILD; then
     fi
     "$GENERATE_APPCAST" \
       --ed-key-file "$SPARKLE_PRIVATE_KEY" \
-      --download-url-prefix "https://github.com/VistritPandey/machboost/releases/download/v${VERSION}/" \
+      --download-url-prefix "https://github.com/${REPOSITORY}/releases/download/v${VERSION}/" \
       "$DIST"
   fi
   echo "Local DMG ready:"
@@ -153,7 +169,7 @@ if [[ -z "$GENERATE_APPCAST" ]]; then
 fi
 "$GENERATE_APPCAST" \
   --ed-key-file "$SPARKLE_PRIVATE_KEY" \
-  --download-url-prefix "https://github.com/VistritPandey/machboost/releases/download/v${VERSION}/" \
+  --download-url-prefix "https://github.com/${REPOSITORY}/releases/download/v${VERSION}/" \
   "$DIST"
 
 echo "Release artifacts:"
