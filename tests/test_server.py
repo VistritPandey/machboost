@@ -2810,6 +2810,37 @@ class TeamGatewayHTTPTests(unittest.TestCase):
         self.assertEqual(events[-1]["machboost"]["route"]["provider_id"], "fallback")
         self.assertTrue(events[-1]["machboost"]["route"]["buffered_upstream"])
 
+    def test_external_route_maps_local_model_to_provider_model(self) -> None:
+        self.request(
+            "/api/providers",
+            {
+                "id": "fallback",
+                "name": "Fallback API",
+                "base_url": "https://inference.example.com",
+                "models": ["paid-model"],
+                "api_key": "provider-secret",
+            },
+        )
+
+        _, response = self.request(
+            "/api/chat",
+            {
+                "model": "mlx-community/example",
+                "messages": [{"role": "user", "content": "hello"}],
+                "stream": False,
+                "machboost": {
+                    "route": {
+                        "mode": "external_only",
+                        "provider_id": "fallback",
+                        "model": "paid-model",
+                    }
+                },
+            },
+        )
+
+        self.assertEqual(response["message"]["content"], "external answer")
+        self.assertEqual(self.provider_calls[-1][2]["model"], "paid-model")
+
     def test_external_provider_streaming_route_emits_compatible_sse(self) -> None:
         self.request(
             "/api/providers",
