@@ -32,10 +32,20 @@ jobs:
       - name: Configure Pages
         uses: actions/configure-pages@v5
 
+      - name: Prepare site metadata
+        shell: bash
+        run: |
+          mkdir -p _site
+          cp -R site/. _site/
+          REPOSITORY_NAME="${GITHUB_REPOSITORY#*/}"
+          SITE_URL="https://${GITHUB_REPOSITORY_OWNER,,}.github.io/${REPOSITORY_NAME}"
+          sed -i "s|__MACHBOOST_REPOSITORY__|${GITHUB_REPOSITORY}|g" _site/index.html
+          sed -i "s|__MACHBOOST_SITE_URL__|${SITE_URL}|g" _site/index.html
+
       - name: Upload static site
         uses: actions/upload-pages-artifact@v3
         with:
-          path: site
+          path: _site
 
       - name: Deploy
         id: deployment
