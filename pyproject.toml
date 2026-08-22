@@ -9,9 +9,6 @@ description = "Resident local inference server with conditional text and visual 
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
-authors = [
-  { name = "Vistrit Pandey", email = "vistrit@blinkfire.com" }
-]
 keywords = ["llm", "vlm", "inference", "speculative-decoding", "local-ai", "mlx", "huggingface", "ollama", "server", "concurrency"]
 classifiers = [
   "Development Status :: 3 - Alpha",
@@ -61,11 +58,6 @@ all = [
 
 [project.scripts]
 machboost = "machboost.cli:main"
-
-[project.urls]
-Homepage = "https://github.com/VistritPandey/machboost"
-Repository = "https://github.com/VistritPandey/machboost"
-Issues = "https://github.com/VistritPandey/machboost/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]
