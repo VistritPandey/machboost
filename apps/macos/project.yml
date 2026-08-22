@@ -1,6 +1,6 @@
 name: MachBoost
 options:
-  bundleIdPrefix: com.vistritpandey
+  bundleIdPrefix: io.machboost
   deploymentTarget:
     macOS: "14.0"
   xcodeVersion: "16.0"
@@ -20,6 +20,7 @@ settings:
     GENERATE_INFOPLIST_FILE: NO
     MACOSX_DEPLOYMENT_TARGET: "14.0"
     MARKETING_VERSION: 0.15.0
+    MACHBOOST_REPOSITORY: machboost/machboost
     SPARKLE_PUBLIC_ED_KEY: "AEPVQK/X1xhsRAJKfSGyFDEmwxQnf9nUhisRH8WW8i8="
     SWIFT_VERSION: 6.0
 targets:
@@ -32,7 +33,7 @@ targets:
       base:
         DEFINES_MODULE: YES
         GENERATE_INFOPLIST_FILE: YES
-        PRODUCT_BUNDLE_IDENTIFIER: com.vistritpandey.MachBoostDaemonClient
+        PRODUCT_BUNDLE_IDENTIFIER: io.machboost.MachBoostDaemonClient
   MachBoostPersistence:
     type: framework
     platform: macOS
@@ -42,7 +43,7 @@ targets:
       base:
         DEFINES_MODULE: YES
         GENERATE_INFOPLIST_FILE: YES
-        PRODUCT_BUNDLE_IDENTIFIER: com.vistritpandey.MachBoostPersistence
+        PRODUCT_BUNDLE_IDENTIFIER: io.machboost.MachBoostPersistence
   MachBoost:
     type: application
     platform: macOS
@@ -53,7 +54,7 @@ targets:
     settings:
       base:
         CODE_SIGN_ENTITLEMENTS: MachBoost/MachBoost.entitlements
-        PRODUCT_BUNDLE_IDENTIFIER: com.vistritpandey.MachBoost
+        PRODUCT_BUNDLE_IDENTIFIER: io.machboost.MachBoost
         PRODUCT_NAME: MachBoost
         INFOPLIST_FILE: MachBoost/Info.plist
     dependencies:
@@ -72,7 +73,7 @@ targets:
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
-        PRODUCT_BUNDLE_IDENTIFIER: com.vistritpandey.MachBoostTests
+        PRODUCT_BUNDLE_IDENTIFIER: io.machboost.MachBoostTests
   MachBoostUITests:
     type: bundle.ui-testing
     platform: macOS
@@ -83,7 +84,7 @@ targets:
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
-        PRODUCT_BUNDLE_IDENTIFIER: com.vistritpandey.MachBoostUITests
+        PRODUCT_BUNDLE_IDENTIFIER: io.machboost.MachBoostUITests
         ENABLE_HARDENED_RUNTIME: NO
 schemes:
   MachBoost:
