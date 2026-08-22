@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="128 128 768 768" role="img">
+  <title>MachBoost</title>
+  <g fill="#22C55E">
+    <path d="M176 236h152l164 188-82 94-74-86v190L176 788V236Z" />
+    <path
+      d="M176 236h152l164 188-82 94-74-86v190L176 788V236Z"
+      transform="translate(1024) scale(-1 1)"
+    />
+  </g>
+</svg>
