@@ -742,6 +742,7 @@ public struct ChatRequest: Encodable, Sendable {
     public let workspaceID: String?
     public let reasoningStrength: String?
     public let tools: [APIToolDefinition]?
+    public let machboost: Extensions?
 
     public init(
         requestID: String,
@@ -751,7 +752,8 @@ public struct ChatRequest: Encodable, Sendable {
         options: Options,
         workspaceID: String? = nil,
         reasoningStrength: String? = nil,
-        tools: [APIToolDefinition]? = nil
+        tools: [APIToolDefinition]? = nil,
+        machboost: Extensions? = nil
     ) {
         self.requestID = requestID
         self.model = model
@@ -761,6 +763,7 @@ public struct ChatRequest: Encodable, Sendable {
         self.workspaceID = workspaceID
         self.reasoningStrength = reasoningStrength
         self.tools = tools
+        self.machboost = machboost
     }
 
     public struct Options: Encodable, Sendable {
@@ -781,6 +784,29 @@ public struct ChatRequest: Encodable, Sendable {
         }
     }
 
+    public struct Extensions: Encodable, Sendable {
+        public let route: Route?
+
+        public init(route: Route? = nil) {
+            self.route = route
+        }
+
+        public struct Route: Encodable, Sendable {
+            public let mode: String
+            public let providerID: String?
+
+            public init(mode: String, providerID: String? = nil) {
+                self.mode = mode
+                self.providerID = providerID
+            }
+
+            enum CodingKeys: String, CodingKey {
+                case mode
+                case providerID = "provider_id"
+            }
+        }
+    }
+
     enum CodingKeys: String, CodingKey {
         case requestID = "request_id"
         case model
@@ -792,6 +818,7 @@ public struct ChatRequest: Encodable, Sendable {
         case workspaceID = "workspace_id"
         case reasoningStrength = "think"
         case tools
+        case machboost
     }
 }
 
@@ -823,21 +850,40 @@ public struct ChatEvent: Decodable, Sendable {
     }
 
     public struct MachBoost: Decodable, Sendable {
+        public struct Route: Decodable, Sendable {
+            public let source: String
+            public let providerID: String?
+            public let latencySeconds: Double?
+            public let costUSD: Double?
+            public let bufferedUpstream: Bool?
+
+            enum CodingKeys: String, CodingKey {
+                case source
+                case providerID = "provider_id"
+                case latencySeconds = "latency_seconds"
+                case costUSD = "cost_usd"
+                case bufferedUpstream = "buffered_upstream"
+            }
+        }
+
         public let backend: String?
         public let stats: GenerationStats?
         public let timeToFirstTokenSeconds: Double?
         public let workspace: WorkspaceResult?
+        public let route: Route?
 
         public init(
             backend: String?,
             stats: GenerationStats?,
             timeToFirstTokenSeconds: Double?,
-            workspace: WorkspaceResult? = nil
+            workspace: WorkspaceResult? = nil,
+            route: Route? = nil
         ) {
             self.backend = backend
             self.stats = stats
             self.timeToFirstTokenSeconds = timeToFirstTokenSeconds
             self.workspace = workspace
+            self.route = route
         }
 
         enum CodingKeys: String, CodingKey {
@@ -845,6 +891,7 @@ public struct ChatEvent: Decodable, Sendable {
             case stats
             case timeToFirstTokenSeconds = "time_to_first_token_seconds"
             case workspace
+            case route
         }
     }
 
