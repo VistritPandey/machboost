@@ -1,8 +1,6 @@
 # machboost
 
-[![CI](https://github.com/VistritPandey/machboost/actions/workflows/ci.yml/badge.svg)](https://github.com/VistritPandey/machboost/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Website](https://img.shields.io/badge/Website-MachBoost-22c55e)](https://vistritpandey.github.io/machboost/)
 
 MachBoost is an alpha-stage, local-first inference server, team gateway, native macOS app, and Python package for MLX, MLX-VLM, and Hugging Face models. It offers an Ollama-like model workflow, keeps models resident between requests, and streams text and visual chat. Team Mode adds scoped employee keys, fair admission, revision-aware private/shared memory, exact-request reuse, local traces, evaluations, and budgeted external-provider fallback. Optional acceleration paths target fresh text decoding on selected Qwen models, reusable local text, repeated image inputs, and selected Qwen3-VL visual-prefill workloads. Muse Glimmer runs through its native Hugging Face MLX-VLM conversions; Ollama is not required for that path.
 
@@ -57,10 +55,9 @@ Treat every workload as uncalibrated until it passes a same-model paired benchma
 
 ## Install
 
-From a local checkout:
+From a local checkout or downloaded source archive:
 
 ```sh
-git clone https://github.com/VistritPandey/machboost.git
 cd machboost
 python3 -m venv .venv
 source .venv/bin/activate
@@ -78,18 +75,18 @@ pip install -e ".[video]"
 pip install -e ".[all]"
 ```
 
-Install directly from GitHub:
+Install a published package directly:
 
 ```sh
-pip install "machboost[mlx] @ git+https://github.com/VistritPandey/machboost.git"
-pip install "machboost[vision] @ git+https://github.com/VistritPandey/machboost.git"
-pip install "machboost[dflash] @ git+https://github.com/VistritPandey/machboost.git"
+pip install "machboost[mlx]"
+pip install "machboost[vision]"
+pip install "machboost[dflash]"
 ```
 
 Update an existing install:
 
 ```sh
-pip install --upgrade "machboost[mlx] @ git+https://github.com/VistritPandey/machboost.git"
+pip install --upgrade "machboost[mlx]"
 ```
 
 Check the install:
@@ -138,9 +135,8 @@ confirmation. Partially downloaded repositories are not shown as runnable: the
 catalog verifies that every indexed weight shard exists before marking a model
 cached.
 
-An unsigned Apple Silicon community preview is available from the
-[MachBoost website](https://vistritpandey.github.io/machboost/) and
-[GitHub Releases](https://github.com/VistritPandey/machboost/releases/latest).
+An unsigned Apple Silicon community preview is available from
+[GitHub Releases](../../releases/latest).
 Drag the app from the DMG into Applications and attempt to open it once. Because
 the community build is not Apple-notarized, open **System Settings → Privacy &
 Security** and choose **Open Anyway**. This creates a local exception for future
@@ -177,7 +173,7 @@ MachBoost alias uses the native 4-bit MLX-VLM conversion and recommends at least
 32 GB unified memory. Higher-bit variants require more memory.
 
 ```sh
-python3 -m pip install --upgrade "machboost[vision] @ git+https://github.com/VistritPandey/machboost.git"
+python3 -m pip install --upgrade "machboost[vision]"
 machboost pull muse-glimmer:30b
 machboost run muse-glimmer:30b --think high --show-thinking --show-stats
 machboost run muse-glimmer:30b --image ./screenshot.png --think medium
