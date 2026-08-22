@@ -40,6 +40,10 @@ struct ChatView: View {
     @AppStorage("machboost.chat.codingMode") private var codingMode = true
     @AppStorage("machboost.chat.permissionMode") private var permissionModeValue =
         CodingPermissionMode.automatic.rawValue
+    @AppStorage("machboost.chat.routeMode") private var routeModeValue =
+        ChatRouteMode.localOnly.rawValue
+    @AppStorage("machboost.chat.providerID") private var providerID = ""
+    @AppStorage("machboost.chat.providerModel") private var providerModel = ""
 
     var body: some View {
         chatSurface
@@ -123,6 +127,7 @@ struct ChatView: View {
             maxTokens = ConversationCompaction.clampedMaxTokens(maxTokens)
             summaryThreshold = ConversationCompaction.clampedThreshold(summaryThreshold)
             selectAvailableModelIfNeeded()
+            selectAvailableProviderIfNeeded()
 #if DEBUG
             if let mode = ProcessInfo.processInfo.environment["MACHBOOST_UI_TEST_PERMISSION_MODE"],
                CodingPermissionMode(rawValue: mode) != nil {
@@ -132,6 +137,9 @@ struct ChatView: View {
         }
         .onChange(of: selectableModels.map(\.name)) {
             selectAvailableModelIfNeeded()
+        }
+        .onChange(of: appState.providers.map { "\($0.id):\($0.models.joined(separator: ",")):\($0.hasSecret)" }) {
+            selectAvailableProviderIfNeeded()
         }
         .onChange(of: conversation.workspaceID) {
             workspaceChangeScope = .conversation
@@ -252,6 +260,8 @@ struct ChatView: View {
                     .foregroundStyle(appState.inferenceMode == .team ? Color.green : Color.secondary)
                     .lineLimit(1)
                 }
+
+                routeMenu(compact: compact)
 
                 Button {
                     showsGenerationControls.toggle()
@@ -525,6 +535,16 @@ struct ChatView: View {
 
     private var generationControls: some View {
         Form {
+            LabeledContent("Request route", value: routeMode.title)
+            if routeMode.usesExternal {
+                if appState.inferenceMode == .team {
+                    LabeledContent("Paid API", value: "Managed by host")
+                } else if let selectedProvider {
+                    LabeledContent("Paid API", value: selectedProvider.name)
+                    LabeledContent("API model", value: effectiveProviderModel)
+                }
+            }
+            Divider()
             Stepper(value: $maxTokens, in: 32...4_096, step: 32) {
                 LabeledContent("Maximum tokens", value: "\(maxTokens)")
             }
@@ -577,6 +597,89 @@ struct ChatView: View {
         .formStyle(.grouped)
         .frame(width: 300)
         .padding(.vertical, 6)
+    }
+
+    private func routeMenu(compact: Bool) -> some View {
+        Menu {
+            Section("Request route") {
+                ForEach(ChatRouteMode.allCases) { mode in
+                    Button {
+                        routeModeValue = mode.rawValue
+                        selectAvailableProviderIfNeeded()
+                    } label: {
+                        if mode == routeMode {
+                            Label(mode.title, systemImage: "checkmark")
+                        } else {
+                            Label(mode.title, systemImage: mode.icon)
+                        }
+                    }
+                    .disabled(mode.usesExternal && !externalRoutingAvailable)
+                }
+            }
+
+            if routeMode.usesExternal {
+                Divider()
+                if appState.inferenceMode == .team {
+                    Text("Paid API configured by host")
+                } else if availableProviders.isEmpty {
+                    Text("Add an API in Server")
+                } else {
+                    Section("Paid API model") {
+                        ForEach(availableProviders) { provider in
+                            Menu(provider.name) {
+                                let models = provider.models.filter { $0 != "*" }
+                                if models.isEmpty {
+                                    providerModelButton(
+                                        provider: provider,
+                                        model: conversation.model,
+                                        title: "Same model name"
+                                    )
+                                } else {
+                                    ForEach(models, id: \.self) { model in
+                                        providerModelButton(
+                                            provider: provider,
+                                            model: model,
+                                            title: model
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } label: {
+            if compact {
+                Image(systemName: routeMode.icon)
+                    .foregroundStyle(routeMode.usesExternal ? Color.green : Color.secondary)
+            } else {
+                Label(routeMode.shortTitle, systemImage: routeMode.icon)
+                    .font(.caption)
+                    .foregroundStyle(routeMode.usesExternal ? Color.green : Color.secondary)
+            }
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .accessibilityLabel("Inference route")
+        .accessibilityValue(routeMode.title)
+        .help(routeMode.help)
+    }
+
+    private func providerModelButton(
+        provider: ProviderSummary,
+        model: String,
+        title: String
+    ) -> some View {
+        Button {
+            providerID = provider.id
+            providerModel = model
+        } label: {
+            if provider.id == providerID && model == effectiveProviderModel {
+                Label(title, systemImage: "checkmark")
+            } else {
+                Text(title)
+            }
+        }
     }
 
     private var messageList: some View {
@@ -854,6 +957,42 @@ struct ChatView: View {
 
     private var isGenerating: Bool { activeRequestID != nil }
 
+    private var routeMode: ChatRouteMode {
+        ChatRouteMode(rawValue: routeModeValue) ?? .localOnly
+    }
+
+    private var availableProviders: [ProviderSummary] {
+        appState.providers.filter { $0.enabled && $0.hasSecret }
+    }
+
+    private var selectedProvider: ProviderSummary? {
+        availableProviders.first { $0.id == providerID }
+    }
+
+    private var externalRoutingAvailable: Bool {
+        appState.inferenceMode == .team || !availableProviders.isEmpty
+    }
+
+    private var effectiveProviderModel: String {
+        guard let selectedProvider else { return providerModel }
+        if selectedProvider.models.contains(providerModel) { return providerModel }
+        return selectedProvider.models.first { $0 != "*" } ?? conversation.model
+    }
+
+    private var chatExtensions: ChatRequest.Extensions? {
+        let mode = routeMode.usesExternal && !externalRoutingAvailable
+            ? ChatRouteMode.localOnly
+            : routeMode
+        let remote = appState.inferenceMode == .team
+        return .init(
+            route: .init(
+                mode: mode.rawValue,
+                providerID: remote || !mode.usesExternal ? nil : selectedProvider?.id,
+                model: remote || !mode.usesExternal ? nil : effectiveProviderModel
+            )
+        )
+    }
+
     private var selectedModel: CatalogModel? {
         appState.model(named: conversation.model)
     }
@@ -927,6 +1066,14 @@ struct ChatView: View {
             pendingPermissionMode = mode
         } else {
             permissionModeValue = mode.rawValue
+        }
+    }
+
+    private func selectAvailableProviderIfNeeded() {
+        guard let provider = selectedProvider ?? availableProviders.first else { return }
+        providerID = provider.id
+        if !provider.models.contains(providerModel) {
+            providerModel = provider.models.first { $0 != "*" } ?? conversation.model
         }
     }
 
@@ -1186,7 +1333,8 @@ struct ChatView: View {
                 reasoningStrength: effectiveReasoningStrength,
                 tools: codingActive && !forceFinalResponse
                     ? CodingWorkspace.tools(for: permissionMode)
-                    : nil
+                    : nil,
+                machboost: chatExtensions
             )
             var roundContent = ""
             var roundToolCalls: [APIToolCall] = []
@@ -1560,7 +1708,8 @@ struct ChatView: View {
                 affinityKey: conversation.workspaceID.map { "workspace:\($0)" }
                     ?? conversation.id.uuidString
             ),
-            reasoningStrength: selectedModelRequiresReasoning ? "low" : nil
+            reasoningStrength: selectedModelRequiresReasoning ? "low" : nil,
+            machboost: chatExtensions
         )
 
         var summary = ""
@@ -1725,6 +1874,53 @@ private enum ModelBrowserFilter: String, CaseIterable, Identifiable {
         case .loaded: "memorychip"
         case .vision: "eye"
         case .tools: "wrench.and.screwdriver"
+        }
+    }
+}
+
+private enum ChatRouteMode: String, CaseIterable, Identifiable {
+    case localOnly = "local_only"
+    case localFirst = "local_first"
+    case externalFirst = "external_first"
+    case externalOnly = "external_only"
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .localOnly: "Local only"
+        case .localFirst: "Local, then paid API"
+        case .externalFirst: "Paid API, then local"
+        case .externalOnly: "Paid API only"
+        }
+    }
+
+    var shortTitle: String {
+        switch self {
+        case .localOnly: "Local"
+        case .localFirst: "Local + API"
+        case .externalFirst: "API + local"
+        case .externalOnly: "API"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .localOnly: "desktopcomputer"
+        case .localFirst: "arrow.right.circle"
+        case .externalFirst: "arrow.left.arrow.right"
+        case .externalOnly: "cloud"
+        }
+    }
+
+    var usesExternal: Bool { self != .localOnly }
+
+    var help: String {
+        switch self {
+        case .localOnly: "Always run on the selected MachBoost host"
+        case .localFirst: "Use the paid API only when local inference is unavailable or overloaded"
+        case .externalFirst: "Prefer the paid API and use local inference if it has a transient failure"
+        case .externalOnly: "Always use the selected paid API"
         }
     }
 }
