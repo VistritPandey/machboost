@@ -287,11 +287,16 @@ final class AppState {
 
     func start() async {
         do {
-            if configuration.lanEnabled {
+            apiToken = await KeychainStore.tokenAsync()
+            if configuration.lanEnabled, apiToken == nil {
                 apiToken = try await KeychainStore.tokenOrCreateAsync()
             }
             rebuildAPI()
             try await daemon.start(configuration: configuration, apiToken: apiToken)
+            if daemon.authenticationRequired, !configuration.lanEnabled {
+                configuration.lanEnabled = true
+                Self.saveConfiguration(configuration)
+            }
             hostDiscovery.start()
             updateHostAdvertisement()
             await refreshAll()
