@@ -287,8 +287,7 @@ final class AppState {
 
     func start() async {
         do {
-            apiToken = await KeychainStore.tokenAsync()
-            if configuration.lanEnabled, apiToken == nil {
+            if configuration.lanEnabled {
                 apiToken = try await KeychainStore.tokenOrCreateAsync()
             }
             rebuildAPI()
