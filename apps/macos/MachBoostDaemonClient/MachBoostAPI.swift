@@ -207,6 +207,15 @@ public extension MachBoostAPIProtocol {
     }
 }
 
+public struct ServerHealth: Decodable, Sendable, Equatable {
+    public let status: String
+    public let version: String?
+    public let authentication: String?
+
+    public var isReady: Bool { status == "ok" }
+    public var requiresAuthentication: Bool { authentication == "required" }
+}
+
 public final class MachBoostAPI: MachBoostAPIProtocol, @unchecked Sendable {
     private let endpoint: URL
     private let apiToken: String?
@@ -238,33 +247,25 @@ public final class MachBoostAPI: MachBoostAPIProtocol, @unchecked Sendable {
     }
 
     public func health(timeoutInterval: TimeInterval = 1) async throws -> Bool {
-        struct Health: Decodable { let status: String }
+        try await serverHealth(timeoutInterval: timeoutInterval).isReady
+    }
+
+    public func serverHealth(timeoutInterval: TimeInterval = 1) async throws -> ServerHealth {
         var request = try request(
             path: "/healthz",
             method: "GET",
             authenticated: false
         )
         request.timeoutInterval = timeoutInterval
-        let health: Health = try await perform(request)
-        return health.status == "ok"
+        return try await perform(request)
     }
 
     public func serverVersion(timeoutInterval: TimeInterval = 1) async throws -> String {
-        struct Health: Decodable {
-            let status: String
-            let version: String
-        }
-        var request = try request(
-            path: "/healthz",
-            method: "GET",
-            authenticated: false
-        )
-        request.timeoutInterval = timeoutInterval
-        let health: Health = try await perform(request)
-        guard health.status == "ok" else {
+        let health = try await serverHealth(timeoutInterval: timeoutInterval)
+        guard health.isReady, let version = health.version else {
             throw MachBoostAPIError.invalidResponse
         }
-        return health.version
+        return version
     }
 
     public func catalog() async throws -> [CatalogModel] {
