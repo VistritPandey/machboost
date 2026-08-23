@@ -1274,6 +1274,28 @@ final class MachBoostTests: XCTestCase {
         XCTAssertEqual(version, "0.13.1")
     }
 
+    func testServerHealthReportsAuthenticatedLANMode() async throws {
+        let session = mockSession { request in
+            XCTAssertEqual(request.url?.path, "/healthz")
+            XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
+            return self.response(
+                for: request,
+                body: #"{"status":"ok","version":"0.15.0","authentication":"required"}"#
+            )
+        }
+        let api = MachBoostAPI(
+            endpoint: URL(string: "http://127.0.0.1:11435")!,
+            apiToken: "saved-token",
+            session: session
+        )
+
+        let health = try await api.serverHealth(timeoutInterval: 0.4)
+
+        XCTAssertTrue(health.isReady)
+        XCTAssertTrue(health.requiresAuthentication)
+        XCTAssertEqual(health.version, "0.15.0")
+    }
+
     func testCancellationSendsClientRequestID() async throws {
         let session = mockSession { request in
             let data = try XCTUnwrap(request.httpBody)
