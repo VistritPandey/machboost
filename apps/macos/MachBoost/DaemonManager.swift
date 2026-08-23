@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import Observation
 
@@ -35,9 +36,16 @@ final class DaemonManager {
         let api = MachBoostAPI(endpoint: configuration.endpoint, apiToken: apiToken)
         if let health = try? await api.serverHealth(), health.isReady {
             authenticationRequired = health.requiresAuthentication
-            let appVersion = Self.applicationVersion()
-            if let serverVersion = health.version,
-               Self.isOlderVersion(serverVersion, than: appVersion) {
+            var canAuthenticate = true
+            if health.requiresAuthentication {
+                canAuthenticate = (try? await api.authenticatedServerVersion()) != nil
+            }
+            if !canAuthenticate {
+                try await reclaimBundledDaemon(on: configuration.port)
+                authenticationRequired = false
+            } else if let serverVersion = health.version,
+                      Self.isOlderVersion(serverVersion, than: Self.applicationVersion()) {
+                let appVersion = Self.applicationVersion()
                 try await stopOlderDaemon(
                     api: api,
                     serverVersion: serverVersion,
@@ -229,6 +237,67 @@ final class DaemonManager {
         }
     }
 
+    private func reclaimBundledDaemon(on port: Int) async throws {
+        let listeners = Self.listenerPIDs(on: port)
+        guard !listeners.isEmpty else { return }
+        for pid in listeners {
+            let command = Self.processCommand(pid: pid)
+            guard Self.isBundledDaemonCommand(command, port: port) else {
+                throw DaemonError.unrecognizedSecuredDaemon(port: port)
+            }
+            guard Darwin.kill(pid, SIGTERM) == 0 else {
+                throw DaemonError.unrecognizedSecuredDaemon(port: port)
+            }
+        }
+        for _ in 0..<50 {
+            if Self.listenerPIDs(on: port).isEmpty {
+                return
+            }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        throw DaemonError.unrecognizedSecuredDaemon(port: port)
+    }
+
+    static func isBundledDaemonCommand(_ command: String, port: Int) -> Bool {
+        command.contains("/Contents/Resources/runtime/python/bin/python")
+            && command.contains("-m machboost.cli serve")
+            && command.contains("--port \(port)")
+    }
+
+    private static func listenerPIDs(on port: Int) -> [Int32] {
+        commandOutput(
+            executable: "/usr/sbin/lsof",
+            arguments: ["-nP", "-tiTCP:\(port)", "-sTCP:LISTEN"]
+        )
+        .split(whereSeparator: { $0.isWhitespace })
+        .compactMap { Int32($0) }
+    }
+
+    private static func processCommand(pid: Int32) -> String {
+        commandOutput(
+            executable: "/bin/ps",
+            arguments: ["-p", String(pid), "-o", "command="]
+        )
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func commandOutput(executable: String, arguments: [String]) -> String {
+        let process = Process()
+        let output = Pipe()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = arguments
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+            process.waitUntilExit()
+        } catch {
+            return ""
+        }
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        return String(data: data, encoding: .utf8) ?? ""
+    }
+
     static func launchEnvironment(
         base: [String: String],
         apiToken: String?
@@ -317,6 +386,7 @@ enum DaemonError: LocalizedError {
     case timedOut
     case exited(Int32)
     case externallyManaged
+    case unrecognizedSecuredDaemon(port: Int)
     case incompatibleDaemon(running: String, expected: String)
 
     var errorDescription: String? {
@@ -329,6 +399,8 @@ enum DaemonError: LocalizedError {
             "The MachBoost daemon exited with status \(status)."
         case .externallyManaged:
             "This server was started outside the app. Stop it before changing app server settings."
+        case let .unrecognizedSecuredDaemon(port):
+            "An authenticated server the app cannot safely replace is using port \(port). Stop that server, then reopen MachBoost."
         case let .incompatibleDaemon(running, expected):
             "MachBoost \(running) is already using the local server port and could not be replaced by \(expected). Quit the older MachBoost process and reopen the app."
         }
