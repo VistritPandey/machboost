@@ -15,6 +15,7 @@ final class DaemonManager {
     private(set) var state: State = .stopped
     private(set) var recentLogs: [String] = []
     private(set) var ownsProcess = false
+    private(set) var authenticationRequired = false
 
     private var process: Process?
     private var outputPipe: Pipe?
@@ -30,10 +31,12 @@ final class DaemonManager {
     ) async throws {
         guard state != .starting, state != .running else { return }
         state = .starting
+        authenticationRequired = false
         let api = MachBoostAPI(endpoint: configuration.endpoint, apiToken: apiToken)
-        if (try? await api.health()) == true {
+        if let health = try? await api.serverHealth(), health.isReady {
+            authenticationRequired = health.requiresAuthentication
             let appVersion = Self.applicationVersion()
-            if let serverVersion = try? await api.serverVersion(),
+            if let serverVersion = health.version,
                Self.isOlderVersion(serverVersion, than: appVersion) {
                 try await stopOlderDaemon(
                     api: api,
@@ -85,6 +88,7 @@ final class DaemonManager {
                 self.process = nil
                 self.outputPipe = nil
                 self.ownsProcess = false
+                self.authenticationRequired = false
                 if self.state != .stopping {
                     self.state = process.terminationStatus == 0
                         ? .stopped
@@ -102,6 +106,7 @@ final class DaemonManager {
         self.process = process
         self.outputPipe = pipe
         ownsProcess = true
+        authenticationRequired = configuration.lanEnabled
 
         do {
             try await waitUntilReady(api: api, process: process)
@@ -160,6 +165,7 @@ final class DaemonManager {
         process = nil
         outputPipe = nil
         ownsProcess = false
+        authenticationRequired = false
         state = .stopped
     }
 
@@ -171,6 +177,7 @@ final class DaemonManager {
         process = nil
         outputPipe = nil
         ownsProcess = false
+        authenticationRequired = false
         state = .stopped
     }
 
