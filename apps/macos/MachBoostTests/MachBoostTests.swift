@@ -1296,6 +1296,23 @@ final class MachBoostTests: XCTestCase {
         XCTAssertEqual(health.version, "0.15.0")
     }
 
+    func testAuthenticatedVersionProbeUsesSavedBearerToken() async throws {
+        let session = mockSession { request in
+            XCTAssertEqual(request.url?.path, "/api/version")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer saved-token")
+            return self.response(for: request, body: #"{"version":"0.15.0"}"#)
+        }
+        let api = MachBoostAPI(
+            endpoint: URL(string: "http://127.0.0.1:11435")!,
+            apiToken: "saved-token",
+            session: session
+        )
+
+        let version = try await api.authenticatedServerVersion(timeoutInterval: 0.4)
+
+        XCTAssertEqual(version, "0.15.0")
+    }
+
     func testCancellationSendsClientRequestID() async throws {
         let session = mockSession { request in
             let data = try XCTUnwrap(request.httpBody)
@@ -1453,6 +1470,26 @@ final class MachBoostTests: XCTestCase {
         XCTAssertTrue(DaemonManager.isOlderVersion("0.9.0", than: "0.10.0"))
         XCTAssertFalse(DaemonManager.isOlderVersion("0.13.1", than: "0.13.1"))
         XCTAssertFalse(DaemonManager.isOlderVersion("0.14.0", than: "0.13.1"))
+    }
+
+    @MainActor
+    func testDaemonRecoveryRecognizesOnlyBundledMachBoostServer() {
+        let bundled = "/Applications/MachBoost.app/Contents/Resources/runtime/python/bin/python3 -m machboost.cli serve --host 0.0.0.0 --port 11435"
+
+        XCTAssertTrue(DaemonManager.isBundledDaemonCommand(bundled, port: 11_435))
+        XCTAssertFalse(DaemonManager.isBundledDaemonCommand(bundled, port: 11_436))
+        XCTAssertFalse(
+            DaemonManager.isBundledDaemonCommand(
+                "/usr/bin/python3 -m machboost.cli serve --port 11435",
+                port: 11_435
+            )
+        )
+        XCTAssertFalse(
+            DaemonManager.isBundledDaemonCommand(
+                "/Applications/MachBoost.app/Contents/Resources/runtime/python/bin/python3 -m http.server 11435",
+                port: 11_435
+            )
+        )
     }
 
     @MainActor
