@@ -9,12 +9,6 @@ enum KeychainStore {
         value(account: account)
     }
 
-    static func tokenAsync() async -> String? {
-        await Task.detached(priority: .userInitiated) {
-            token()
-        }.value
-    }
-
     static func providerSecret(id: String) -> String? {
         value(account: "provider-\(id)")
     }
@@ -36,34 +30,16 @@ enum KeychainStore {
     }
 
     private static func value(account: String) -> String? {
-        if let current = storedValue(account: account, service: service) {
-            return current
-        }
-
-        // Service names can change when an app moves from a development identity
-        // to its public bundle identity. Recover the same account without baking a
-        // historical identifier into the release, then migrate it forward.
-        guard let migrated = storedValue(account: account, service: nil) else {
-            return nil
-        }
-        try? save(value: migrated, account: account)
-        return migrated
-    }
-
-    private static func storedValue(account: String, service: String?) -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
             kSecAttrAccount as String: account,
             kSecMatchLimit as String: kSecMatchLimitOne,
             kSecReturnData as String: true,
         ]
-        var scopedQuery = query
-        if let service {
-            scopedQuery[kSecAttrService as String] = service
-        }
         var result: CFTypeRef?
         guard
-            SecItemCopyMatching(scopedQuery as CFDictionary, &result) == errSecSuccess,
+            SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
             let data = result as? Data
         else {
             return nil
