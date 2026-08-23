@@ -268,6 +268,14 @@ public final class MachBoostAPI: MachBoostAPIProtocol, @unchecked Sendable {
         return version
     }
 
+    public func authenticatedServerVersion(timeoutInterval: TimeInterval = 1) async throws -> String {
+        struct Version: Decodable { let version: String }
+        var request = try request(path: "/api/version", method: "GET")
+        request.timeoutInterval = timeoutInterval
+        let response: Version = try await perform(request)
+        return response.version
+    }
+
     public func catalog() async throws -> [CatalogModel] {
         let response: CatalogResponse = try await get("/api/catalog")
         return response.models
