@@ -30,6 +30,8 @@ a separate MachBoost installation.
 - automatic conversation compaction near a configurable context threshold
 - Bonjour discovery and a load-aware host pool that can route requests across
   compatible MachBoost Macs, with optional local participation
+- an Apps screen that connects Claude Desktop's third-party inference gateway
+  to this Mac or a saved authenticated MachBoost host
 - menu-bar lifecycle, optional launch at login, EdDSA-verified Sparkle updates,
   automatic checks, and a manual **Check Now** action
 - localhost serving by default; authenticated LAN serving is opt-in
@@ -105,6 +107,28 @@ The desktop code is split into explicit targets:
 - `MachBoostTests` and `MachBoostUITests` cover module contracts and user flows.
 
 The Swift package manifest mirrors these boundaries for non-Xcode builds.
+
+## Claude Desktop
+
+Open **Apps → Claude Desktop**, choose **This Mac** or a saved host, and enable
+the integration. MachBoost writes a dedicated Claude third-party profile,
+restarts Claude after confirmation, and exposes the selected host's available
+models through Claude's model picker. Disabling the integration restores the
+profile that was active before MachBoost, including an Ollama profile.
+
+The equivalent CLI commands are:
+
+```sh
+machboost launch claude-desktop
+machboost launch claude-desktop --connection studio
+machboost launch claude-desktop --restore
+```
+
+Claude Desktop calls `/v1/models`, `/v1/messages/count_tokens`, and
+`/v1/messages`. Shared hosts use the same bearer key already stored for the
+MachBoost connection. The key is passed from the app to the bundled runtime
+through its protected process environment and is never placed in command-line
+arguments or app logs.
 
 ## Repository Workspaces
 
