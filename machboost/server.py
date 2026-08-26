@@ -21,6 +21,11 @@ from urllib.parse import parse_qs, urlparse
 
 from . import __version__
 from .accelerator import Accelerator, render_chat_prompt
+from .claude_desktop import (
+    claude_desktop_models,
+    estimate_anthropic_input_tokens,
+    resolve_claude_desktop_model,
+)
 from .memory import CacheNamespace, MemorySearch, TeamMemoryStore, exchange_memory
 from .model_store import ModelStore, StoredModel, apply_stored_model
 from .models import (
@@ -77,6 +82,7 @@ TEAM_INFERENCE_PATHS = {
     "/v1/completions",
     "/v1/embeddings",
     "/v1/messages",
+    "/v1/messages/count_tokens",
     "/v1/responses",
 }
 
@@ -1762,6 +1768,18 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
             stored,
         )
 
+    def claude_gateway_model_names(self) -> list[str]:
+        rows = ollama_model_rows(
+            catalog_rows(),
+            self.models.list(),
+            self.runtime.ps(),
+        )
+        return [
+            str(row["name"])
+            for row in rows
+            if self.principal.permits_model(str(row["name"]))
+        ]
+
     def external_chat(
         self,
         payload: dict[str, Any],
@@ -2060,13 +2078,19 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                 self.runtime.ps(),
             )
             if path == "/v1/models":
+                claude_models = claude_desktop_models(
+                    self.claude_gateway_model_names()
+                )
                 self.send_json(
                     {
                         "object": "list",
-                        "data": [
+                        "data": claude_models + [
                             {"id": item["name"], "object": "model", "owned_by": "machboost"}
                             for item in models
                         ],
+                        "first_id": claude_models[0]["id"] if claude_models else "",
+                        "last_id": claude_models[-1]["id"] if claude_models else "",
+                        "has_more": False,
                     }
                 )
             else:
@@ -2495,7 +2519,20 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
             if path == "/v1/responses":
                 self.handle_openai_response(payload)
                 return
+            if path == "/v1/messages/count_tokens":
+                payload["model"] = resolve_claude_desktop_model(
+                    required_string(payload, "model"),
+                    self.claude_gateway_model_names(),
+                )
+                self.send_json(
+                    {"input_tokens": estimate_anthropic_input_tokens(payload)}
+                )
+                return
             if path == "/v1/messages":
+                payload["model"] = resolve_claude_desktop_model(
+                    required_string(payload, "model"),
+                    self.claude_gateway_model_names(),
+                )
                 self.handle_anthropic_message(payload)
                 return
             if path == "/v1/completions":
