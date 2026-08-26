@@ -189,6 +189,37 @@ final class DaemonManager {
         state = .stopped
     }
 
+    func runCLI(
+        _ arguments: [String],
+        apiToken: String? = nil
+    ) async throws -> String {
+        let launch = try runtimeLaunch()
+        let environment = Self.launchEnvironment(
+            base: ProcessInfo.processInfo.environment,
+            apiToken: apiToken
+        )
+        return try await Task.detached(priority: .userInitiated) {
+            let process = Process()
+            let output = Pipe()
+            process.executableURL = launch.executable
+            process.arguments = launch.prefixArguments + ["-m", "machboost.cli"] + arguments
+            process.currentDirectoryURL = launch.workingDirectory
+            process.environment = environment
+            process.standardOutput = output
+            process.standardError = output
+            try process.run()
+            process.waitUntilExit()
+            let data = output.fileHandleForReading.readDataToEndOfFile()
+            let text = String(data: data, encoding: .utf8) ?? ""
+            guard process.terminationStatus == 0 else {
+                throw DaemonError.commandFailed(
+                    text.trimmingCharacters(in: .whitespacesAndNewlines)
+                )
+            }
+            return text
+        }.value
+    }
+
     private func waitUntilReady(api: MachBoostAPI, process: Process) async throws {
         for _ in 0..<300 {
             if !process.isRunning {
@@ -375,7 +406,7 @@ final class DaemonManager {
     }
 }
 
-private struct RuntimeLaunch {
+private struct RuntimeLaunch: Sendable {
     let executable: URL
     let prefixArguments: [String]
     let workingDirectory: URL
@@ -388,6 +419,7 @@ enum DaemonError: LocalizedError {
     case externallyManaged
     case unrecognizedSecuredDaemon(port: Int)
     case incompatibleDaemon(running: String, expected: String)
+    case commandFailed(String)
 
     var errorDescription: String? {
         switch self {
@@ -403,6 +435,8 @@ enum DaemonError: LocalizedError {
             "An authenticated server the app cannot safely replace is using port \(port). Stop that server, then reopen MachBoost."
         case let .incompatibleDaemon(running, expected):
             "MachBoost \(running) is already using the local server port and could not be replaced by \(expected). Quit the older MachBoost process and reopen the app."
+        case let .commandFailed(message):
+            message.isEmpty ? "The MachBoost command failed." : message
         }
     }
 }
