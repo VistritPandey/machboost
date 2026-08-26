@@ -182,9 +182,10 @@
               <i data-lucide="braces" aria-hidden="true"></i>
               <h3>Drop-in APIs</h3>
               <p>
-                Connect through OpenAI Chat Completions and Responses, Anthropic
-                Messages, Ollama-compatible routes, the Python client, or a named
-                CLI device profile whose token stays in macOS Keychain.
+                Connect through Claude Desktop's native inference gateway, OpenAI
+                Chat Completions and Responses, Anthropic Messages, Ollama-compatible
+                routes, the Python client, or a named device profile whose token
+                stays in macOS Keychain.
               </p>
             </li>
           </ul>
@@ -674,6 +675,8 @@ export OPENAI_API_KEY="mbk_employee_key"</code></pre>
               Chat Completions, Anthropic Messages, or Ollama-compatible clients at MachBoost.
               Loopback works only on the host Mac; authenticated LAN mode displays a
               reachable address and token for teammates on the same private network.
+              Claude Desktop connects through its native third-party inference gateway,
+              not MCP, and can use models resident on this Mac or a saved team host.
             </p>
           </div>
           <div class="code-samples">
@@ -718,6 +721,23 @@ wire_api = "responses"
 export ANTHROPIC_BASE_URL="http://TEAM-MAC:11435"
 export ANTHROPIC_AUTH_TOKEN="YOUR_MACHBOOST_KEY"
 export ANTHROPIC_MODEL="qwen2.5-coder:7b"</code></pre>
+            </div>
+            <div class="code-block">
+              <div class="code-header">
+                <span>Claude Desktop</span>
+                <button type="button" class="copy-button" data-copy-target="claude-desktop-code">
+                  <i data-lucide="copy" aria-hidden="true"></i>
+                  <span class="sr-only">Copy Claude Desktop example</span>
+                </button>
+              </div>
+              <pre id="claude-desktop-code"><code># Use resident models on this Mac
+machboost launch claude-desktop
+
+# Or route Claude Desktop to a saved team host
+machboost launch claude-desktop --connection studio
+
+# Restore the previous Claude provider later
+machboost launch claude-desktop --restore</code></pre>
             </div>
             <div class="code-block">
               <div class="code-header">
