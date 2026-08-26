@@ -73,6 +73,92 @@ class CLITests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(output.getvalue().strip(), __version__)
 
+    def test_launch_parser_supports_claude_desktop_and_shared_connections(self):
+        args = cli.build_parser().parse_args(
+            [
+                "launch",
+                "claude-desktop",
+                "--connection",
+                "studio",
+                "--no-restart",
+            ]
+        )
+
+        self.assertEqual(args.command, "launch")
+        self.assertEqual(args.integration, "claude-desktop")
+        self.assertEqual(args.connection, "studio")
+        self.assertTrue(args.no_restart)
+
+    def test_launch_connects_claude_to_validated_gateway(self):
+        output = io.StringIO()
+        manager = Mock()
+        manager.configure.return_value = {
+            "connected": True,
+            "endpoint": "http://studio.local:11435",
+        }
+        manager.installed_application.return_value = None
+        client = Mock()
+        client.get.return_value = {
+            "data": [
+                {
+                    "id": "claude-sonnet-5",
+                    "type": "model",
+                    "display_name": "mlx-community/model",
+                    "anthropic_family_tier": "sonnet",
+                }
+            ]
+        }
+        args = cli.build_parser().parse_args(
+            ["launch", "claude-desktop", "--connection", "studio", "--no-restart"]
+        )
+
+        with (
+            patch("machboost.cli.ClaudeDesktopProfileManager", return_value=manager),
+            patch(
+                "machboost.cli._claude_desktop_gateway",
+                return_value=("http://studio.local:11435", "secret", False),
+            ),
+            patch("machboost.cli.MachBoostClient", return_value=client),
+        ):
+            code = cli.run_launch(args, output_stream=output)
+
+        self.assertEqual(code, 0)
+        manager.configure.assert_called_once_with(
+            "http://studio.local:11435", "secret"
+        )
+        self.assertIn("connected to MachBoost", output.getvalue())
+
+    def test_launch_rejects_gateway_without_claude_routes(self):
+        output = io.StringIO()
+        errors = io.StringIO()
+        manager = Mock()
+        manager.installed_application.return_value = None
+        client = Mock()
+        client.get.return_value = {
+            "data": [{"id": "plain-model", "object": "model"}]
+        }
+        args = cli.build_parser().parse_args(
+            ["launch", "claude-desktop", "--no-restart"]
+        )
+
+        with (
+            patch("machboost.cli.ClaudeDesktopProfileManager", return_value=manager),
+            patch(
+                "machboost.cli._claude_desktop_gateway",
+                return_value=("http://127.0.0.1:11435", "machboost", True),
+            ),
+            patch("machboost.cli.MachBoostClient", return_value=client),
+        ):
+            code = cli.run_launch(
+                args,
+                output_stream=output,
+                error_stream=errors,
+            )
+
+        self.assertEqual(code, 2)
+        self.assertIn("no Claude Desktop-compatible models", errors.getvalue())
+        manager.configure.assert_not_called()
+
     def test_model_alias_cli_parses_options_and_calls_resident_client(self):
         client = SimpleNamespace(
             create_model=lambda name, source, **kwargs: {
