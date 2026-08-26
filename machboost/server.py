@@ -1774,11 +1774,24 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
             self.models.list(),
             self.runtime.ps(),
         )
-        return [
-            str(row["name"])
-            for row in rows
-            if self.principal.permits_model(str(row["name"]))
-        ]
+        names: list[str] = []
+        seen_targets: set[tuple[str, str]] = set()
+        for row in rows:
+            name = str(row["name"])
+            if not self.principal.permits_model(name):
+                continue
+            metadata = row.get("machboost") or {}
+            target = str(
+                metadata.get("repository")
+                or metadata.get("source")
+                or name
+            )
+            identity = (str(metadata.get("backend") or ""), target)
+            if identity in seen_targets:
+                continue
+            seen_targets.add(identity)
+            names.append(name)
+        return names
 
     def external_chat(
         self,
