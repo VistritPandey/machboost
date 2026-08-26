@@ -197,9 +197,18 @@ struct AppsView: View {
         }
     }
 
-    private func selectedToken() async throws -> String {
+    private func selectedToken() async throws -> String? {
         if selectedSource == "local" {
-            return appState.apiToken ?? "machboost"
+            let keychainToken = appState.daemon.authenticationRequired
+                ? await Task.detached(priority: .userInitiated) {
+                    KeychainStore.token()
+                }.value
+                : nil
+            return try AppsGatewayCredentials.localToken(
+                authenticationRequired: appState.daemon.authenticationRequired,
+                runtimeToken: appState.apiToken,
+                keychainToken: keychainToken
+            )
         }
         guard
             let id = UUID(uuidString: selectedSource),
@@ -209,6 +218,23 @@ struct AppsView: View {
             throw AppsViewError.missingTeamToken
         }
         return token
+    }
+}
+
+enum AppsGatewayCredentials {
+    static func localToken(
+        authenticationRequired: Bool,
+        runtimeToken: String?,
+        keychainToken: String?
+    ) throws -> String? {
+        guard authenticationRequired else { return nil }
+        if let runtimeToken, !runtimeToken.isEmpty {
+            return runtimeToken
+        }
+        if let keychainToken, !keychainToken.isEmpty {
+            return keychainToken
+        }
+        throw AppsViewError.missingLocalToken
     }
 }
 
@@ -278,9 +304,15 @@ private struct ClaudeDesktopConnectionStatus {
 }
 
 private enum AppsViewError: LocalizedError {
+    case missingLocalToken
     case missingTeamToken
 
     var errorDescription: String? {
-        "The saved API key for this MachBoost host is missing. Reconnect the host first."
+        switch self {
+        case .missingLocalToken:
+            "This Mac requires authentication, but its MachBoost API key is missing. Turn LAN sharing off and on in Server settings to create a new key."
+        case .missingTeamToken:
+            "The saved API key for this MachBoost host is missing. Reconnect the host first."
+        }
     }
 }
