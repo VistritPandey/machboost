@@ -20,6 +20,10 @@ from . import __version__, machboost
 from .accelerator import Accelerator, read_context_paths, resolve_context
 from .adapters.ollama import OllamaHTTPAdapter, OllamaHTTPError
 from .client import MachBoostAPIError, MachBoostClient, ensure_server
+from .claude_desktop import (
+    ClaudeDesktopProfileManager,
+    save_model_mappings,
+)
 from .connections import ConnectionStore, normalize_endpoint
 from .context_bench import benchmark_context_acceleration, context_fingerprint
 from .latency import benchmark_chat_latency
@@ -554,6 +558,121 @@ def run_disconnect(args: argparse.Namespace, *, output_stream=None, error_stream
         return 2
     print(f"forgot {profile.name}; its API key was removed from Keychain", file=output_stream)
     return 0
+
+
+def run_launch(args: argparse.Namespace, *, output_stream=None, error_stream=None) -> int:
+    output_stream = output_stream or sys.stdout
+    error_stream = error_stream or sys.stderr
+    if args.integration not in {"claude-desktop", "claude-app"}:
+        print(
+            f"machboost launch error: unsupported integration {args.integration!r}",
+            file=error_stream,
+        )
+        return 2
+
+    manager = ClaudeDesktopProfileManager()
+    try:
+        if args.restore:
+            status = manager.restore()
+            action = "restored"
+        else:
+            endpoint, api_key, is_local = _claude_desktop_gateway(args)
+            if args.model:
+                if not is_local:
+                    raise ValueError(
+                        "--model configures this Mac; shared-host model mappings are managed by the host"
+                    )
+                save_model_mappings(args.model)
+
+            client = MachBoostClient(
+                endpoint,
+                api_token=None if api_key == "machboost" else api_key,
+                timeout=args.timeout,
+            )
+            catalog = client.get("/v1/models")
+            routes = [
+                item
+                for item in catalog.get("data", [])
+                if item.get("type") == "model"
+                and item.get("anthropic_family_tier")
+            ]
+            if not routes:
+                raise RuntimeError(
+                    "the selected MachBoost server has no Claude Desktop-compatible models"
+                )
+            status = manager.configure(endpoint, api_key)
+            action = "connected"
+
+        restarted = False
+        if not args.no_restart and manager.installed_application() is not None:
+            restart = args.yes
+            if not args.yes and sys.stdin.isatty():
+                answer = input("Restart Claude Desktop now? Any running task will stop. [y/N] ")
+                restart = answer.strip().lower() in {"y", "yes"}
+            if restart:
+                manager.restart_application()
+                restarted = True
+    except (MachBoostAPIError, OSError, RuntimeError, ValueError) as exc:
+        print(f"machboost launch error: {exc}", file=error_stream)
+        return 2
+
+    if args.json:
+        print(json.dumps({**status, "action": action, "restarted": restarted}, indent=2), file=output_stream)
+    elif action == "restored":
+        print("Claude Desktop restored to its previous inference profile.", file=output_stream)
+    else:
+        print(f"Claude Desktop connected to MachBoost at {status['endpoint']}.", file=output_stream)
+        print("Models are discovered from the selected MachBoost host.", file=output_stream)
+    if manager.installed_application() is not None and not restarted:
+        print("Quit and reopen Claude Desktop for the change to take effect.", file=output_stream)
+    return 0
+
+
+def _claude_desktop_gateway(args: argparse.Namespace) -> tuple[str, str, bool]:
+    if args.connection and args.endpoint:
+        raise ValueError("use either --connection or --endpoint, not both")
+    if args.connection:
+        store = ConnectionStore()
+        profile = store.get(args.connection)
+        token = store.token(profile)
+        if not token:
+            raise ValueError(f"saved connection {profile.name!r} has no API key")
+        return profile.endpoint, token, False
+
+    endpoint = normalize_endpoint(args.endpoint or f"http://{DEFAULT_HOST}:{DEFAULT_PORT}")
+    host = (urlparse(endpoint).hostname or "").lower()
+    is_local = host in {"127.0.0.1", "localhost", "::1"}
+    if is_local:
+        ensure_server(endpoint, timeout=args.timeout)
+    token = (
+        str(args.api_key or "").strip()
+        or str(os.environ.get("MACHBOOST_API_TOKEN") or "").strip()
+        or (_machboost_app_api_token() if is_local else "")
+        or ("machboost" if is_local else "")
+    )
+    if not token:
+        raise ValueError("provide --api-key or use a saved --connection for a remote host")
+    return endpoint, token, is_local
+
+
+def _machboost_app_api_token() -> str:
+    if platform.system() != "Darwin" or not Path("/usr/bin/security").exists():
+        return ""
+    result = subprocess.run(
+        [
+            "/usr/bin/security",
+            "find-generic-password",
+            "-w",
+            "-s",
+            "io.machboost.MachBoost",
+            "-a",
+            "lan-api-token",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.strip() if result.returncode == 0 else ""
 
 
 def select_native_backend(model: str, backend: str) -> str:
@@ -2450,6 +2569,22 @@ def build_parser() -> argparse.ArgumentParser:
     disconnect = subcommands.add_parser("disconnect", help="Forget a saved MachBoost device.")
     disconnect.add_argument("name", help="Connection name to forget.")
 
+    launch = subcommands.add_parser("launch", help="Connect MachBoost to another AI application.")
+    launch.add_argument("integration", choices=["claude-desktop", "claude-app"])
+    launch.add_argument("--endpoint", help="MachBoost server root URL. Defaults to this Mac.")
+    launch.add_argument("--connection", help="Saved MachBoost connection name to use.")
+    launch.add_argument("--api-key", help="Bearer key for an explicit remote endpoint.")
+    launch.add_argument(
+        "--model",
+        action="append",
+        help="Local model to advertise in Claude Desktop; repeat for up to five models.",
+    )
+    launch.add_argument("--restore", action="store_true", help="Restore Claude Desktop's previous profile.")
+    launch.add_argument("--no-restart", action="store_true", help="Do not restart Claude Desktop.")
+    launch.add_argument("--yes", action="store_true", help="Restart Claude Desktop without prompting.")
+    launch.add_argument("--timeout", type=float, default=30.0)
+    launch.add_argument("--json", action="store_true")
+
     subcommands.add_parser("version", help="Print the installed MachBoost version.")
     return parser
 
@@ -2683,6 +2818,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return run_use_connection(args)
     if args.command == "disconnect":
         return run_disconnect(args)
+    if args.command == "launch":
+        return run_launch(args)
     if args.command == "run":
         return run_native_chat(args) if args.direct else run_resident_chat(args)
     if args.command == "chat":
