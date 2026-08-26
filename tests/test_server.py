@@ -1745,6 +1745,21 @@ class HTTPServerTests(unittest.TestCase):
         self.assertEqual(calls[0]["input"]["path"], "a.py")
 
     def test_claude_desktop_discovers_routes_counts_tokens_and_routes_messages(self):
+        catalog_patcher = patch(
+            "machboost.server.catalog_rows",
+            return_value=[
+                {
+                    "name": "mlx-community/example",
+                    "repository": "mlx-community/example",
+                    "backend": "mlx",
+                    "capabilities": ["chat"],
+                    "cached": True,
+                }
+            ],
+        )
+        catalog_patcher.start()
+        self.addCleanup(catalog_patcher.stop)
+
         _, _, body = self.request("/v1/models")
         catalog = json.loads(body)
         routes = [item for item in catalog["data"] if item.get("type") == "model"]
