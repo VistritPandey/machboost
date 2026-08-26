@@ -216,12 +216,12 @@ final class MachBoostUITests: XCTestCase {
         approval.click()
 
         XCTAssertTrue(
-            app.descendants(matching: .any)["tool-call-replace_in_file"]
-                .waitForExistence(timeout: 10)
+            app.staticTexts["Reviewed the repository after three tool results."]
+                .waitForExistence(timeout: 15)
         )
         XCTAssertTrue(
-            app.staticTexts["Reviewed the repository after three tool results."]
-                .waitForExistence(timeout: 10)
+            app.descendants(matching: .any)["tool-call-replace_in_file"]
+                .waitForExistence(timeout: 5)
         )
         let changes = app.buttons["code-changes"]
         XCTAssertTrue(changes.waitForExistence(timeout: 3))
@@ -316,11 +316,12 @@ final class MachBoostUITests: XCTestCase {
         let app = launchApp()
         let picker = app.buttons["chat-model-picker"]
         XCTAssertTrue(picker.waitForExistence(timeout: 10))
-        picker.click()
+        picker.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8)).click()
 
-        let search = app.textFields["Search models"]
+        let search = app.descendants(matching: .any)["model-search-field"]
         XCTAssertTrue(search.waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["MLX native models"].exists)
+        focus(search)
         search.typeText("Muse")
 
         XCTAssertTrue(app.buttons["Muse Glimmer 30B, ready"].waitForExistence(timeout: 3))
