@@ -313,6 +313,8 @@ struct ChatView: View {
                     .foregroundStyle(.secondary)
                 TextField("Search models", text: $modelSearch)
                     .textFieldStyle(.plain)
+                    .accessibilityLabel("Search models")
+                    .accessibilityIdentifier("model-search-field")
                 Button {
                     Task { await appState.refreshAll() }
                 } label: {
