@@ -1897,6 +1897,8 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                         "tool_calls",
                         "cancellation",
                         "openai_compatibility",
+                        "anthropic_compatibility",
+                        "claude_desktop_gateway",
                         "ollama_compatibility",
                     ],
                 }
@@ -5303,6 +5305,21 @@ def integration_catalog(host: str) -> dict[str, Any]:
                     "OLLAMA_HOST": endpoint,
                     "OLLAMA_API_KEY": "YOUR_MACHBOOST_KEY",
                 },
+            },
+            {
+                "id": "anthropic",
+                "name": "Anthropic SDK and Claude Code",
+                "environment": {
+                    "ANTHROPIC_BASE_URL": endpoint,
+                    "ANTHROPIC_AUTH_TOKEN": "YOUR_MACHBOOST_KEY",
+                },
+            },
+            {
+                "id": "claude-desktop",
+                "name": "Claude Desktop third-party inference",
+                "gateway_base_url": endpoint,
+                "gateway_auth_scheme": "bearer",
+                "setup": "machboost launch claude-desktop",
             },
             {
                 "id": "cline-kilo",
