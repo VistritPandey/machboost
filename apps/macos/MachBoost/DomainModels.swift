@@ -4,6 +4,7 @@ import MachBoostPersistence
 
 enum SidebarDestination: Hashable {
     case conversation(UUID)
+    case apps
     case connections
     case models
     case server
