@@ -1744,6 +1744,37 @@ class HTTPServerTests(unittest.TestCase):
         self.assertEqual([call["name"] for call in calls], ["read_file", "search_repo"])
         self.assertEqual(calls[0]["input"]["path"], "a.py")
 
+    def test_claude_desktop_discovers_routes_counts_tokens_and_routes_messages(self):
+        _, _, body = self.request("/v1/models")
+        catalog = json.loads(body)
+        routes = [item for item in catalog["data"] if item.get("type") == "model"]
+
+        self.assertGreater(len(routes), 0)
+        self.assertEqual(catalog["first_id"], routes[0]["id"])
+        self.assertEqual(routes[0]["anthropic_family_tier"], "fable")
+        self.assertEqual(routes[0]["max_tokens"], 64_000)
+
+        _, _, count_body = self.request(
+            "/v1/messages/count_tokens",
+            {
+                "model": routes[0]["id"],
+                "messages": [{"role": "user", "content": "Count this prompt"}],
+            },
+        )
+        self.assertGreater(json.loads(count_body)["input_tokens"], 0)
+
+        _, _, message_body = self.request(
+            "/v1/messages",
+            {
+                "model": routes[0]["id"],
+                "messages": [{"role": "user", "content": "Say hello"}],
+                "max_tokens": 16,
+            },
+        )
+        response = json.loads(message_body)
+        self.assertEqual(response["model"], routes[0]["display_name"])
+        self.assertEqual(self.loaded[-1][0].model, resolve_model(routes[0]["display_name"]).model)
+
     def test_anthropic_messages_endpoint_streams_text_events(self):
         _, headers, body = self.request(
             "/v1/messages",
