@@ -106,7 +106,8 @@ repository workspaces, text/code/folder/image attachments, model downloads,
 resident-model controls, automatic long-chat summarization near the selected
 context limit, server metrics, employee-key management, trace/evaluation views,
 a direct device connection screen, Bonjour host discovery, load-aware request
-routing, repo-scoped coding tools, connected-device and model-request
+routing, a Claude Desktop integration screen for local or shared models,
+repo-scoped coding tools, connected-device and model-request
 views, coding permission modes, a Git working-tree review panel,
 a developer API view, and a menu-bar controller. Chats and
 imported attachments remain local, model downloads always require confirmation,
@@ -272,6 +273,47 @@ curl http://127.0.0.1:11435/api/chat -d '{
   "stream": false
 }'
 ```
+
+### Claude Desktop
+
+Claude Desktop can use MachBoost as its native third-party inference gateway.
+This is not an MCP connection: Claude keeps its chat, Cowork, coding, tools,
+permissions, and workspace UI, while MachBoost supplies the model inference.
+
+Connect Claude Desktop to the MachBoost server on this Mac:
+
+```sh
+machboost launch claude-desktop
+```
+
+Connect it to a previously saved shared host instead:
+
+```sh
+machboost connect http://TEAM-MAC:11435 --name studio
+machboost launch claude-desktop --connection studio
+```
+
+To advertise a specific local subset, repeat `--model` up to five times:
+
+```sh
+machboost launch claude-desktop \
+  --model muse-glimmer:30b \
+  --model qwen2.5-coder:7b
+```
+
+The macOS app exposes the same flow under **Apps → Claude Desktop**, with a
+picker for **This Mac** or any saved MachBoost host. Claude discovers the
+selected host's available models through `/v1/models`; requests arrive through
+`/v1/messages` and `/v1/messages/count_tokens`. MachBoost uses Claude-compatible
+route IDs for discovery and rewrites each request to the displayed MLX/HF model
+before inference. Restore the profile at any time with:
+
+```sh
+machboost launch claude-desktop --restore
+```
+
+MachBoost preserves the previously active Claude inference profile during this
+round trip, including an existing Ollama gateway configuration.
 
 Coding agents can use their native tool protocol. MachBoost returns function
 calls while the client keeps responsibility for file access, shell commands,
