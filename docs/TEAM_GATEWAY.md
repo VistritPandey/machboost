@@ -120,6 +120,28 @@ export ANTHROPIC_MODEL="muse-glimmer:30b"
 claude
 ```
 
+Claude Desktop has a separate native third-party inference gateway. It is not
+an MCP server. The MachBoost app exposes it under **Apps → Claude Desktop**, or
+the CLI can configure it directly:
+
+```sh
+# Use models resident on this Mac.
+machboost launch claude-desktop
+
+# Use models resident on a saved team host.
+machboost launch claude-desktop --connection studio
+
+# Restore the Claude provider that was active before MachBoost.
+machboost launch claude-desktop --restore
+```
+
+Claude Desktop currently requests a fixed set of Claude model route names.
+MachBoost advertises those routes and maps them to compatible, accessible
+MachBoost models on the selected host. The app shows that mapping before it
+changes Claude's configuration. It writes a reversible provider profile under
+Claude's Application Support directory, keeps the gateway key out of command
+arguments and logs, and restarts Claude after confirmation.
+
 `GET /api/integrations` returns the same connection values for the active host.
 `POST /v1/responses`, `POST /v1/messages`, and `POST /v1/chat/completions`
 accept function tools and preserve streaming tool-call events. `POST /api/chat`
