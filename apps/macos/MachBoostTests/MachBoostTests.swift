@@ -5,6 +5,46 @@ import XCTest
 @testable import MachBoost
 
 final class MachBoostTests: XCTestCase {
+    func testAppsGatewayOmitsCredentialsForOpenLocalDaemon() throws {
+        let token = try AppsGatewayCredentials.localToken(
+            authenticationRequired: false,
+            runtimeToken: "stale-runtime-token",
+            keychainToken: "stale-keychain-token"
+        )
+
+        XCTAssertNil(token)
+    }
+
+    func testAppsGatewayUsesRuntimeTokenForSecuredLocalDaemon() throws {
+        let token = try AppsGatewayCredentials.localToken(
+            authenticationRequired: true,
+            runtimeToken: "runtime-token",
+            keychainToken: "keychain-token"
+        )
+
+        XCTAssertEqual(token, "runtime-token")
+    }
+
+    func testAppsGatewayFallsBackToKeychainForSecuredLocalDaemon() throws {
+        let token = try AppsGatewayCredentials.localToken(
+            authenticationRequired: true,
+            runtimeToken: nil,
+            keychainToken: "keychain-token"
+        )
+
+        XCTAssertEqual(token, "keychain-token")
+    }
+
+    func testAppsGatewayRejectsSecuredLocalDaemonWithoutCredentials() {
+        XCTAssertThrowsError(
+            try AppsGatewayCredentials.localToken(
+                authenticationRequired: true,
+                runtimeToken: nil,
+                keychainToken: nil
+            )
+        )
+    }
+
     func testAssistantTimelinePreservesInterleavedReasoningContentAndTools() throws {
         let call = APIToolCall(function: .init(name: "read_file", arguments: .object([:])))
         let expected = [
