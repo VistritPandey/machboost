@@ -18,6 +18,24 @@ final class MachBoostUITests: XCTestCase {
     }
 
     @MainActor
+    func testAppsViewOffersClaudeDesktopGatewayControls() {
+        let app = launchApp()
+        let appsItem = app.staticTexts["Apps"]
+
+        XCTAssertTrue(appsItem.waitForExistence(timeout: 10))
+        appsItem.click()
+
+        XCTAssertTrue(app.staticTexts["Claude Desktop"].waitForExistence(timeout: 3))
+        XCTAssertTrue(
+            app.descendants(matching: .any)["claude-desktop-toggle"].exists
+        )
+        XCTAssertTrue(
+            app.descendants(matching: .any)["claude-desktop-host-picker"].exists
+        )
+        XCTAssertTrue(app.staticTexts["Inference host"].exists)
+    }
+
+    @MainActor
     func testConnectionsExposeSimpleDeviceFlow() {
         let app = launchApp()
         let connections = app.staticTexts["Connections"]
