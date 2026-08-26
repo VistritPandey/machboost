@@ -105,6 +105,8 @@ struct RootView: View {
                 }
 
                 Section("Workspace") {
+                    Label("Apps", systemImage: "square.grid.2x2")
+                        .tag(SidebarDestination.apps)
                     Label("Connections", systemImage: "point.3.connected.trianglepath.dotted")
                         .tag(SidebarDestination.connections)
                     Label("Models", systemImage: "shippingbox")
@@ -147,6 +149,8 @@ struct RootView: View {
             } else {
                 emptyDetail
             }
+        case .apps:
+            AppsView()
         case .connections:
             ConnectionsView()
         case .models:
