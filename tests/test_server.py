@@ -1775,6 +1775,35 @@ class HTTPServerTests(unittest.TestCase):
         self.assertEqual(response["model"], routes[0]["display_name"])
         self.assertEqual(self.loaded[-1][0].model, resolve_model(routes[0]["display_name"]).model)
 
+    def test_claude_desktop_deduplicates_aliases_for_the_same_runtime_model(self):
+        duplicate_aliases = [
+            {
+                "name": "example:latest",
+                "repository": "mlx-community/Example-4bit",
+                "backend": "mlx",
+                "capabilities": ["chat"],
+                "cached": True,
+            },
+            {
+                "name": "example:4bit",
+                "repository": "mlx-community/Example-4bit",
+                "backend": "mlx",
+                "capabilities": ["chat"],
+                "cached": True,
+            },
+        ]
+
+        with patch("machboost.server.catalog_rows", return_value=duplicate_aliases):
+            _, _, body = self.request("/v1/models")
+
+        routes = [
+            item
+            for item in json.loads(body)["data"]
+            if item.get("anthropic_family_tier")
+        ]
+        self.assertEqual(len(routes), 1)
+        self.assertIn(routes[0]["display_name"], {"example:latest", "example:4bit"})
+
     def test_anthropic_messages_endpoint_streams_text_events(self):
         _, headers, body = self.request(
             "/v1/messages",
