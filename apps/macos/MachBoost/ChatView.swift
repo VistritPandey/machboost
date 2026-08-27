@@ -3,6 +3,29 @@ import SwiftData
 import SwiftUI
 import UniformTypeIdentifiers
 
+@MainActor
+private final class ToolApprovalCoordinator: ObservableObject {
+    @Published private(set) var call: APIToolCall?
+    private var continuation: CheckedContinuation<Bool, Never>?
+
+    func request(_ call: APIToolCall) async -> Bool {
+        await withCheckedContinuation { continuation in
+            self.continuation = continuation
+            self.call = call
+        }
+    }
+
+    func resolve(_ approved: Bool) {
+        guard let continuation else {
+            call = nil
+            return
+        }
+        self.continuation = nil
+        call = nil
+        continuation.resume(returning: approved)
+    }
+}
+
 struct ChatView: View {
     private static let bottomAnchor = "machboost-chat-bottom"
 
@@ -21,8 +44,7 @@ struct ChatView: View {
     @State private var modelSearch = ""
     @State private var modelFilter = ModelBrowserFilter.all
     @State private var pendingModelDownload: CatalogModel?
-    @State private var pendingToolApproval: APIToolCall?
-    @State private var toolApprovalContinuation: CheckedContinuation<Bool, Never>?
+    @StateObject private var toolApproval = ToolApprovalCoordinator()
     @State private var pendingPermissionMode: CodingPermissionMode?
     @State private var isCompactingContext = false
     @State private var showsWorkspaceChanges = false
@@ -76,15 +98,15 @@ struct ChatView: View {
         .confirmationDialog(
             "Allow repository change?",
             isPresented: Binding(
-                get: { pendingToolApproval != nil },
+                get: { toolApproval.call != nil },
                 set: { if !$0 { resolveToolApproval(false) } }
             )
         ) {
             Button("Apply Change") { resolveToolApproval(true) }
             Button("Deny", role: .cancel) { resolveToolApproval(false) }
         } message: {
-            if let pendingToolApproval {
-                Text(CodingWorkspace.summary(of: pendingToolApproval))
+            if let call = toolApproval.call {
+                Text(CodingWorkspace.summary(of: call))
             }
         }
         .confirmationDialog(
@@ -1614,20 +1636,11 @@ struct ChatView: View {
     }
 
     private func requestToolApproval(_ call: APIToolCall) async -> Bool {
-        await withCheckedContinuation { continuation in
-            pendingToolApproval = call
-            toolApprovalContinuation = continuation
-        }
+        await toolApproval.request(call)
     }
 
     private func resolveToolApproval(_ approved: Bool) {
-        guard let continuation = toolApprovalContinuation else {
-            pendingToolApproval = nil
-            return
-        }
-        toolApprovalContinuation = nil
-        pendingToolApproval = nil
-        continuation.resume(returning: approved)
+        toolApproval.resolve(approved)
     }
 
     private func imageReferences(_ images: [ChatAttachment]) throws -> [String] {
