@@ -144,11 +144,16 @@ class CLITests(unittest.TestCase):
                 "machboost.cli._claude_desktop_gateway",
                 return_value=("http://studio.local:11435", "secret", False),
             ),
-            patch("machboost.cli.MachBoostClient", return_value=client),
+            patch("machboost.cli.MachBoostClient", return_value=client) as client_type,
         ):
             code = cli.run_launch(args, output_stream=output)
 
         self.assertEqual(code, 0)
+        client_type.assert_called_once_with(
+            "http://studio.local:11435",
+            api_token="secret",
+            timeout=30.0,
+        )
         manager.configure.assert_called_once_with(
             "http://studio.local:11435", "secret"
         )
