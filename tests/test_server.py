@@ -1078,6 +1078,16 @@ class HTTPServerTests(unittest.TestCase):
         _, _, body = self.request("/api/ps")
         self.assertEqual(json.loads(body)["models"][0]["model"], "mlx-community/example")
 
+    def test_open_server_accepts_required_client_placeholder_key(self):
+        request = Request(
+            self.base_url + "/v1/models",
+            headers={"Authorization": "Bearer machboost"},
+        )
+
+        with urlopen(request, timeout=3.0) as response:
+            self.assertEqual(response.status, 200)
+            self.assertEqual(json.loads(response.read())["object"], "list")
+
     def test_catalog_and_metrics_have_stable_schemas(self):
         _, _, catalog_body = self.request("/api/catalog")
         _, _, metrics_body = self.request("/api/metrics")
@@ -1553,6 +1563,16 @@ class HTTPServerTests(unittest.TestCase):
                             timeout=2.0,
                         )
                     self.assertEqual(raised.exception.code, 401)
+
+            with self.assertRaises(HTTPError) as raised:
+                urlopen(
+                    Request(
+                        f"http://{host}:{port}/v1/models",
+                        headers={"Authorization": "Bearer machboost"},
+                    ),
+                    timeout=2.0,
+                )
+            self.assertEqual(raised.exception.code, 401)
 
             authorized = Request(
                 f"http://{host}:{port}/api/metrics",
