@@ -23,6 +23,44 @@ def normalize_ollama_keep_alive(value: Any) -> Any:
     return value
 
 
+def normalize_ollama_messages(
+    messages: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    for raw_message in messages:
+        message = dict(raw_message)
+        raw_calls = message.get("tool_calls")
+        if not isinstance(raw_calls, (list, tuple)):
+            normalized.append(message)
+            continue
+
+        calls: list[Any] = []
+        for raw_call in raw_calls:
+            if not isinstance(raw_call, Mapping):
+                calls.append(raw_call)
+                continue
+            call = dict(raw_call)
+            raw_function = call.get("function")
+            if not isinstance(raw_function, Mapping):
+                calls.append(call)
+                continue
+            function = dict(raw_function)
+            arguments = function.get("arguments")
+            if isinstance(arguments, str):
+                try:
+                    decoded = json.loads(arguments)
+                except (TypeError, ValueError):
+                    decoded = {}
+                function["arguments"] = dict(decoded) if isinstance(decoded, Mapping) else {}
+            elif arguments is None:
+                function["arguments"] = {}
+            call["function"] = function
+            calls.append(call)
+        message["tool_calls"] = calls
+        normalized.append(message)
+    return normalized
+
+
 @dataclass(frozen=True)
 class OllamaCapabilities:
     backend: str = "ollama-http"
@@ -291,7 +329,7 @@ class OllamaHTTPAdapter:
         merged_options.update(dict(options or {}))
         payload: dict[str, Any] = {
             "model": self.model,
-            "messages": [dict(message) for message in messages],
+            "messages": normalize_ollama_messages(messages),
             "stream": bool(stream),
         }
         if keep_alive is None:
