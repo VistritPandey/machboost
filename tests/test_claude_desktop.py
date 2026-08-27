@@ -4,7 +4,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from machboost.claude_desktop import (
     CLAUDE_DESKTOP_ROUTES,
@@ -102,6 +102,29 @@ class ClaudeDesktopGatewayTests(unittest.TestCase):
 
 
 class ClaudeDesktopProfileTests(unittest.TestCase):
+    def test_restart_uses_app_path_then_bundle_identifier_fallback(self):
+        manager = ClaudeDesktopProfileManager()
+        app = Path("/Applications/Claude.app")
+        results = [
+            Mock(returncode=0),
+            Mock(returncode=1),
+            Mock(returncode=1, stderr="path launch failed"),
+            Mock(returncode=0, stderr=""),
+        ]
+
+        with (
+            patch.object(manager, "installed_application", return_value=app),
+            patch("machboost.claude_desktop.subprocess.run", side_effect=results) as run,
+            patch("machboost.claude_desktop.time.sleep"),
+        ):
+            manager.restart_application()
+
+        self.assertEqual(run.call_args_list[2].args[0], ["/usr/bin/open", str(app)])
+        self.assertEqual(
+            run.call_args_list[3].args[0],
+            ["/usr/bin/open", "-b", "com.anthropic.claudefordesktop"],
+        )
+
     def test_configure_and_restore_preserve_previous_provider(self):
         with tempfile.TemporaryDirectory() as directory, patch(
             "machboost.claude_desktop.platform.system", return_value="Darwin"
