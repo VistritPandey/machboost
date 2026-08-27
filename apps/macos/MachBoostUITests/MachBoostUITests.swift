@@ -215,9 +215,21 @@ final class MachBoostUITests: XCTestCase {
         XCTAssertTrue(approval.waitForExistence(timeout: 10))
         approval.click()
 
+        XCTAssertTrue(app.buttons["Send message"].waitForExistence(timeout: 30))
+        let finalResponse = app.staticTexts[
+            "Reviewed the repository after three tool results."
+        ]
+        if !finalResponse.exists {
+            let transcript = app.scrollViews.containing(
+                .any,
+                identifier: "chat-scroll-bottom"
+            ).firstMatch
+            if transcript.exists {
+                transcript.swipeUp()
+            }
+        }
         XCTAssertTrue(
-            app.staticTexts["Reviewed the repository after three tool results."]
-                .waitForExistence(timeout: 15)
+            finalResponse.waitForExistence(timeout: 5)
         )
         XCTAssertTrue(
             app.descendants(matching: .any)["tool-call-replace_in_file"]
