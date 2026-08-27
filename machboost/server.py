@@ -4320,7 +4320,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                         device_id=self.headers.get("X-MachBoost-Device-ID", ""),
                     )
                 return True
-        if not supplied and not self.server.require_auth:  # type: ignore[attr-defined]
+        if not self.server.require_auth:  # type: ignore[attr-defined]
             self._principal = TeamPrincipal(
                 id="local",
                 name="Local user",
