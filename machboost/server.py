@@ -53,6 +53,7 @@ from .protocols import (
     response_message_item,
     responses_messages,
     responses_tools,
+    select_anthropic_tools,
 )
 from .scheduler import ReplicaPool, RequestAdmissionError
 from .team import (
@@ -3415,7 +3416,14 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
         translated["max_tokens"] = int(payload.get("max_tokens") or 1024)
         if "stop_sequences" in payload:
             translated["stop"] = payload["stop_sequences"]
-        tools = anthropic_tools(payload.get("tools"))
+        tools = anthropic_tools(
+            select_anthropic_tools(
+                payload.get("tools"),
+                payload.get("messages"),
+                tool_choice=payload.get("tool_choice"),
+                limit=anthropic_tool_limit(),
+            )
+        )
         if tools:
             translated["tools"] = tools
             translated["tool_choice"] = compatibility_tool_choice(payload.get("tool_choice"))
@@ -4852,6 +4860,13 @@ def openai_options(payload: dict[str, Any]) -> dict[str, Any]:
         options["_think"] = True
         options["_reasoning_strength"] = str(reasoning_effort)
     return options
+
+
+def anthropic_tool_limit() -> int:
+    try:
+        return max(0, int(os.environ.get("MACHBOOST_ANTHROPIC_TOOL_LIMIT", "48")))
+    except ValueError:
+        return 48
 
 
 def compatibility_tool_choice(choice: Any) -> Any:
