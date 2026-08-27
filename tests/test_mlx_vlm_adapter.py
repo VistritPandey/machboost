@@ -670,6 +670,35 @@ class MLXVLMAcceleratorTests(unittest.TestCase):
         self.assertTrue(stats.prompt_cache_enabled)
         self.assertEqual(stats.prompt_cache_prefix_tokens, 776)
 
+    def test_text_only_prompts_use_cross_request_prefix_cache(self):
+        class FakeAPCManager:
+            def __init__(self):
+                self.snapshots = iter((0, 512))
+
+            def stats_snapshot(self):
+                return {"matched_tokens": next(self.snapshots)}
+
+        calls = []
+
+        def mlx_stream(model, processor, prompt, **kwargs):
+            calls.append(kwargs)
+            yield FakeGenerationRow("cached")
+
+        mlx_stream.__module__ = "mlx_vlm.generate"
+        self.accelerator._stream_generate = mlx_stream
+        apc_manager = FakeAPCManager()
+
+        with patch.object(
+            self.accelerator,
+            "_get_apc_manager",
+            return_value=apc_manager,
+        ):
+            _, stats = self.accelerator.generate("Repository prompt", max_tokens=8)
+
+        self.assertIs(calls[0]["apc_manager"], apc_manager)
+        self.assertTrue(stats.prompt_cache_enabled)
+        self.assertEqual(stats.prompt_cache_prefix_tokens, 512)
+
     def test_qwen_partial_prefix_drops_untrimmed_attention_mask(self):
         self.accelerator.model.config = {"model_type": "qwen2_5_vl"}
         self.accelerator._stream_generate.__module__ = "mlx_vlm.generate"
