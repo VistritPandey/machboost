@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import os
 import re
 import threading
 import time
@@ -907,7 +908,14 @@ class MLXVLMAccelerator:
     def _get_apc_manager(self) -> Any:
         if self._apc_manager is None:
             apc = importlib.import_module("mlx_vlm.apc")
-            self._apc_manager = apc.APCManager(num_blocks=256, block_size=16)
+            try:
+                num_blocks = max(
+                    64,
+                    int(os.environ.get("MACHBOOST_MLX_APC_BLOCKS", "2048")),
+                )
+            except ValueError:
+                num_blocks = 2048
+            self._apc_manager = apc.APCManager(num_blocks=num_blocks, block_size=16)
         return self._apc_manager
 
     def _prompt_cache_for(self, images: Sequence[str]) -> Any:
