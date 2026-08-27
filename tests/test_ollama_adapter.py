@@ -211,6 +211,70 @@ class OllamaAdapterTest(unittest.TestCase):
         self.assertEqual(payload["messages"], [{"role": "user", "content": "hi"}])
         self.assertEqual(payload["options"], {"temperature": 0})
 
+    def test_chat_converts_openai_tool_arguments_for_ollama_history(self):
+        opener = RecordingOpener(
+            [{"model": "qwen3.5:9b", "message": {"content": "Done."}, "done": True}]
+        )
+        adapter = OllamaHTTPAdapter("qwen3.5:9b", opener=opener)
+        messages = [
+            {"role": "user", "content": "Count the files."},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "count_files",
+                            "arguments": '{"path":"Blinkfire"}',
+                        },
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "content": '{"count":412}',
+            },
+        ]
+
+        list(adapter.chat(messages))
+
+        payload = json.loads(opener.requests[0].data.decode("utf-8"))
+        arguments = payload["messages"][1]["tool_calls"][0]["function"]["arguments"]
+        self.assertEqual(arguments, {"path": "Blinkfire"})
+        self.assertIsInstance(messages[1]["tool_calls"][0]["function"]["arguments"], str)
+
+    def test_chat_replaces_malformed_tool_arguments_with_empty_object(self):
+        opener = RecordingOpener(
+            [{"model": "qwen3.5:9b", "message": {"content": "Recovered."}, "done": True}]
+        )
+        adapter = OllamaHTTPAdapter("qwen3.5:9b", opener=opener)
+
+        list(
+            adapter.chat(
+                [
+                    {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "function": {
+                                    "name": "count_files",
+                                    "arguments": '{"path":"Blinkfire"',
+                                }
+                            }
+                        ],
+                    }
+                ]
+            )
+        )
+
+        payload = json.loads(opener.requests[0].data.decode("utf-8"))
+        arguments = payload["messages"][0]["tool_calls"][0]["function"]["arguments"]
+        self.assertEqual(arguments, {})
+
     def test_chat_preserves_muse_reasoning_tools_and_images(self):
         opener = RecordingOpener(
             [
