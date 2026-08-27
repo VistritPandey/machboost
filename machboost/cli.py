@@ -587,7 +587,7 @@ def run_launch(args: argparse.Namespace, *, output_stream=None, error_stream=Non
 
             client = MachBoostClient(
                 endpoint,
-                api_token=None if api_key == "machboost" else api_key,
+                api_token=api_key,
                 timeout=args.timeout,
             )
             catalog = client.get("/v1/models")
