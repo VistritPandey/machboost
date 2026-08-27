@@ -301,7 +301,23 @@ class ClaudeDesktopProfileManager:
             if not running:
                 break
             time.sleep(0.2)
-        subprocess.run(["/usr/bin/open", "-a", str(app)], check=True)
+        time.sleep(0.5)
+        launched = subprocess.run(
+            ["/usr/bin/open", str(app)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if launched.returncode != 0:
+            launched = subprocess.run(
+                ["/usr/bin/open", "-b", "com.anthropic.claudefordesktop"],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        if launched.returncode != 0:
+            detail = launched.stderr.strip() or "LaunchServices rejected the request"
+            raise RuntimeError(f"Claude Desktop was configured but could not reopen: {detail}")
 
     def installed_application(self) -> Optional[Path]:
         for app in (Path("/Applications/Claude.app"), self.home / "Applications/Claude.app"):
