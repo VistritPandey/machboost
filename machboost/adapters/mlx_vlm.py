@@ -675,12 +675,25 @@ class MLXVLMAccelerator:
                 stream_options.update(prepared_options)
                 prompt_cache_enabled = True
                 apc_manager = prepared_options.get("apc_manager")
-                if apc_manager is not None:
-                    apc_matched_before = int(
-                        apc_manager.stats_snapshot().get("matched_tokens", 0)
-                    )
             elif effective_vision_cache and cold_vision.resize_shape is None:
                 stream_options["vision_cache"] = self.vision_cache
+            if (
+                apc_manager is None
+                and str(getattr(self._stream_generate, "__module__", "")).startswith(
+                    "mlx_vlm"
+                )
+            ):
+                try:
+                    apc_manager = self._get_apc_manager()
+                except (AttributeError, ImportError):
+                    apc_manager = None
+                if apc_manager is not None:
+                    stream_options["apc_manager"] = apc_manager
+                    prompt_cache_enabled = True
+            if apc_manager is not None:
+                apc_matched_before = int(
+                    apc_manager.stats_snapshot().get("matched_tokens", 0)
+                )
             if prepared is None and cold_vision.resize_shape is not None:
                 stream_options["resize_shape"] = cold_vision.resize_shape
             rows = self._stream_generate(
