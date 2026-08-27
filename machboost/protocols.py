@@ -2,9 +2,45 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 import time
 import uuid
 from typing import Any, Iterable, Sequence
+
+
+_TOOL_WORD = re.compile(r"[a-z0-9]+")
+_TOOL_STOP_WORDS = {
+    "a",
+    "an",
+    "and",
+    "for",
+    "from",
+    "in",
+    "of",
+    "on",
+    "or",
+    "the",
+    "to",
+    "with",
+}
+_CORE_AGENT_TOOLS = {
+    "askuserquestion",
+    "bash",
+    "edit",
+    "editfile",
+    "glob",
+    "grep",
+    "listfiles",
+    "read",
+    "readfile",
+    "searchfiles",
+    "task",
+    "todowrite",
+    "webfetch",
+    "websearch",
+    "write",
+    "writefile",
+}
 
 
 def responses_messages(payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -161,6 +197,113 @@ def anthropic_tools(tools: Any) -> list[dict[str, Any]]:
         for tool in tools
         if isinstance(tool, dict)
     ]
+
+
+def select_anthropic_tools(
+    tools: Any,
+    messages: Any,
+    *,
+    tool_choice: Any = None,
+    limit: int = 48,
+) -> list[dict[str, Any]]:
+    """Keep the useful agent tools without prefilling every connected schema."""
+    if tools is None:
+        return []
+    if not isinstance(tools, list):
+        raise ValueError("Anthropic tools must be a list")
+    candidates = [tool for tool in tools if isinstance(tool, dict)]
+    if limit <= 0 or len(candidates) <= limit:
+        return candidates
+
+    query = _latest_anthropic_user_text(messages)
+    query_terms = _tool_terms(query)
+    used_names = _anthropic_tool_names(messages)
+    forced_name = ""
+    if isinstance(tool_choice, dict) and tool_choice.get("type") == "tool":
+        forced_name = str(tool_choice.get("name") or "")
+
+    ranked: list[tuple[int, int, dict[str, Any]]] = []
+    mandatory: set[int] = set()
+    for index, tool in enumerate(candidates):
+        name = str(tool.get("name") or "")
+        leaf_name = name.rsplit("__", 1)[-1]
+        normalized_name = "".join(_TOOL_WORD.findall(leaf_name.lower()))
+        name_terms = _tool_terms(name.replace("_", " "))
+        description_terms = _tool_terms(str(tool.get("description") or ""))
+        schema = tool.get("input_schema")
+        property_terms = _schema_property_terms(schema)
+        score = 0
+        if name == forced_name:
+            score += 100_000
+            mandatory.add(index)
+        if name in used_names:
+            score += 50_000
+            mandatory.add(index)
+        if normalized_name in _CORE_AGENT_TOOLS:
+            score += 20_000
+            mandatory.add(index)
+        score += 240 * len(query_terms & name_terms)
+        score += 35 * len(query_terms & property_terms)
+        score += 12 * len(query_terms & description_terms)
+        if normalized_name and normalized_name in "".join(sorted(query_terms)):
+            score += 300
+        ranked.append((score, index, tool))
+
+    selected_indexes = set(mandatory)
+    for _, index, _ in sorted(ranked, key=lambda row: (-row[0], row[1])):
+        if len(selected_indexes) >= max(limit, len(mandatory)):
+            break
+        selected_indexes.add(index)
+    return [tool for index, tool in enumerate(candidates) if index in selected_indexes]
+
+
+def _latest_anthropic_user_text(messages: Any) -> str:
+    if not isinstance(messages, list):
+        return ""
+    for message in reversed(messages):
+        if not isinstance(message, dict) or message.get("role") != "user":
+            continue
+        return _anthropic_text(message.get("content", ""))[-16_000:]
+    return ""
+
+
+def _anthropic_tool_names(messages: Any) -> set[str]:
+    names: set[str] = set()
+    if not isinstance(messages, list):
+        return names
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == "tool_use":
+                name = str(part.get("name") or "")
+                if name:
+                    names.add(name)
+    return names
+
+
+def _tool_terms(value: str) -> set[str]:
+    return {
+        term
+        for term in _TOOL_WORD.findall(value.lower())
+        if len(term) > 1 and term not in _TOOL_STOP_WORDS
+    }
+
+
+def _schema_property_terms(schema: Any) -> set[str]:
+    if not isinstance(schema, dict):
+        return set()
+    properties = schema.get("properties")
+    if not isinstance(properties, dict):
+        return set()
+    return {
+        term
+        for name in properties
+        for term in _tool_terms(str(name).replace("_", " "))
+    }
 
 
 def response_body(
