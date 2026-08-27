@@ -310,6 +310,7 @@ struct WorkspaceChangesView: View {
                         } label: {
                             changeLabel(change)
                         }
+                        .accessibilityIdentifier("workspace-change-\(change.path)")
                         .padding(.horizontal, 12)
                         .padding(.vertical, 10)
                         Divider()
