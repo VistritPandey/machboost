@@ -756,6 +756,27 @@ class MLXVLMAcceleratorTests(unittest.TestCase):
 
         self.assertEqual(len(self.accelerator._prompt_caches), 0)
 
+    def test_apc_pool_size_can_be_tuned_for_machine_memory(self):
+        observed = {}
+
+        class FakeAPCManager:
+            def __init__(self, **kwargs):
+                observed.update(kwargs)
+
+            def clear(self):
+                pass
+
+        with patch.dict(
+            "os.environ",
+            {"MACHBOOST_MLX_APC_BLOCKS": "1024"},
+        ), patch(
+            "machboost.adapters.mlx_vlm.importlib.import_module",
+            return_value=SimpleNamespace(APCManager=FakeAPCManager),
+        ):
+            self.accelerator._get_apc_manager()
+
+        self.assertEqual(observed, {"num_blocks": 1024, "block_size": 16})
+
     def test_close_stops_worker_and_rejects_future_generation(self):
         self.accelerator.generate(
             "Describe the image.", images=[str(self.image)], max_tokens=8
