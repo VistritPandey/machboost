@@ -250,9 +250,12 @@ def select_anthropic_tools(
         ranked.append((score, index, tool))
 
     selected_indexes = set(mandatory)
-    for _, index, _ in sorted(ranked, key=lambda row: (-row[0], row[1])):
+    minimum = min(limit, 8)
+    for score, index, _ in sorted(ranked, key=lambda row: (-row[0], row[1])):
         if len(selected_indexes) >= max(limit, len(mandatory)):
             break
+        if score <= 0 and len(selected_indexes) >= minimum:
+            continue
         selected_indexes.add(index)
     return [tool for index, tool in enumerate(candidates) if index in selected_indexes]
 
