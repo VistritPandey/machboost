@@ -243,6 +243,9 @@ final class MachBoostUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Reveal"].exists)
         let patch = app.staticTexts["change-patch-edit-1"]
         XCTAssertTrue(patch.waitForExistence(timeout: 3))
+        let workspaceChanges = app.buttons["workspace-changes-toggle"]
+        XCTAssertTrue(workspaceChanges.waitForExistence(timeout: 3))
+        workspaceChanges.click()
         XCTAssertTrue(
             app.descendants(matching: .any)["workspace-changes-panel"]
                 .waitForExistence(timeout: 5)
