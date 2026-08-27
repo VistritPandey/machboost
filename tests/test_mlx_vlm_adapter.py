@@ -692,7 +692,7 @@ class MLXVLMAcceleratorTests(unittest.TestCase):
             self.accelerator,
             "_get_apc_manager",
             return_value=apc_manager,
-        ):
+        ), patch.object(self.accelerator, "_bind_thread_local_stream"):
             _, stats = self.accelerator.generate("Repository prompt", max_tokens=8)
 
         self.assertIs(calls[0]["apc_manager"], apc_manager)
