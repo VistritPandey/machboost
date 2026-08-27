@@ -256,7 +256,7 @@ final class MachBoostUITests: XCTestCase {
             accuracy: 2
         )
         XCTAssertTrue(app.staticTexts["main"].exists)
-        XCTAssertTrue(app.staticTexts["Sources/App.swift"].exists)
+        XCTAssertTrue(app.staticTexts["Sources/App.swift"].waitForExistence(timeout: 5))
         XCTAssertFalse(
             app.staticTexts.containing(
                 NSPredicate(format: "label CONTAINS %@", "<tool_call")
