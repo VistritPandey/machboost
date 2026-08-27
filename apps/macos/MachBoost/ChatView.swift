@@ -1536,7 +1536,7 @@ struct ChatView: View {
                     persist(activities, to: assistant)
                     persist(timeline, to: assistant)
                     if activities[activityIndex].changedPath != nil {
-                        refreshWorkspaceChanges(show: true)
+                        refreshWorkspaceChanges()
                     }
                 }
                 completedToolResults[call.function] = result
