@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import base64
 import binascii
+import queue
 import subprocess
+import threading
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -155,7 +157,7 @@ class OllamaMLXAccelerator:
             top_logprobs=0 if not native_speculative_decoding else None,
         )
         try:
-            for chunk in stream:
+            for chunk in buffered_stream(stream, cancel_event=cancel_event):
                 if cancel_event is not None and cancel_event.is_set():
                     raise OllamaMLXCancelled("request cancelled")
                 if first_token_at is None and (
@@ -177,7 +179,10 @@ class OllamaMLXAccelerator:
         finally:
             close = getattr(stream, "close", None)
             if callable(close):
-                close()
+                try:
+                    close()
+                except (RuntimeError, ValueError):
+                    pass
 
         finished = time.perf_counter()
         prompt_tokens = int(final.get("prompt_eval_count") or 0)
@@ -308,6 +313,68 @@ class OllamaMLXAccelerator:
         if len(data) > self.max_image_bytes:
             raise ValueError(f"image exceeds {self.max_image_bytes} byte limit")
         return base64.b64encode(data).decode("ascii")
+
+
+def buffered_stream(
+    stream: Iterable[Any],
+    *,
+    cancel_event: Any = None,
+    max_buffered_chunks: int = 128,
+) -> Iterable[Any]:
+    """Drain the Ollama socket independently of downstream client writes."""
+
+    events: queue.Queue[tuple[str, Any]] = queue.Queue(
+        maxsize=max(1, int(max_buffered_chunks))
+    )
+    stopped = threading.Event()
+
+    def cancelled() -> bool:
+        return stopped.is_set() or (
+            cancel_event is not None and cancel_event.is_set()
+        )
+
+    def enqueue(kind: str, value: Any) -> bool:
+        while not cancelled():
+            try:
+                events.put((kind, value), timeout=0.05)
+                return True
+            except queue.Full:
+                continue
+        return False
+
+    def produce() -> None:
+        try:
+            for chunk in stream:
+                if not enqueue("chunk", chunk):
+                    return
+        except BaseException as exc:
+            enqueue("error", exc)
+        finally:
+            enqueue("done", None)
+
+    producer = threading.Thread(
+        target=produce,
+        name="machboost-ollama-stream",
+        daemon=True,
+    )
+    producer.start()
+    try:
+        while True:
+            if cancelled():
+                raise OllamaMLXCancelled("request cancelled")
+            try:
+                kind, value = events.get(timeout=0.05)
+            except queue.Empty:
+                continue
+            if kind == "chunk":
+                yield value
+            elif kind == "error":
+                raise value
+            else:
+                return
+    finally:
+        stopped.set()
+        producer.join(timeout=0.1)
 
 
 def ensure_ollama_service(
