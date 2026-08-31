@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Any, Iterable, Optional
 from urllib.parse import urlparse
 
+from .relay import relay_state_path, relay_status, stop_claude_gateway_relay
+
 
 PROFILE_ID = "00000000-0000-4000-8000-000000000135"
 PROFILE_NAME = "MachBoost"
@@ -175,6 +177,7 @@ class ClaudeDesktopProfileManager:
         home: Optional[Path] = None,
         application_support: Optional[Path] = None,
         state_path: Optional[Path] = None,
+        gateway_relay_state_path: Optional[Path] = None,
     ) -> None:
         self.home = Path(home or Path.home())
         self.application_support = Path(
@@ -182,6 +185,9 @@ class ClaudeDesktopProfileManager:
         )
         self.state_path = Path(
             state_path or machboost_home() / "claude-desktop-profile-state.json"
+        )
+        self.gateway_relay_state_path = Path(
+            gateway_relay_state_path or relay_state_path()
         )
 
     def status(self) -> dict[str, Any]:
@@ -191,11 +197,20 @@ class ClaudeDesktopProfileManager:
         connected = meta.get("appliedId") == PROFILE_ID and (
             profile.get("inferenceProvider") == "gateway"
         )
+        endpoint = profile.get("inferenceGatewayBaseUrl") if connected else None
+        relay = relay_status(self.gateway_relay_state_path)
+        relayed = bool(
+            connected
+            and relay.get("running")
+            and relay.get("endpoint") == endpoint
+        )
         return {
             "schema": "machboost.claude-desktop-status.v1",
             "installed": self.installed_application() is not None,
             "connected": connected,
-            "endpoint": profile.get("inferenceGatewayBaseUrl") if connected else None,
+            "endpoint": endpoint,
+            "upstream": relay.get("upstream") if relayed else endpoint,
+            "relayed": relayed,
             "profile": PROFILE_NAME if connected else None,
         }
 
@@ -280,6 +295,7 @@ class ClaudeDesktopProfileManager:
             self.state_path.unlink()
         except FileNotFoundError:
             pass
+        stop_claude_gateway_relay(state_path=self.gateway_relay_state_path)
         return self.status()
 
     def restart_application(self) -> None:
