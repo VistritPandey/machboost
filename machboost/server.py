@@ -2902,6 +2902,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                     "model": model,
                     "created_at": utc_timestamp(),
                     "message": message,
+                    "machboost": {"full_content": content},
                     "done": False,
                 }
             )
@@ -4919,11 +4920,23 @@ def normalize_tools(tools: Any) -> list[dict[str, Any]]:
                 "function": {
                     "name": name,
                     "description": str(function.get("description") or ""),
-                    "parameters": parameters,
+                    "parameters": canonical_json_value(parameters),
                 },
             }
         )
     return normalized
+
+
+def canonical_json_value(value: Any) -> Any:
+    """Return equivalent JSON with deterministic object ordering for prompt caches."""
+    if isinstance(value, dict):
+        return {
+            str(key): canonical_json_value(value[key])
+            for key in sorted(value, key=lambda item: str(item))
+        }
+    if isinstance(value, list):
+        return [canonical_json_value(item) for item in value]
+    return value
 
 
 def inject_tool_instructions(
