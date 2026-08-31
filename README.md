@@ -521,12 +521,25 @@ name and endpoint:
 
 ```sh
 machboost connect 192.168.1.50:11435 --name studio
-machboost connections
-machboost use studio
+machboost connections --probe --model qwen2.5:7b
+machboost use auto
 machboost run qwen2.5:7b
+machboost ps
+machboost use studio  # pin commands to one host when needed
 machboost use local
 machboost disconnect studio
 ```
+
+Saving a host enables automatic routing by default. In `auto` mode, the CLI
+probes this machine and every saved host concurrently, checks whether the
+requested model is cached and resident, and estimates completion time from
+round-trip latency, replicas, active requests, queued requests, and requests
+already reserved by this client. A transient failure is retried on the next
+ranked host only when no output has been emitted; a response is never replayed
+mid-stream. `machboost connections --probe --model MODEL` prints the live
+ranking, and `/route` shows it inside interactive chat. The connection profile
+format is portable; non-macOS clients can provide a saved host key through
+`MACHBOOST_API_TOKEN_<CONNECTION_NAME>`.
 
 The address above is illustrative; the app displays the current host Mac's
 reachable LAN address. The client and server must be able to reach each other
@@ -949,8 +962,8 @@ machboost run qwen2.5-vl:3b --image ./image.png
 machboost run qwen3-vl:8b --video ./clip.mp4 --vision-tokens auto
 machboost chat qwen2.5:3b
 machboost connect 192.168.1.50:11435 --name studio
-machboost connections
-machboost use studio
+machboost connections --probe --model qwen2.5:3b
+machboost use auto
 machboost complete qwen2.5-coder:3b "def parse_config(text):"
 machboost ps
 machboost show qwen2.5:3b
@@ -959,7 +972,7 @@ machboost rm company-coder:staging
 machboost shutdown
 ```
 
-`machboost list` shows cached Hugging Face and MLX models, backend readiness, and available short aliases. `machboost run MODEL` connects to the active local or saved server, loads the model before accepting input, builds a draft corpus from any `--context` files or directories, and opens a streaming interactive chat. Use `/?` for commands, `/status` for the active host and route, `/stats on|off` for response metrics, `/clear` to reset history, `/bye` to exit while keeping the idle window, `Ctrl-C` to stop a reply, and `Ctrl-D` or `/unload` to unload and exit.
+`machboost list` shows cached Hugging Face and MLX models, backend readiness, and available short aliases. `machboost run MODEL` uses the selected local, fixed, or automatic host mode, loads the model before accepting input, builds a draft corpus from any `--context` files or directories, and opens a streaming interactive chat. New shared connections enable the automatic pool; use `machboost use studio` to pin one host or `machboost use local` to opt out. Use `/?` for commands, `/status` for the active host and route, `/route` for a fresh latency/load ranking, `/stats on|off` for response metrics, `/clear` to reset history, `/bye` to exit while keeping the idle window, `Ctrl-C` to stop a reply, and `Ctrl-D` or `/unload` to unload and exit.
 
 Run the server in the foreground when integrating it with another application or process manager:
 
