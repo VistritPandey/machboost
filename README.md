@@ -306,7 +306,11 @@ picker for **This Mac** or any saved MachBoost host. Claude discovers the
 selected host's available models through `/v1/models`; requests arrive through
 `/v1/messages` and `/v1/messages/count_tokens`. MachBoost uses Claude-compatible
 route IDs for discovery and rewrites each request to the displayed MLX/HF model
-before inference. Restore the profile at any time with:
+before inference. Claude requires HTTPS for non-loopback gateways, so MachBoost
+automatically gives Claude an authenticated `127.0.0.1` bridge when the selected
+team host uses private-network HTTP. The bridge forwards streams to the selected
+host, keeps the host key out of Claude's profile, and stops when the integration
+is restored. Restore the profile at any time with:
 
 ```sh
 machboost launch claude-desktop --restore
@@ -314,6 +318,16 @@ machboost launch claude-desktop --restore
 
 MachBoost preserves the previously active Claude inference profile during this
 round trip, including an existing Ollama gateway configuration.
+
+Each native-app conversation can pin **Automatic**, **This Mac**, or a named
+team device. Automatic routing considers model availability, residency, network
+latency, active work, queue depth, and temporary host failures; it only falls
+back before visible output begins. The response footer records the device that
+actually served the request. In Developer mode, MachBoost primes the stable
+system/tool prefix before the first message and reports load, queue, prefill,
+and cached-prefix time separately. This can substantially reduce TTFT for a
+reused coding prefix, but it does not make a novel prompt or output decoding
+free.
 
 Coding agents can use their native tool protocol. MachBoost returns function
 calls while the client keeps responsibility for file access, shell commands,
