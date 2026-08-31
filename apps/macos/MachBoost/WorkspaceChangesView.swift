@@ -224,6 +224,7 @@ struct WorkspaceChangesView: View {
     @Binding var scope: WorkspaceChangeScope
     let onRefresh: () -> Void
     let onClose: () -> Void
+    @State private var expandedPaths: Set<String> = []
 
     var body: some View {
         VStack(spacing: 0) {
@@ -304,11 +305,36 @@ struct WorkspaceChangesView: View {
             ScrollView {
                 LazyVStack(spacing: 0) {
                     ForEach(snapshot.changes) { change in
-                        DisclosureGroup {
+                        VStack(alignment: .leading, spacing: 0) {
+                            Button {
+                                withAnimation(.easeInOut(duration: 0.14)) {
+                                    if expandedPaths.contains(change.path) {
+                                        expandedPaths.remove(change.path)
+                                    } else {
+                                        expandedPaths.insert(change.path)
+                                    }
+                                }
+                            } label: {
+                                HStack(spacing: 6) {
+                                    Image(
+                                        systemName: expandedPaths.contains(change.path)
+                                            ? "chevron.down"
+                                            : "chevron.right"
+                                    )
+                                    .font(.caption2.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: 12)
+                                    changeLabel(change)
+                                }
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            if expandedPaths.contains(change.path) {
                             changeDetails(change)
                                 .padding(.top, 8)
-                        } label: {
-                            changeLabel(change)
+                                .padding(.leading, 18)
+                            }
                         }
                         .accessibilityIdentifier("workspace-change-\(change.path)")
                         .padding(.horizontal, 12)
