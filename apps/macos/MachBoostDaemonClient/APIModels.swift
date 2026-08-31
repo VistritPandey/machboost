@@ -853,6 +853,17 @@ public struct ChatEvent: Decodable, Sendable {
     }
 
     public struct MachBoost: Decodable, Sendable {
+        public struct Scheduler: Decodable, Sendable {
+            public let replica: Int?
+            public let replicas: Int?
+            public let queueWaitSeconds: Double?
+
+            enum CodingKeys: String, CodingKey {
+                case replica, replicas
+                case queueWaitSeconds = "queue_wait_seconds"
+            }
+        }
+
         public struct Route: Decodable, Sendable {
             public let source: String
             public let providerID: String?
@@ -872,6 +883,7 @@ public struct ChatEvent: Decodable, Sendable {
         public let backend: String?
         public let stats: GenerationStats?
         public let timeToFirstTokenSeconds: Double?
+        public let scheduler: Scheduler?
         public let workspace: WorkspaceResult?
         public let route: Route?
 
@@ -879,18 +891,20 @@ public struct ChatEvent: Decodable, Sendable {
             backend: String?,
             stats: GenerationStats?,
             timeToFirstTokenSeconds: Double?,
+            scheduler: Scheduler? = nil,
             workspace: WorkspaceResult? = nil,
             route: Route? = nil
         ) {
             self.backend = backend
             self.stats = stats
             self.timeToFirstTokenSeconds = timeToFirstTokenSeconds
+            self.scheduler = scheduler
             self.workspace = workspace
             self.route = route
         }
 
         enum CodingKeys: String, CodingKey {
-            case backend
+            case backend, scheduler
             case stats
             case timeToFirstTokenSeconds = "time_to_first_token_seconds"
             case workspace
@@ -903,6 +917,9 @@ public struct ChatEvent: Decodable, Sendable {
     public let done: Bool
     public let doneReason: String?
     public let totalDuration: Int64?
+    public let loadDuration: Int64?
+    public let promptEvalDuration: Int64?
+    public let promptEvalCount: Int?
     public let evalDuration: Int64?
     public let evalCount: Int?
     public let machboost: MachBoost?
@@ -914,6 +931,9 @@ public struct ChatEvent: Decodable, Sendable {
         done: Bool,
         doneReason: String?,
         totalDuration: Int64?,
+        loadDuration: Int64? = nil,
+        promptEvalDuration: Int64? = nil,
+        promptEvalCount: Int? = nil,
         evalDuration: Int64?,
         evalCount: Int?,
         machboost: MachBoost?,
@@ -924,6 +944,9 @@ public struct ChatEvent: Decodable, Sendable {
         self.done = done
         self.doneReason = doneReason
         self.totalDuration = totalDuration
+        self.loadDuration = loadDuration
+        self.promptEvalDuration = promptEvalDuration
+        self.promptEvalCount = promptEvalCount
         self.evalDuration = evalDuration
         self.evalCount = evalCount
         self.machboost = machboost
@@ -936,6 +959,9 @@ public struct ChatEvent: Decodable, Sendable {
         case done
         case doneReason = "done_reason"
         case totalDuration = "total_duration"
+        case loadDuration = "load_duration"
+        case promptEvalDuration = "prompt_eval_duration"
+        case promptEvalCount = "prompt_eval_count"
         case evalDuration = "eval_duration"
         case evalCount = "eval_count"
         case machboost
@@ -947,17 +973,41 @@ public struct GenerationStats: Decodable, Sendable {
     public let generatedTokens: Int?
     public let generationSeconds: Double?
     public let promptTokens: Int?
+    public let promptEvalTokens: Int?
+    public let cachedPromptTokens: Int?
+    public let promptEvalSeconds: Double?
+    public let promptCachePrefixTokens: Int?
+    public let promptCacheEnabled: Bool?
 
-    public init(generatedTokens: Int?, generationSeconds: Double?, promptTokens: Int?) {
+    public init(
+        generatedTokens: Int?,
+        generationSeconds: Double?,
+        promptTokens: Int?,
+        promptEvalTokens: Int? = nil,
+        cachedPromptTokens: Int? = nil,
+        promptEvalSeconds: Double? = nil,
+        promptCachePrefixTokens: Int? = nil,
+        promptCacheEnabled: Bool? = nil
+    ) {
         self.generatedTokens = generatedTokens
         self.generationSeconds = generationSeconds
         self.promptTokens = promptTokens
+        self.promptEvalTokens = promptEvalTokens
+        self.cachedPromptTokens = cachedPromptTokens
+        self.promptEvalSeconds = promptEvalSeconds
+        self.promptCachePrefixTokens = promptCachePrefixTokens
+        self.promptCacheEnabled = promptCacheEnabled
     }
 
     enum CodingKeys: String, CodingKey {
         case generatedTokens = "generated_tokens"
         case generationSeconds = "generation_seconds"
         case promptTokens = "prompt_tokens"
+        case promptEvalTokens = "prompt_eval_tokens"
+        case cachedPromptTokens = "cached_prompt_tokens"
+        case promptEvalSeconds = "prompt_eval_seconds"
+        case promptCachePrefixTokens = "prompt_cache_prefix_tokens"
+        case promptCacheEnabled = "prompt_cache_enabled"
     }
 }
 
