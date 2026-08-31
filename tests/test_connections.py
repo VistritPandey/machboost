@@ -4,7 +4,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from machboost.connections import ConnectionStore, is_loopback_endpoint, normalize_endpoint
+from machboost.connections import (
+    ConnectionStore,
+    connection_token_environment_name,
+    is_loopback_endpoint,
+    normalize_endpoint,
+)
 
 
 class ConnectionStoreTests(unittest.TestCase):
@@ -44,9 +49,32 @@ class ConnectionStoreTests(unittest.TestCase):
             profile = self.store.save("host-a", "https://inference.example.com")
         payload = json.loads(self.path.read_text(encoding="utf-8"))
 
-        self.assertEqual(payload["schema"], "machboost.connections.v1")
+        self.assertEqual(payload["schema"], "machboost.connections.v2")
         self.assertEqual(payload["active"], profile.id)
         self.assertEqual(payload["profiles"][0]["name"], "host-a")
+
+    def test_auto_mode_uses_every_saved_host_without_changing_fixed_mode(self):
+        with patch("machboost.connections.set_connection_secret"):
+            first = self.store.save("studio", "192.168.1.10:11435")
+            self.store.save("laptop", "192.168.1.11:11435")
+
+        self.assertEqual(self.store.mode(), "fixed")
+        self.assertNotEqual(self.store.active(), first)
+        self.assertIsNone(self.store.select("auto"))
+        self.assertEqual(self.store.mode(), "auto")
+        self.assertIsNone(self.store.active())
+
+        selected = self.store.select("studio")
+        self.assertEqual(selected, first)
+        self.assertEqual(self.store.mode(), "fixed")
+
+    def test_connection_token_supports_cross_platform_environment_secret(self):
+        with patch("machboost.connections.set_connection_secret"):
+            profile = self.store.save("build-studio", "192.168.1.10:11435")
+        environment_name = connection_token_environment_name(profile.name)
+
+        with patch.dict("os.environ", {environment_name: "mbk_environment"}):
+            self.assertEqual(self.store.token(profile), "mbk_environment")
 
     def test_endpoint_validation_rejects_self_and_api_subpaths(self):
         self.assertTrue(is_loopback_endpoint("http://127.0.0.1:11435"))
