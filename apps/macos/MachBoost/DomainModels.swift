@@ -16,6 +16,17 @@ enum InferenceMode: String, Codable, CaseIterable, Sendable {
     case team
 }
 
+struct InferenceHostOption: Identifiable, Equatable, Sendable {
+    static let automaticID = "automatic"
+    static let localID = "local"
+
+    let id: String
+    let name: String
+    let detail: String
+    let isOnline: Bool
+    let isLoaded: Bool
+}
+
 struct TeamHostProfile: Codable, Identifiable, Equatable, Sendable {
     let id: UUID
     var endpoint: URL
