@@ -258,6 +258,32 @@ class CLITests(unittest.TestCase):
         )
         self.assertIn("connected to MachBoost", output.getvalue())
 
+    def test_remote_claude_gateway_uses_private_loopback_relay(self):
+        args = cli.build_parser().parse_args(
+            [
+                "launch",
+                "claude-desktop",
+                "--endpoint",
+                "http://192.168.0.58:11435",
+                "--api-key",
+                "host-secret",
+                "--no-restart",
+            ]
+        )
+
+        with patch(
+            "machboost.cli.start_claude_gateway_relay",
+            return_value=("http://127.0.0.1:11436", "relay-secret"),
+        ) as start_relay:
+            endpoint, token, is_local = cli._claude_desktop_gateway(args)
+
+        self.assertEqual(endpoint, "http://127.0.0.1:11436")
+        self.assertEqual(token, "relay-secret")
+        self.assertFalse(is_local)
+        start_relay.assert_called_once_with(
+            "http://192.168.0.58:11435", "host-secret"
+        )
+
     def test_launch_rejects_gateway_without_claude_routes(self):
         output = io.StringIO()
         errors = io.StringIO()
