@@ -699,6 +699,42 @@ class MLXVLMAcceleratorTests(unittest.TestCase):
         self.assertTrue(stats.prompt_cache_enabled)
         self.assertEqual(stats.prompt_cache_prefix_tokens, 512)
 
+    def test_text_only_affinity_reuses_exact_conversation_cache(self):
+        states = []
+
+        def mlx_stream(model, processor, prompt, **kwargs):
+            states.append(kwargs.get("prompt_cache_state"))
+            yield FakeGenerationRow("cached")
+
+        mlx_stream.__module__ = "mlx_vlm.generate"
+        self.accelerator._stream_generate = mlx_stream
+        generation = SimpleNamespace(PromptCacheState=FakePromptCacheState)
+
+        with patch(
+            "machboost.adapters.mlx_vlm.importlib.import_module",
+            return_value=generation,
+        ), patch.object(
+            self.accelerator,
+            "_get_apc_manager",
+            return_value=None,
+        ), patch.object(self.accelerator, "_bind_thread_local_stream"):
+            _, first = self.accelerator.generate(
+                "First prompt", max_tokens=8, cache_key="conversation-a"
+            )
+            self.accelerator.generate(
+                "First prompt plus a tool result",
+                max_tokens=8,
+                cache_key="conversation-a",
+            )
+            self.accelerator.generate(
+                "Unrelated prompt", max_tokens=8, cache_key="conversation-b"
+            )
+
+        self.assertTrue(first.prompt_cache_enabled)
+        self.assertIsNotNone(states[0])
+        self.assertIs(states[0], states[1])
+        self.assertIsNot(states[0], states[2])
+
     def test_qwen_partial_prefix_drops_untrimmed_attention_mask(self):
         self.accelerator.model.config = {"model_type": "qwen2_5_vl"}
         self.accelerator._stream_generate.__module__ = "mlx_vlm.generate"
