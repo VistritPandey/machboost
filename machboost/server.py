@@ -675,6 +675,7 @@ class RuntimeManager:
                     reasoning_strength=_optional_string(
                         options.get("_reasoning_strength")
                     ),
+                    cache_key=affinity_key,
                 )
             else:
                 if messages_have_images(messages):
@@ -868,6 +869,7 @@ class RuntimeManager:
                     vision_calibration=load_vision_calibration(
                         options.get("vision_calibration")
                     ),
+                    cache_key=affinity_key,
                 )
             else:
                 if images:
