@@ -37,6 +37,12 @@ class ConnectionStore:
         active_id = data.get("active")
         return next((item for item in data["profiles"] if item.id == active_id), None)
 
+    def mode(self) -> str:
+        active = self._load().get("active")
+        if active == "auto":
+            return "auto"
+        return "fixed" if active else "local"
+
     def get(self, name: str) -> ConnectionProfile:
         key = str(name).strip().lower()
         profile = next(
@@ -69,9 +75,12 @@ class ConnectionStore:
         return profile
 
     def select(self, name: str) -> Optional[ConnectionProfile]:
-        if str(name).strip().lower() == "local":
+        selected = str(name).strip().lower()
+        if selected in {"local", "auto"}:
             data = self._load()
-            data["active"] = None
+            if selected == "auto" and not data["profiles"]:
+                raise ValueError("connect at least one remote host before enabling auto routing")
+            data["active"] = None if selected == "local" else "auto"
             self._write(data)
             return None
         profile = self.get(name)
@@ -91,18 +100,19 @@ class ConnectionStore:
         return profile
 
     def token(self, profile: ConnectionProfile) -> Optional[str]:
-        return get_connection_secret(profile.id)
+        environment_name = connection_token_environment_name(profile.name)
+        return os.environ.get(environment_name) or get_connection_secret(profile.id)
 
     def _load(self) -> dict:
         if not self.path.exists():
-            return {"schema": "machboost.connections.v1", "active": None, "profiles": []}
+            return {"schema": "machboost.connections.v2", "active": None, "profiles": []}
         try:
             raw = json.loads(self.path.read_text(encoding="utf-8"))
             profiles = [ConnectionProfile(**item) for item in raw.get("profiles", [])]
         except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
             raise ValueError(f"invalid MachBoost connections file: {exc}") from exc
         return {
-            "schema": "machboost.connections.v1",
+            "schema": "machboost.connections.v2",
             "active": raw.get("active"),
             "profiles": profiles,
         }
@@ -110,7 +120,7 @@ class ConnectionStore:
     def _write(self, data: dict) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
-            "schema": "machboost.connections.v1",
+            "schema": "machboost.connections.v2",
             "active": data.get("active"),
             "profiles": [asdict(item) for item in data.get("profiles", [])],
         }
@@ -157,20 +167,29 @@ def active_connection() -> Optional[ConnectionProfile]:
 
 
 def active_connection_token() -> Optional[str]:
-    profile = active_connection()
-    return get_connection_secret(profile.id) if profile else None
+    store = ConnectionStore()
+    profile = store.active()
+    return store.token(profile) if profile else None
+
+
+def connection_token_environment_name(name: str) -> str:
+    normalized = re.sub(r"[^A-Za-z0-9]", "_", str(name)).upper()
+    return f"MACHBOOST_API_TOKEN_{normalized}"
 
 
 def set_connection_secret(profile_id: str, token: str) -> None:
     token = str(token).strip()
     if not token:
         return
-    _run_security(
-        ["add-generic-password", "-U", "-a", profile_id, "-s", KEYCHAIN_SERVICE, "-w", token]
-    )
+    if platform.system() == "Darwin" and Path("/usr/bin/security").exists():
+        _run_security(
+            ["add-generic-password", "-U", "-a", profile_id, "-s", KEYCHAIN_SERVICE, "-w", token]
+        )
 
 
 def get_connection_secret(profile_id: str) -> Optional[str]:
+    if platform.system() != "Darwin" or not Path("/usr/bin/security").exists():
+        return None
     try:
         result = _run_security(
             ["find-generic-password", "-w", "-a", profile_id, "-s", KEYCHAIN_SERVICE]
