@@ -30,6 +30,7 @@ from .context_bench import benchmark_context_acceleration, context_fingerprint
 from .latency import benchmark_chat_latency
 from .models import alias_rows, backend_available, catalog_rows, resolve_model
 from .routing import HostTarget, MachBoostHostPool
+from .relay import start_claude_gateway_relay, stop_claude_gateway_relay
 from .server import (
     DEFAULT_HOST,
     DEFAULT_MAX_QUEUE,
@@ -595,6 +596,7 @@ def run_launch(args: argparse.Namespace, *, output_stream=None, error_stream=Non
         return 2
 
     manager = ClaudeDesktopProfileManager()
+    is_local = True
     try:
         if args.restore:
             status = manager.restore()
@@ -637,6 +639,8 @@ def run_launch(args: argparse.Namespace, *, output_stream=None, error_stream=Non
                 manager.restart_application()
                 restarted = True
     except (MachBoostAPIError, OSError, RuntimeError, ValueError) as exc:
+        if not is_local:
+            stop_claude_gateway_relay()
         print(f"machboost launch error: {exc}", file=error_stream)
         return 2
 
@@ -645,7 +649,10 @@ def run_launch(args: argparse.Namespace, *, output_stream=None, error_stream=Non
     elif action == "restored":
         print("Claude Desktop restored to its previous inference profile.", file=output_stream)
     else:
-        print(f"Claude Desktop connected to MachBoost at {status['endpoint']}.", file=output_stream)
+        destination = status.get("upstream") or status["endpoint"]
+        print(f"Claude Desktop connected to MachBoost at {destination}.", file=output_stream)
+        if status.get("relayed"):
+            print("A private localhost bridge keeps the shared-host key out of Claude's profile.", file=output_stream)
         print("Models are discovered from the selected MachBoost host.", file=output_stream)
     if manager.installed_application() is not None and not restarted:
         print("Quit and reopen Claude Desktop for the change to take effect.", file=output_stream)
@@ -661,7 +668,8 @@ def _claude_desktop_gateway(args: argparse.Namespace) -> tuple[str, str, bool]:
         token = store.token(profile)
         if not token:
             raise ValueError(f"saved connection {profile.name!r} has no API key")
-        return profile.endpoint, token, False
+        endpoint, local_token = start_claude_gateway_relay(profile.endpoint, token)
+        return endpoint, local_token, False
 
     endpoint = normalize_endpoint(args.endpoint or f"http://{DEFAULT_HOST}:{DEFAULT_PORT}")
     host = (urlparse(endpoint).hostname or "").lower()
@@ -676,6 +684,8 @@ def _claude_desktop_gateway(args: argparse.Namespace) -> tuple[str, str, bool]:
     )
     if not token:
         raise ValueError("provide --api-key or use a saved --connection for a remote host")
+    if not is_local:
+        endpoint, token = start_claude_gateway_relay(endpoint, token)
     return endpoint, token, is_local
 
 
