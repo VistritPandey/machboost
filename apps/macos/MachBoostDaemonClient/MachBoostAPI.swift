@@ -242,7 +242,9 @@ public final class MachBoostAPI: MachBoostAPIProtocol, @unchecked Sendable {
             configuration.waitsForConnectivity = false
             self.session = URLSession(configuration: configuration)
         }
-        self.encoder = JSONEncoder()
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        self.encoder = encoder
         self.decoder = JSONDecoder()
     }
 
