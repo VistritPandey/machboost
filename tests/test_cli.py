@@ -11,9 +11,108 @@ from unittest.mock import Mock, patch
 from machboost import __version__
 from machboost import cli
 from machboost.cli import doctor_data, main, self_test_data
+from machboost.connections import ConnectionProfile
 
 
 class CLITests(unittest.TestCase):
+    def test_connect_enables_automatic_routing(self):
+        output = io.StringIO()
+        store = Mock()
+        store.save.return_value = ConnectionProfile(
+            id="connection_studio",
+            name="studio",
+            endpoint="http://studio.local:11435",
+        )
+        client = Mock()
+        client.health.return_value = {"version": "0.16.0"}
+        args = cli.build_parser().parse_args(
+            ["connect", "studio.local:11435", "--name", "studio"]
+        )
+
+        with (
+            patch.dict("os.environ", {"MACHBOOST_API_TOKEN": "secret"}, clear=False),
+            patch("machboost.cli.MachBoostClient", return_value=client),
+            patch("machboost.cli.ConnectionStore", return_value=store),
+        ):
+            code = cli.run_connect(args, output_stream=output)
+
+        self.assertEqual(code, 0)
+        store.save.assert_called_once_with(
+            "studio",
+            "http://studio.local:11435",
+            api_token="secret",
+        )
+        store.select.assert_called_once_with("auto")
+        self.assertIn("automatic routing enabled", output.getvalue())
+
+    def test_connect_resident_builds_auto_pool_from_local_and_saved_hosts(self):
+        store = Mock()
+        store.mode.return_value = "auto"
+        store.list.return_value = [
+            ConnectionProfile(
+                id="connection_studio",
+                name="studio",
+                endpoint="http://studio.local:11435",
+            )
+        ]
+        store.token.return_value = "remote-secret"
+        args = cli.build_parser().parse_args(
+            ["run", "mlx-community/example", "--no-autostart"]
+        )
+        pool = Mock()
+
+        with (
+            patch("machboost.cli.ConnectionStore", return_value=store),
+            patch("machboost.cli._machboost_app_api_token", return_value="local-secret"),
+            patch("machboost.cli.MachBoostHostPool", return_value=pool) as pool_type,
+        ):
+            result = cli.connect_resident(args)
+
+        self.assertIs(result, pool)
+        targets = pool_type.call_args.args[0]
+        self.assertEqual([target.name for target in targets], ["This Mac", "studio"])
+        self.assertEqual(targets[0].api_token, "local-secret")
+        self.assertEqual(targets[1].api_token, "remote-secret")
+
+    def test_connections_probe_renders_selected_host_and_live_load(self):
+        output = io.StringIO()
+        store = Mock()
+        store.mode.return_value = "auto"
+        store.active.return_value = None
+        store.list.return_value = []
+        status = {
+            "selected": "local",
+            "hosts": [
+                {
+                    "id": "local",
+                    "name": "This Mac",
+                    "online": True,
+                    "supports_model": True,
+                    "model_loaded": True,
+                    "round_trip_seconds": 0.004,
+                    "active_requests": 1,
+                    "queued_requests": 0,
+                    "score": 0.42,
+                }
+            ],
+        }
+        args = cli.build_parser().parse_args(
+            ["connections", "--probe", "--model", "coder"]
+        )
+
+        with (
+            patch("machboost.cli.ConnectionStore", return_value=store),
+            patch("machboost.cli._connection_route_status", return_value=status),
+        ):
+            code = cli.run_connections(args, output_stream=output)
+
+        self.assertEqual(code, 0)
+        rendered = output.getvalue()
+        self.assertIn("routing: automatic", rendered)
+        self.assertIn("AUTO ROUTE PROBE", rendered)
+        self.assertIn("4ms", rendered)
+        self.assertIn("0.42s", rendered)
+
     def test_doctor_data_has_optional_package_statuses(self):
         data = doctor_data()
 
