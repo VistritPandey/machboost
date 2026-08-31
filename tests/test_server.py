@@ -364,6 +364,7 @@ class FakeVisionAccelerator:
         self.generate_calls = []
         self.cold_vision_calls = []
         self.vision_token_calls = []
+        self.cache_keys = []
         self.cache_hits = 0
 
     def generate_chat(
@@ -387,6 +388,7 @@ class FakeVisionAccelerator:
         tools=None,
         tool_choice="auto",
         reasoning_strength=None,
+        cache_key=None,
     ):
         self.chat_calls.append(
             (
@@ -410,6 +412,7 @@ class FakeVisionAccelerator:
                 vision_calibration,
             )
         )
+        self.cache_keys.append(cache_key)
         if use_vision_cache and len(self.chat_calls) > 1:
             self.cache_hits += 1
         if on_text is not None:
@@ -435,6 +438,7 @@ class FakeVisionAccelerator:
         vision_token_layer=None,
         vision_token_bucket=None,
         vision_calibration=None,
+        cache_key=None,
     ):
         self.generate_calls.append((prompt, tuple(images or ()), use_vision_cache))
         self.cold_vision_calls.append((cold_vision_mode, cold_vision_max_edge))
@@ -447,6 +451,7 @@ class FakeVisionAccelerator:
                 vision_calibration,
             )
         )
+        self.cache_keys.append(cache_key)
         if on_text is not None:
             on_text("visual completion")
         return "visual completion", FakeStats(generated_tokens=2)
@@ -2234,6 +2239,7 @@ class HTTPServerTests(unittest.TestCase):
                     "messages": [{"role": "user", "content": "Inspect it."}],
                     "tools": tools,
                     "tool_choice": "required",
+                    "options": {"affinity_key": "conversation-1"},
                     "stream": False,
                 },
             )
@@ -2242,6 +2248,7 @@ class HTTPServerTests(unittest.TestCase):
         self.assertEqual(call[0], [{"role": "user", "content": "Inspect it."}])
         self.assertEqual(call[5], tools)
         self.assertEqual(call[6], "required")
+        self.assertEqual(self.loaded[0][1].cache_keys[0], "client:conversation-1")
 
     def test_muse_glimmer_ollama_chat_preserves_reasoning_vision_and_tools(self):
         tools = [
