@@ -140,7 +140,11 @@ MachBoost advertises those routes and maps them to compatible, accessible
 MachBoost models on the selected host. The app shows that mapping before it
 changes Claude's configuration. It writes a reversible provider profile under
 Claude's Application Support directory, keeps the gateway key out of command
-arguments and logs, and restarts Claude after confirmation.
+arguments and logs, and restarts Claude after confirmation. Claude only accepts
+plain HTTP gateways on loopback. When a saved LAN host uses HTTP, MachBoost
+therefore starts a private authenticated loopback bridge, forwards requests to
+the selected host with its saved key, and removes the bridge on restore. The
+Claude profile never receives the remote host credential.
 
 `GET /api/integrations` returns the same connection values for the active host.
 `POST /v1/responses`, `POST /v1/messages`, and `POST /v1/chat/completions`
