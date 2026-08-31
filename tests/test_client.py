@@ -7,7 +7,7 @@ import threading
 import unittest
 from dataclasses import dataclass
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 from urllib.error import HTTPError
 
 from machboost import __version__
@@ -316,6 +316,52 @@ class ClientTests(unittest.TestCase):
             client._headers()["Authorization"],
             "Bearer secret-token",
         )
+
+    def test_client_retries_local_401_with_app_keychain_token(self):
+        unauthorized = HTTPError(
+            "http://127.0.0.1:11435/api/ps",
+            401,
+            "unauthorized",
+            {},
+            io.BytesIO(b'{"error":"authentication required"}'),
+        )
+        response = MagicMock()
+        response.read.return_value = b'{"models":[]}'
+        response.__enter__.return_value = response
+        client = MachBoostClient("http://127.0.0.1:11435")
+
+        with (
+            patch("machboost.client.machboost_app_api_token", return_value="app-token") as token,
+            patch("machboost.client.urlopen", side_effect=[unauthorized, response]) as request,
+        ):
+            self.assertEqual(client.ps(), [])
+
+        token.assert_called_once_with()
+        retried_request = request.call_args_list[1].args[0]
+        self.assertEqual(retried_request.get_header("Authorization"), "Bearer app-token")
+
+    def test_stream_retries_local_401_with_app_keychain_token(self):
+        unauthorized = HTTPError(
+            "http://localhost:11435/api/chat",
+            401,
+            "unauthorized",
+            {},
+            io.BytesIO(b'{"error":"authentication required"}'),
+        )
+        response = MagicMock()
+        response.__iter__.return_value = iter([b'{"done":true}\n'])
+        response.__enter__.return_value = response
+        client = MachBoostClient("http://localhost:11435")
+
+        with (
+            patch("machboost.client.machboost_app_api_token", return_value="app-token"),
+            patch("machboost.client.urlopen", side_effect=[unauthorized, response]) as request,
+        ):
+            rows = list(client.stream("/api/chat", {"model": "example"}))
+
+        self.assertEqual(rows, [{"done": True}])
+        retried_request = request.call_args_list[1].args[0]
+        self.assertEqual(retried_request.get_header("Authorization"), "Bearer app-token")
 
     def test_cancel_returns_false_for_unknown_request(self):
         self.assertFalse(self.client.cancel("missing-request"))
