@@ -500,7 +500,10 @@ final class MachBoostTests: XCTestCase {
             messages: [.init(role: "user", content: "Hello", images: nil)],
             context: ["/tmp/context.txt"],
             options: .init(maxTokens: 64, temperature: 0.2, affinityKey: "thread-1"),
-            workspaceID: "workspace-123"
+            workspaceID: "workspace-123",
+            workspaceTopK: 4,
+            workspaceMaxChars: 12_000,
+            machboost: .init(memory: "off")
         )
 
         let object = try XCTUnwrap(
@@ -511,8 +514,12 @@ final class MachBoostTests: XCTestCase {
         XCTAssertEqual(object["request_id"] as? String, "chat-123")
         XCTAssertEqual(object["keep_alive"] as? String, "forever")
         XCTAssertEqual(object["workspace_id"] as? String, "workspace-123")
+        XCTAssertEqual(object["workspace_top_k"] as? Int, 4)
+        XCTAssertEqual(object["workspace_max_chars"] as? Int, 12_000)
         XCTAssertEqual(options["num_predict"] as? Int, 64)
         XCTAssertEqual(options["affinity_key"] as? String, "thread-1")
+        let extensions = try XCTUnwrap(object["machboost"] as? [String: Any])
+        XCTAssertEqual(extensions["memory"] as? String, "off")
     }
 
     func testChatRequestEncodesPaidProviderModelRoute() throws {
