@@ -14,6 +14,7 @@ struct ConnectionsView: View {
             VStack(alignment: .leading, spacing: 24) {
                 header
                 inferencePool
+                connectedClients
                 availableDevices
                 advancedConnection
                 if appState.inferenceMode == .team, !appState.teamCatalog.isEmpty {
@@ -44,6 +45,9 @@ struct ConnectionsView: View {
             if endpoint.isEmpty {
                 endpoint = appState.teamHost?.endpoint.absoluteString ?? ""
             }
+        }
+        .task {
+            await appState.refreshTeam()
         }
     }
 
@@ -93,7 +97,7 @@ struct ConnectionsView: View {
 
             if let delay = appState.lastRouteExpectedDelay {
                 Label(
-                    "Last request used \(appState.inferenceLabel) · estimated \(delay.formatted(.number.precision(.fractionLength(2))))s",
+                    "Last request used \(appState.lastRoutedHostName ?? appState.inferenceLabel) · estimated \(delay.formatted(.number.precision(.fractionLength(2))))s",
                     systemImage: "arrow.triangle.branch"
                 )
                 .font(.caption.weight(.medium))
@@ -114,6 +118,106 @@ struct ConnectionsView: View {
                 .padding(.vertical, 2)
             }
             .scrollIndicators(.hidden)
+        }
+    }
+
+    @ViewBuilder
+    private var connectedClients: some View {
+        if appState.configuration.lanEnabled || !appState.teamClients.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    sectionTitle("Connected clients", systemImage: "person.2.wave.2")
+                    Spacer()
+                    Button {
+                        Task { await appState.refreshTeam() }
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Refresh connected clients")
+                }
+                Text("Devices using this Mac as an inference host appear here.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+
+                if appState.teamClients.isEmpty {
+                    ContentUnavailableView(
+                        "No clients yet",
+                        systemImage: "person.2.slash",
+                        description: Text("Share this Mac's address and API key from Server settings.")
+                    )
+                    .frame(maxWidth: .infinity, minHeight: 130)
+                } else {
+                    LazyVGrid(
+                        columns: [GridItem(.adaptive(minimum: 260, maximum: 360), spacing: 12)],
+                        alignment: .leading,
+                        spacing: 12
+                    ) {
+                        ForEach(sortedTeamClients) { client in
+                            clientRow(client)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func clientRow(_ client: TeamClient) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 9) {
+                Image(systemName: "laptopcomputer")
+                    .foregroundStyle(client.online ? Color.green : Color.secondary)
+                    .frame(width: 28, height: 28)
+                    .background(
+                        client.online ? Color.green.opacity(0.12) : Color.secondary.opacity(0.08)
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(client.deviceName)
+                        .font(.body.weight(.semibold))
+                        .lineLimit(1)
+                    HStack(spacing: 5) {
+                        statusIndicator(active: client.online)
+                        Text(client.online ? "Online" : "Last seen \(client.lastSeenAt)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+                Spacer()
+                Text("\(client.requestCount)")
+                    .font(.title3.monospacedDigit().weight(.semibold))
+                Text("requests")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            if let model = client.model, !model.isEmpty {
+                Label(model, systemImage: "cube")
+                    .font(.caption.monospaced())
+                    .lineLimit(1)
+            }
+            if let workspace = client.workspaceName, !workspace.isEmpty {
+                Label(workspace, systemImage: "folder")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+        }
+        .padding(14)
+        .frame(minHeight: 112, alignment: .topLeading)
+        .background(Color(nsColor: .controlBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
+        }
+    }
+
+    private var sortedTeamClients: [TeamClient] {
+        appState.teamClients.sorted {
+            if $0.online != $1.online { return $0.online }
+            if $0.requestCount != $1.requestCount { return $0.requestCount > $1.requestCount }
+            return $0.deviceName.localizedCaseInsensitiveCompare($1.deviceName) == .orderedAscending
         }
     }
 
