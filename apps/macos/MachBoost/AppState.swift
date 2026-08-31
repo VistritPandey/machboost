@@ -6,6 +6,13 @@ private struct InferenceCandidate: Sendable {
     let api: any MachBoostAPIProtocol
     let profile: TeamHostProfile?
     let hostID: UUID
+    let hostName: String
+}
+
+struct InferenceRouteRecord: Sendable {
+    let hostID: String
+    let hostName: String
+    let expectedDelay: Double
 }
 
 private struct TeamHostRefreshResult: Sendable {
@@ -65,6 +72,7 @@ final class AppState {
     private var teamAPIs: [UUID: any MachBoostAPIProtocol] = [:]
     private var requestAPIs: [String: any MachBoostAPIProtocol] = [:]
     private var requestHostIDs: [String: UUID] = [:]
+    private var completedRequestRoutes: [String: InferenceRouteRecord] = [:]
     private var reservedRequests: [UUID: Int] = [:]
     private var hostFailureCounts: [UUID: Int] = [:]
     private var hostCooldownUntil: [UUID: Date] = [:]
@@ -160,6 +168,14 @@ final class AppState {
 
     var lastRouteWasLocal: Bool {
         lastRoutedHostID == Self.localPoolID
+    }
+
+    var lastRoutedHostName: String? {
+        guard let lastRoutedHostID else { return nil }
+        if lastRoutedHostID == Self.localPoolID {
+            return Host.current().localizedName ?? "This Mac"
+        }
+        return teamHosts.first { $0.id == lastRoutedHostID }?.hostName
     }
 
     func wasLastRouted(to profile: TeamHostProfile) -> Bool {
@@ -276,16 +292,34 @@ final class AppState {
 
     func reportTeamPresence(workspace: WorkspaceSummary?, model: String?) async throws {
         guard inferenceMode == .team else { return }
-        teamClient = try await inferenceAPI.reportTeamPresence(
-            deviceID: deviceID,
-            deviceName: Host.current().localizedName ?? ProcessInfo.processInfo.hostName,
-            appVersion: Bundle.main.object(
-                forInfoDictionaryKey: "CFBundleShortVersionString"
-            ) as? String ?? "development",
-            workspaceName: workspace?.name,
-            workspaceFingerprint: workspace?.revision,
-            model: model
-        )
+        let deviceName = Host.current().localizedName ?? ProcessInfo.processInfo.hostName
+        let appVersion = Bundle.main.object(
+            forInfoDictionaryKey: "CFBundleShortVersionString"
+        ) as? String ?? "development"
+        var firstResponse: TeamClient?
+        var lastError: Error?
+        for profile in teamHosts {
+            guard let remote = teamAPIs[profile.id] else { continue }
+            do {
+                let response = try await remote.reportTeamPresence(
+                    deviceID: deviceID,
+                    deviceName: deviceName,
+                    appVersion: appVersion,
+                    workspaceName: workspace?.name,
+                    workspaceFingerprint: workspace?.revision,
+                    model: model
+                )
+                firstResponse = firstResponse ?? response
+                lastPresenceAt[profile.id] = .now
+            } catch {
+                lastError = error
+            }
+        }
+        if let firstResponse {
+            teamClient = firstResponse
+        } else if let lastError {
+            throw lastError
+        }
     }
 
     func requestModelFromHost(_ model: String, note: String?) async {
@@ -741,8 +775,14 @@ final class AppState {
         return workspaces.first { $0.id == id }
     }
 
-    func streamChat(_ request: ChatRequest) throws -> AsyncThrowingStream<ChatEvent, Error> {
-        let candidates = try inferenceCandidates(for: request.model)
+    func streamChat(
+        _ request: ChatRequest,
+        preferredHostID: String? = nil
+    ) throws -> AsyncThrowingStream<ChatEvent, Error> {
+        let candidates = try inferenceCandidates(
+            for: request.model,
+            preferredHostID: preferredHostID
+        )
         return AsyncThrowingStream { continuation in
             let task = Task { @MainActor [weak self] in
                 guard let self else {
@@ -776,6 +816,10 @@ final class AppState {
                             )
                         }
                         self.markRouteSuccessful(selected)
+                        self.recordCompletedRoute(
+                            requestID: request.requestID,
+                            candidate: selected
+                        )
                         self.endRequestRoute(
                             requestID: request.requestID,
                             hostID: selected.hostID
@@ -814,6 +858,54 @@ final class AppState {
     func cancelInference(requestID: String) async -> Bool {
         let target = requestAPIs[requestID] ?? inferenceAPI
         return (try? await target.cancel(requestID: requestID)) ?? false
+    }
+
+    func consumeInferenceRoute(requestID: String) -> InferenceRouteRecord? {
+        completedRequestRoutes.removeValue(forKey: requestID)
+    }
+
+    func inferenceHostOptions(for model: String) -> [InferenceHostOption] {
+        var result = [
+            InferenceHostOption(
+                id: InferenceHostOption.automaticID,
+                name: "Automatic",
+                detail: "Use the fastest ready device",
+                isOnline: true,
+                isLoaded: false
+            )
+        ]
+        let localReady = catalog.contains {
+            ($0.name == model || $0.repository == model) && $0.cached && $0.support == "ready"
+        }
+        result.append(
+            InferenceHostOption(
+                id: InferenceHostOption.localID,
+                name: Host.current().localizedName ?? "This Mac",
+                detail: loadedModels.contains(where: { $0.model == model })
+                    ? "Loaded on this Mac"
+                    : (localReady ? "Ready on this Mac" : "Model unavailable"),
+                isOnline: true,
+                isLoaded: loadedModels.contains { $0.model == model }
+            )
+        )
+        result.append(contentsOf: teamHosts.map { profile in
+            let snapshot = teamHostSnapshots[profile.id]
+            let latency = snapshot.map {
+                " · \(Int(($0.roundTripSeconds * 1_000).rounded())) ms"
+            } ?? ""
+            return InferenceHostOption(
+                id: profile.id.uuidString,
+                name: profile.hostName,
+                detail: snapshot?.hasLoaded(model: model) == true
+                    ? "Loaded\(latency)"
+                    : (snapshot?.supports(model: model) == true
+                        ? "Ready\(latency)"
+                        : (snapshot?.isOnline == true ? "Model unavailable" : "Offline")),
+                isOnline: snapshot?.isOnline == true,
+                isLoaded: snapshot?.hasLoaded(model: model) == true
+            )
+        })
+        return result
     }
 
     func selectTeamHost(_ profile: TeamHostProfile) {
@@ -1040,13 +1132,26 @@ final class AppState {
         Self.saveTeamProfiles(teamHosts)
     }
 
-    private func inferenceCandidates(for model: String) throws -> [InferenceCandidate] {
+    private func inferenceCandidates(
+        for model: String,
+        preferredHostID: String? = nil
+    ) throws -> [InferenceCandidate] {
         guard inferenceMode == .team else {
-            return [InferenceCandidate(score: 0, api: api, profile: nil, hostID: Self.localPoolID)]
+            return [
+                InferenceCandidate(
+                    score: 0,
+                    api: api,
+                    profile: nil,
+                    hostID: Self.localPoolID,
+                    hostName: Host.current().localizedName ?? "This Mac"
+                )
+            ]
         }
         let now = Date()
+        let prefersLocal = preferredHostID == InferenceHostOption.localID
+        let preferredRemoteID = preferredHostID.flatMap { UUID(uuidString: $0) }
         var candidates: [InferenceCandidate] = []
-        if includeLocalInHostPool,
+        if (includeLocalInHostPool || prefersLocal),
            hostCooldownUntil[Self.localPoolID, default: .distantPast] <= now,
            catalog.contains(where: {
                ($0.name == model || $0.repository == model) && $0.cached && $0.support == "ready"
@@ -1065,7 +1170,8 @@ final class AppState {
                     score: score,
                     api: api,
                     profile: nil,
-                    hostID: Self.localPoolID
+                    hostID: Self.localPoolID,
+                    hostName: Host.current().localizedName ?? "This Mac"
                 )
             )
         }
@@ -1088,7 +1194,8 @@ final class AppState {
                     ),
                     api: remote,
                     profile: snapshot.profile,
-                    hostID: snapshot.id
+                    hostID: snapshot.id,
+                    hostName: snapshot.profile.hostName
                 )
             )
         }
@@ -1098,6 +1205,15 @@ final class AppState {
             )
         }
         return candidates.sorted {
+            let lhsPreferred = prefersLocal
+                ? $0.hostID == Self.localPoolID
+                : $0.hostID == preferredRemoteID
+            let rhsPreferred = prefersLocal
+                ? $1.hostID == Self.localPoolID
+                : $1.hostID == preferredRemoteID
+            if lhsPreferred != rhsPreferred {
+                return lhsPreferred
+            }
             if $0.score == $1.score {
                 return $0.hostID.uuidString < $1.hostID.uuidString
             }
@@ -1128,6 +1244,20 @@ final class AppState {
         if let profile = candidate.profile {
             teamHost = profile
             Self.saveTeamProfile(profile)
+        }
+    }
+
+    private func recordCompletedRoute(requestID: String, candidate: InferenceCandidate) {
+        completedRequestRoutes[requestID] = InferenceRouteRecord(
+            hostID: candidate.hostID == Self.localPoolID
+                ? InferenceHostOption.localID
+                : candidate.hostID.uuidString,
+            hostName: candidate.hostName,
+            expectedDelay: candidate.score
+        )
+        if completedRequestRoutes.count > 128,
+           let oldest = completedRequestRoutes.keys.sorted().first {
+            completedRequestRoutes.removeValue(forKey: oldest)
         }
     }
 
