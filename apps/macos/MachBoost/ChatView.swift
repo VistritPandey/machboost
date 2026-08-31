@@ -1109,6 +1109,8 @@ struct ChatView: View {
             permissionMode.rawValue,
             selectedInferenceHostID,
             appState.inferenceMode.rawValue,
+            selectedWorkspace?.id ?? "no-workspace",
+            selectedWorkspace?.revision ?? "unindexed",
         ].joined(separator: "|")
     }
 
@@ -1138,7 +1140,7 @@ struct ChatView: View {
         return selectedProvider.models.first { $0 != "*" } ?? conversation.model
     }
 
-    private var chatExtensions: ChatRequest.Extensions? {
+    private func requestExtensions(memory: String? = nil) -> ChatRequest.Extensions {
         let mode = routeMode.usesExternal && !externalRoutingAvailable
             ? ChatRouteMode.localOnly
             : routeMode
@@ -1148,7 +1150,8 @@ struct ChatView: View {
                 mode: mode.rawValue,
                 providerID: remote || !mode.usesExternal ? nil : selectedProvider?.id,
                 model: remote || !mode.usesExternal ? nil : effectiveProviderModel
-            )
+            ),
+            memory: memory
         )
     }
 
@@ -1279,9 +1282,17 @@ struct ChatView: View {
                 temperature: 0,
                 affinityKey: conversationAffinityKey
             ),
+            workspaceID: appState.inferenceMode == .local
+                ? selectedWorkspace?.id
+                : nil,
+            workspaceTopK: appState.inferenceMode == .local ? 1 : nil,
+            workspaceMaxChars: appState.inferenceMode == .local ? 12_000 : nil,
             reasoningStrength: effectiveReasoningStrength,
             tools: CodingWorkspace.tools(for: permissionMode),
-            machboost: .init(route: .init(mode: ChatRouteMode.localOnly.rawValue))
+            machboost: .init(
+                route: .init(mode: ChatRouteMode.localOnly.rawValue),
+                memory: "off"
+            )
         )
         do {
             for try await _ in try appState.streamChat(
@@ -1555,15 +1566,21 @@ struct ChatView: View {
                     temperature: temperature,
                     affinityKey: conversationAffinityKey
                 ),
-                workspaceID: appState.inferenceMode == .local && !codingActive
+                workspaceID: appState.inferenceMode == .local
                     ? conversation.workspaceID
+                    : nil,
+                workspaceTopK: appState.inferenceMode == .local && codingActive
+                    ? 4
+                    : nil,
+                workspaceMaxChars: appState.inferenceMode == .local && codingActive
+                    ? 12_000
                     : nil,
                 reasoningStrength: effectiveReasoningStrength,
                 // Keep the tool schema stable across rounds so the resident
                 // runtime can reuse the long coding prefix. The final-answer
                 // instruction below is what prevents another tool request.
                 tools: codingActive ? CodingWorkspace.tools(for: permissionMode) : nil,
-                machboost: chatExtensions
+                machboost: requestExtensions(memory: codingActive ? "off" : nil)
             )
             var roundContent = ""
             var roundToolCalls: [APIToolCall] = []
@@ -1981,7 +1998,7 @@ struct ChatView: View {
                 affinityKey: conversationAffinityKey
             ),
             reasoningStrength: selectedModelRequiresReasoning ? "low" : nil,
-            machboost: chatExtensions
+            machboost: requestExtensions()
         )
 
         var summary = ""
