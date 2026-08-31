@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_ROOT="$ROOT/apps/macos"
 VERSION="${1:-}"
 MODE="${2:-release}"
-BUILD_NUMBER="${BUILD_NUMBER:-1}"
+BUILD_NUMBER="${BUILD_NUMBER:-}"
 DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
 DIST="$ROOT/dist/macos"
 ARCHIVE="$DIST/MachBoost.xcarchive"
@@ -32,6 +32,21 @@ fi
 
 if [[ -z "$VERSION" ]]; then
   echo "usage: $0 VERSION [--local]" >&2
+  exit 2
+fi
+if [[ -z "$BUILD_NUMBER" ]]; then
+  if [[ "$VERSION" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)([-+][A-Za-z0-9.-]+)?$ ]]; then
+    major="${BASH_REMATCH[1]}"
+    minor="${BASH_REMATCH[2]}"
+    patch="${BASH_REMATCH[3]}"
+    BUILD_NUMBER="$((10#$major * 1000000 + 10#$minor * 1000 + 10#$patch))"
+  else
+    echo "Release version must start with MAJOR.MINOR.PATCH: $VERSION" >&2
+    exit 2
+  fi
+fi
+if [[ ! "$BUILD_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
+  echo "BUILD_NUMBER must be a positive integer: $BUILD_NUMBER" >&2
   exit 2
 fi
 case "$MODE" in
