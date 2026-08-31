@@ -33,6 +33,7 @@ from .adapters.ollama_mlx import (
     OllamaMLXRunStats,
 )
 from .models import ModelAlias, ModelResolution, resolve_model
+from .routing import HostProbe, HostTarget, MachBoostHostPool, expected_delay_score
 from .server import RuntimeManager
 from .video import TemporalVideoSampler, VideoFrame, VideoSelection
 from .vision import ContentAddressedVisionCache, VisualAssetStore, VisionCacheInfo
@@ -64,9 +65,12 @@ __all__ = [
     "MachBoost",
     "MachBoostAPIError",
     "MachBoostClient",
+    "MachBoostHostPool",
     "MLXVLMAccelerator",
     "ModelAlias",
     "ModelResolution",
+    "HostProbe",
+    "HostTarget",
     "OllamaMLXAccelerator",
     "OllamaMLXCancelled",
     "OllamaMLXRunStats",
@@ -90,6 +94,7 @@ __all__ = [
     "benchmark_context_acceleration",
     "context_fingerprint",
     "ensure_server",
+    "expected_delay_score",
     "machboost",
     "resolve_model",
     "summarize_results",
