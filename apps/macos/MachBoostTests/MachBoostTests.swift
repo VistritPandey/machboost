@@ -1546,6 +1546,7 @@ final class MachBoostTests: XCTestCase {
                 body: """
                 {"request_id":"chat-stream-7","message":{"role":"assistant","content":"Hi"},"done":false}
                 {"request_id":"chat-stream-7","message":{"role":"assistant","content":" there"},"done":true,"done_reason":"stop"}
+                this must never be decoded after the terminal event
 
                 """
             )
