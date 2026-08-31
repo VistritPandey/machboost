@@ -615,7 +615,12 @@ public final class MachBoostAPI: MachBoostAPIProtocol, @unchecked Sendable {
     }
 
     public func streamChat(_ request: ChatRequest) -> AsyncThrowingStream<ChatEvent, Error> {
-        stream(path: "/api/chat", body: request, event: ChatEvent.self)
+        stream(
+            path: "/api/chat",
+            body: request,
+            event: ChatEvent.self,
+            isTerminal: { $0.done || $0.error != nil }
+        )
     }
 
     public func streamPull(
@@ -636,7 +641,8 @@ public final class MachBoostAPI: MachBoostAPIProtocol, @unchecked Sendable {
         return stream(
             path: "/api/pull",
             body: PullRequest(model: model, requestID: requestID),
-            event: PullEvent.self
+            event: PullEvent.self,
+            isTerminal: { $0.done || $0.error != nil }
         )
     }
 
@@ -646,7 +652,8 @@ public final class MachBoostAPI: MachBoostAPIProtocol, @unchecked Sendable {
     >(
         path: String,
         body: RequestBody,
-        event: Event.Type
+        event: Event.Type,
+        isTerminal: @escaping @Sendable (Event) -> Bool
     ) -> AsyncThrowingStream<Event, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
@@ -664,6 +671,10 @@ public final class MachBoostAPI: MachBoostAPIProtocol, @unchecked Sendable {
                         let data = Data(line.utf8)
                         let decoded = try self.decoder.decode(event, from: data)
                         continuation.yield(decoded)
+                        if isTerminal(decoded) {
+                            continuation.finish()
+                            return
+                        }
                     }
                     continuation.finish()
                 } catch is CancellationError {
