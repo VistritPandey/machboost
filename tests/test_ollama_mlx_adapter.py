@@ -140,6 +140,41 @@ class OllamaMLXAcceleratorTests(unittest.TestCase):
         self.assertEqual(messages[0]["content"], "Reasoning strength: high")
         self.assertEqual(base64.b64decode(messages[1]["images"][0]), b"image")
 
+    def test_upstream_decode_is_not_blocked_by_slow_client_writes(self):
+        upstream_drained = threading.Event()
+
+        class StreamingAdapter(FakeAdapter):
+            def chat(self, messages, **kwargs):
+                self.calls.append((messages, kwargs))
+
+                def rows():
+                    yield chunk(content="first")
+                    upstream_drained.set()
+                    yield chunk(
+                        content="second",
+                        done=True,
+                        raw={"done": True, "eval_count": 2},
+                    )
+
+                return rows()
+
+        adapter = StreamingAdapter([])
+        accelerator = OllamaMLXAccelerator(adapter)
+        observed_during_first_write = []
+
+        def slow_write(text):
+            if text == "first":
+                observed_during_first_write.append(upstream_drained.wait(timeout=0.5))
+
+        text, _ = accelerator.generate_chat(
+            [{"role": "user", "content": "test"}],
+            max_tokens=2,
+            on_text=slow_write,
+        )
+
+        self.assertEqual(text, "firstsecond")
+        self.assertEqual(observed_during_first_write, [True])
+
     def test_context_is_stable_system_prefix(self):
         adapter = FakeAdapter([chunk(done=True, raw={"done": True})])
         accelerator = OllamaMLXAccelerator(
