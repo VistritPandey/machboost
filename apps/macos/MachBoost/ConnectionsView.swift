@@ -87,9 +87,18 @@ struct ConnectionsView: View {
                     .controlSize(.small)
                     .help("Route work here when connected devices are busy")
             }
-            Text("MachBoost prefers a host where the model is already loaded, then spills work to an available host when queues grow.")
+            Text("Every request is sent to the ready device with the lowest expected completion time. Live latency, queues, replicas, and model residency are refreshed automatically.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
+
+            if let delay = appState.lastRouteExpectedDelay {
+                Label(
+                    "Last request used \(appState.inferenceLabel) · estimated \(delay.formatted(.number.precision(.fractionLength(2))))s",
+                    systemImage: "arrow.triangle.branch"
+                )
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.green)
+            }
 
             ScrollView(.horizontal) {
                 HStack(alignment: .center, spacing: 10) {
@@ -109,27 +118,26 @@ struct ConnectionsView: View {
     }
 
     private var localHostNode: some View {
-        let useAction: (() -> Void)? = appState.inferenceMode == .local
-            ? nil
-            : { appState.useLocalInference() }
+        let selected = appState.inferenceMode == .local || appState.lastRouteWasLocal
         return hostNode(
             name: Host.current().localizedName ?? "This Mac",
             subtitle: "This Mac",
             online: true,
-            selected: appState.inferenceMode == .local,
+            selected: selected,
             active: appState.metrics?.scheduler.activeRequests ?? 0,
             queued: appState.metrics?.scheduler.queuedRequests ?? 0,
             models: appState.catalog.filter(\.cached).count,
             loaded: appState.loadedModels.count,
-            useAction: useAction,
+            latency: 0,
+            useAction: appState.inferenceMode == .local ? nil : { appState.useLocalInference() },
             removeAction: nil
         )
     }
 
     private func remoteHostNode(_ host: TeamHostProfile) -> some View {
         let snapshot = appState.teamHostSnapshots[host.id]
-        let selected = appState.inferenceMode == .team && appState.teamHost?.id == host.id
-        let useAction: (() -> Void)? = snapshot?.isOnline == true && !selected
+        let selected = appState.inferenceMode == .team && appState.wasLastRouted(to: host)
+        let useAction: (() -> Void)? = snapshot?.isOnline == true && appState.inferenceMode == .local
             ? { appState.selectTeamHost(host) }
             : nil
         return hostNode(
@@ -141,6 +149,7 @@ struct ConnectionsView: View {
             queued: snapshot?.queuedRequests ?? 0,
             models: snapshot?.catalog.filter(\.cached).count ?? 0,
             loaded: snapshot?.loadedModels.count ?? 0,
+            latency: snapshot?.roundTripSeconds ?? 0,
             useAction: useAction,
             removeAction: { appState.removeTeamHost(host) }
         )
@@ -155,6 +164,7 @@ struct ConnectionsView: View {
         queued: Int,
         models: Int,
         loaded: Int,
+        latency: Double,
         useAction: (() -> Void)?,
         removeAction: (() -> Void)?
     ) -> some View {
@@ -179,7 +189,7 @@ struct ConnectionsView: View {
                 }
                 Spacer(minLength: 4)
                 if selected {
-                    Text("IN USE")
+                    Text("LAST ROUTE")
                         .font(.caption2.weight(.bold))
                         .foregroundStyle(.green)
                 }
@@ -190,15 +200,21 @@ struct ConnectionsView: View {
                 compactMetric("Queued", value: queued)
                 compactMetric("Ready", value: models)
                 compactMetric("Loaded", value: loaded)
+                if latency > 0 {
+                    compactLatency(latency)
+                }
             }
 
             HStack {
                 if let useAction {
-                    Button("Use Device", action: useAction)
+                    Button(
+                        appState.inferenceMode == .local ? "Enable Pool" : "Use This Mac",
+                        action: useAction
+                    )
                         .buttonStyle(.bordered)
                         .controlSize(.small)
                 } else {
-                    Text(selected ? "Handling new requests" : "Available for spillover")
+                    Text(selected ? "Handled the last request" : "Available to auto-route")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -213,7 +229,7 @@ struct ConnectionsView: View {
             }
         }
         .padding(14)
-        .frame(width: 280, height: 146, alignment: .topLeading)
+        .frame(width: 300, height: 146, alignment: .topLeading)
         .background(Color(nsColor: .controlBackgroundColor))
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .overlay {
@@ -426,6 +442,18 @@ struct ConnectionsView: View {
                 .font(.caption2)
                 .foregroundStyle(.secondary)
             Text("\(value)")
+                .font(.callout.weight(.medium))
+                .monospacedDigit()
+                .lineLimit(1)
+        }
+    }
+
+    private func compactLatency(_ seconds: Double) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text("RTT")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            Text("\(Int((seconds * 1_000).rounded())) ms")
                 .font(.callout.weight(.medium))
                 .monospacedDigit()
                 .lineLimit(1)
