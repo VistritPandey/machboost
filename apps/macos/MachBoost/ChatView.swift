@@ -52,6 +52,7 @@ struct ChatView: View {
     @State private var workspaceChanges = WorkspaceChangeSet.empty
     @State private var isRefreshingWorkspaceChanges = false
     @State private var workspaceChangesTask: Task<Void, Never>?
+    @State private var isPreparingCodingPrefix = false
     @FocusState private var composerIsFocused: Bool
     @AppStorage("machboost.chat.maxTokens") private var maxTokens = 512
     @AppStorage("machboost.chat.temperature") private var temperature = 0.2
@@ -131,6 +132,7 @@ struct ChatView: View {
             summaryThreshold = ConversationCompaction.clampedThreshold(summaryThreshold)
             selectAvailableModelIfNeeded()
             selectAvailableProviderIfNeeded()
+            activateSelectedInferenceHost()
 #if DEBUG
             if let mode = ProcessInfo.processInfo.environment["MACHBOOST_UI_TEST_PERMISSION_MODE"],
                CodingPermissionMode(rawValue: mode) != nil {
@@ -159,6 +161,9 @@ struct ChatView: View {
         .onDisappear {
             stop()
             workspaceChangesTask?.cancel()
+        }
+        .task(id: codingWarmupKey) {
+            await prepareCodingPrefixIfNeeded()
         }
     }
 
@@ -289,15 +294,7 @@ struct ChatView: View {
 
                 Spacer(minLength: 0)
 
-                if !compact {
-                    Label(
-                        appState.inferenceLabel,
-                        systemImage: appState.inferenceMode == .team ? "network" : "desktopcomputer"
-                    )
-                    .font(.caption)
-                    .foregroundStyle(appState.inferenceMode == .team ? Color.green : Color.secondary)
-                    .lineLimit(1)
-                }
+                inferenceHostMenu(compact: compact)
 
                 routeMenu(compact: compact)
 
@@ -315,6 +312,10 @@ struct ChatView: View {
 
                 if !compact, isCompactingContext {
                     Label("Summarizing", systemImage: "text.append")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.green)
+                } else if !compact, isPreparingCodingPrefix {
+                    Label("Preparing Dev mode", systemImage: "bolt.horizontal.circle")
                         .font(.caption.weight(.medium))
                         .foregroundStyle(.green)
                 } else if !compact, let activeRequestID {
@@ -705,6 +706,61 @@ struct ChatView: View {
         .help(routeMode.help)
     }
 
+    private func inferenceHostMenu(compact: Bool) -> some View {
+        Menu {
+            Section("Run this chat on") {
+                ForEach(inferenceHostOptions) { option in
+                    Button {
+                        selectInferenceHost(option)
+                    } label: {
+                        if option.id == selectedInferenceHostID {
+                            Label(option.name, systemImage: "checkmark")
+                        } else {
+                            Label(
+                                option.name,
+                                systemImage: option.id == InferenceHostOption.automaticID
+                                    ? "arrow.triangle.branch"
+                                    : "desktopcomputer"
+                            )
+                        }
+                    }
+                    .disabled(
+                        option.id != InferenceHostOption.automaticID
+                            && (!option.isOnline || option.detail == "Model unavailable")
+                    )
+                }
+            }
+            if let selected = selectedInferenceHostOption {
+                Divider()
+                Text(selected.detail)
+            }
+            Text("Falls back only if the preferred device fails before sending output.")
+        } label: {
+            if compact {
+                Image(
+                    systemName: selectedInferenceHostID == InferenceHostOption.automaticID
+                        ? "arrow.triangle.branch"
+                        : "desktopcomputer"
+                )
+                .foregroundStyle(.green)
+            } else {
+                Label(
+                    selectedInferenceHostOption?.name ?? "Automatic",
+                    systemImage: selectedInferenceHostID == InferenceHostOption.automaticID
+                        ? "arrow.triangle.branch"
+                        : "desktopcomputer"
+                )
+                .font(.caption)
+                .foregroundStyle(.green)
+                .lineLimit(1)
+            }
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .accessibilityLabel("Preferred inference device")
+        .help("Choose the first device for this chat")
+    }
+
     private func providerModelButton(
         provider: ProviderSummary,
         model: String,
@@ -856,7 +912,7 @@ struct ChatView: View {
                             .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
                     }
                     .onSubmit {
-                        guard !isGenerating else { return }
+                        guard !isGenerating, !isPreparingCodingPrefix else { return }
                         send()
                     }
                     .onAppear {
@@ -887,7 +943,10 @@ struct ChatView: View {
                                 .frame(width: 28, height: 28)
                         }
                         .buttonStyle(.borderedProminent)
-                        .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .disabled(
+                            draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                || isPreparingCodingPrefix
+                        )
                         .accessibilityLabel("Send message")
                         .help("Send")
                         .keyboardShortcut(.return, modifiers: .command)
@@ -1030,6 +1089,29 @@ struct ChatView: View {
 
     private var isGenerating: Bool { activeRequestID != nil }
 
+    private var selectedInferenceHostID: String {
+        conversation.preferredInferenceHostID ?? InferenceHostOption.automaticID
+    }
+
+    private var inferenceHostOptions: [InferenceHostOption] {
+        appState.inferenceHostOptions(for: conversation.model)
+    }
+
+    private var selectedInferenceHostOption: InferenceHostOption? {
+        inferenceHostOptions.first { $0.id == selectedInferenceHostID }
+            ?? inferenceHostOptions.first
+    }
+
+    private var codingWarmupKey: String {
+        guard codingSessionAvailable else { return "off" }
+        return [
+            conversation.model,
+            permissionMode.rawValue,
+            selectedInferenceHostID,
+            appState.inferenceMode.rawValue,
+        ].joined(separator: "|")
+    }
+
     private var routeMode: ChatRouteMode {
         ChatRouteMode(rawValue: routeModeValue) ?? .localOnly
     }
@@ -1139,6 +1221,75 @@ struct ChatView: View {
             pendingPermissionMode = mode
         } else {
             permissionModeValue = mode.rawValue
+        }
+    }
+
+    private func selectInferenceHost(_ option: InferenceHostOption) {
+        conversation.preferredInferenceHostID = option.id == InferenceHostOption.automaticID
+            ? nil
+            : option.id
+        conversation.updatedAt = .now
+        try? modelContext.save()
+        if option.id == InferenceHostOption.localID {
+            appState.useLocalInference()
+        } else if let id = UUID(uuidString: option.id),
+                  let profile = appState.teamHosts.first(where: { $0.id == id }) {
+            appState.selectTeamHost(profile)
+        } else if option.id == InferenceHostOption.automaticID,
+                  !appState.teamHosts.isEmpty {
+            Task { await appState.useTeamInference() }
+        }
+    }
+
+    private func activateSelectedInferenceHost() {
+        guard let option = selectedInferenceHostOption else { return }
+        if option.id == InferenceHostOption.localID {
+            appState.useLocalInference()
+        } else if let id = UUID(uuidString: option.id),
+                  let profile = appState.teamHosts.first(where: { $0.id == id }) {
+            appState.selectTeamHost(profile)
+        } else if option.id == InferenceHostOption.automaticID,
+                  !appState.teamHosts.isEmpty {
+            Task { await appState.useTeamInference() }
+        }
+    }
+
+    private func prepareCodingPrefixIfNeeded() async {
+        guard codingSessionAvailable, !isGenerating else { return }
+        isPreparingCodingPrefix = true
+        defer { isPreparingCodingPrefix = false }
+        let requestID = "coding-prefix-\(UUID().uuidString.lowercased())"
+        let request = ChatRequest(
+            requestID: requestID,
+            model: conversation.model,
+            messages: [
+                APIChatMessage(
+                    role: MessageRole.system.rawValue,
+                    content: CodingWorkspace.systemPrompt(for: permissionMode)
+                ),
+                APIChatMessage(role: MessageRole.user.rawValue, content: "Ready."),
+            ],
+            context: [],
+            options: .init(
+                maxTokens: 1,
+                temperature: 0,
+                affinityKey: selectedWorkspace?.revision.map { "workspace:\($0)" }
+                    ?? conversation.id.uuidString
+            ),
+            reasoningStrength: effectiveReasoningStrength,
+            tools: CodingWorkspace.tools(for: permissionMode),
+            machboost: .init(route: .init(mode: ChatRouteMode.localOnly.rawValue))
+        )
+        do {
+            for try await _ in try appState.streamChat(
+                request,
+                preferredHostID: conversation.preferredInferenceHostID
+            ) {}
+            _ = appState.consumeInferenceRoute(requestID: requestID)
+        } catch is CancellationError {
+            return
+        } catch {
+            // The visible request reports actionable connection errors.
         }
     }
 
@@ -1252,7 +1403,7 @@ struct ChatView: View {
 
     private func send(_ textOverride: String? = nil) {
         let text = (textOverride ?? draft).trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, !isGenerating else { return }
+        guard !text.isEmpty, !isGenerating, !isPreparingCodingPrefix else { return }
         let images = conversation.orderedAttachments.filter { $0.kind == .image }
         if !images.isEmpty, appState.model(named: conversation.model)?.supportsVision != true {
             appState.presentedError = "\(conversation.model) cannot read images. Choose a vision model first."
@@ -1412,7 +1563,10 @@ struct ChatView: View {
             var roundContent = ""
             var roundToolCalls: [APIToolCall] = []
             var hasVisibleRoundContent = false
-            for try await event in try appState.streamChat(request) {
+            for try await event in try appState.streamChat(
+                request,
+                preferredHostID: conversation.preferredInferenceHostID
+            ) {
                 if let error = event.error { throw MachBoostAPIError.stream(error) }
                 if let thinking = event.message?.thinking, !thinking.isEmpty {
                     assistant.reasoningContent = (assistant.reasoningContent ?? "") + thinking
@@ -1450,6 +1604,7 @@ struct ChatView: View {
                 }
                 if event.done { turnMetrics.absorb(event) }
             }
+            turnMetrics.recordRoute(appState.consumeInferenceRoute(requestID: requestID))
             guard
                 codingActive,
                 !forceFinalResponse,
@@ -1778,10 +1933,14 @@ struct ChatView: View {
 
         var summary = ""
         do {
-            for try await event in try appState.streamChat(request) {
+            for try await event in try appState.streamChat(
+                request,
+                preferredHostID: conversation.preferredInferenceHostID
+            ) {
                 if let error = event.error { throw MachBoostAPIError.stream(error) }
                 summary += event.message?.content ?? ""
             }
+            _ = appState.consumeInferenceRoute(requestID: requestID)
             summary = summary.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !summary.isEmpty else { return }
             conversation.contextSummary = summary
@@ -1992,6 +2151,7 @@ private enum ChatRouteMode: String, CaseIterable, Identifiable {
 private struct MessageRow: View {
     @Bindable var message: ChatMessage
     @State private var showsCodeChanges = false
+    @State private var expandedToolIDs: Set<String> = []
     let showsReasoning: Bool
     let isStreaming: Bool
     let workspaceRoot: String?
@@ -2088,6 +2248,7 @@ private struct MessageRow: View {
         message.tokensPerSecond != nil
             || message.timeToFirstTokenSeconds != nil
             || message.inferenceSource != nil
+            || message.inferenceHostName != nil
             || message.wasCancelled
     }
 
@@ -2142,12 +2303,18 @@ private struct MessageRow: View {
 
     private var stats: some View {
         HStack(spacing: 10) {
-            if let source = message.inferenceSource {
+            if let hostName = message.inferenceHostName {
                 Label(
-                    source == "external" ? "Paid API" : (source == "mixed" ? "Mixed route" : "Local"),
-                    systemImage: source == "external" ? "cloud" : "desktopcomputer"
+                    hostName,
+                    systemImage: message.inferenceHostID == InferenceHostOption.localID
+                        ? "desktopcomputer"
+                        : "network"
                 )
-                .help(message.providerID.map { "Provider: \($0)" } ?? "MachBoost local inference")
+                .help("Inference ran on \(hostName)")
+            }
+            if let source = message.inferenceSource, source == "external" || source == "mixed" {
+                Label(source == "external" ? "Paid API" : "Mixed route", systemImage: "cloud")
+                    .help(message.providerID.map { "Provider: \($0)" } ?? "External provider")
             }
             if let rate = message.tokensPerSecond {
                 Label(
@@ -2162,6 +2329,14 @@ private struct MessageRow: View {
             }
             if let ttft = message.timeToFirstTokenSeconds {
                 Label("\(ttft, specifier: "%.2f")s TTFT", systemImage: "timer")
+                    .help(ttftHelp)
+            }
+            if let cached = message.cachedPromptTokens,
+               let prompt = message.promptTokens,
+               cached > 0,
+               prompt > 0 {
+                Text("\(cached)/\(prompt) prefix cached")
+                    .help("Prompt tokens reused without full prefill")
             }
             if let tokens = message.generatedTokens {
                 Text("\(tokens) total model tokens")
@@ -2180,6 +2355,25 @@ private struct MessageRow: View {
         }
         .font(.caption)
         .foregroundStyle(.secondary)
+    }
+
+    private var ttftHelp: String {
+        var parts: [String] = []
+        if let load = message.modelLoadSeconds, load > 0.001 {
+            parts.append("model load \(load.formatted(.number.precision(.fractionLength(2))))s")
+        }
+        if let queue = message.queueWaitSeconds, queue > 0.001 {
+            parts.append("queue \(queue.formatted(.number.precision(.fractionLength(2))))s")
+        }
+        if let prefill = message.promptEvalSeconds, prefill > 0.001 {
+            parts.append("prompt prefill \(prefill.formatted(.number.precision(.fractionLength(2))))s")
+        }
+        if let cached = message.cachedPromptTokens, cached > 0 {
+            parts.append("\(cached) cached prompt tokens")
+        }
+        return parts.isEmpty
+            ? "Time from request admission to the first model token"
+            : "First-token breakdown: " + parts.joined(separator: ", ")
     }
 
     private var toolCalls: [APIToolCall] {
@@ -2215,21 +2409,44 @@ private struct MessageRow: View {
     private func toolActivityList(_ activities: [CodingToolActivity]) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             ForEach(activities) { activity in
-                DisclosureGroup {
-                    toolActivityDetails(activity)
-                        .padding(.top, 8)
-                } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: statusIcon(activity.state))
-                            .foregroundStyle(statusColor(activity.state))
-                            .frame(width: 16)
-                        Text(CodingWorkspace.activitySummary(of: activity.call))
-                            .font(.callout.weight(.medium))
-                            .lineLimit(1)
-                        Spacer()
-                        Text(statusLabel(activity.state))
-                            .font(.caption)
+                VStack(alignment: .leading, spacing: 0) {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.14)) {
+                            if expandedToolIDs.contains(activity.id) {
+                                expandedToolIDs.remove(activity.id)
+                            } else {
+                                expandedToolIDs.insert(activity.id)
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(
+                                systemName: expandedToolIDs.contains(activity.id)
+                                    ? "chevron.down"
+                                    : "chevron.right"
+                            )
+                            .font(.caption2.weight(.semibold))
                             .foregroundStyle(.secondary)
+                            .frame(width: 12)
+                            Image(systemName: statusIcon(activity.state))
+                                .foregroundStyle(statusColor(activity.state))
+                                .frame(width: 16)
+                            Text(CodingWorkspace.activitySummary(of: activity.call))
+                                .font(.callout.weight(.medium))
+                                .lineLimit(1)
+                            Spacer()
+                            Text(statusLabel(activity.state))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    if expandedToolIDs.contains(activity.id) {
+                        toolActivityDetails(activity)
+                            .padding(.top, 8)
+                            .padding(.leading, 20)
                     }
                 }
                 .accessibilityIdentifier("tool-call-\(activity.call.function.name)")
@@ -2402,17 +2619,33 @@ private struct StreamingReasoningDisclosure: View {
     @State private var isExpanded = false
 
     var body: some View {
-        DisclosureGroup(isExpanded: $isExpanded) {
-            MessageContentView(content: reasoning)
-                .padding(.top, 6)
-                .foregroundStyle(.secondary)
-        } label: {
-            HStack(spacing: 7) {
-                if isActive {
-                    ProgressView()
-                        .controlSize(.mini)
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.14)) {
+                    isExpanded.toggle()
                 }
-                Text("Reasoning")
+            } label: {
+                HStack(spacing: 7) {
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 12)
+                    if isActive {
+                        ProgressView()
+                            .controlSize(.mini)
+                    }
+                    Text(isActive ? "Reasoning…" : "Reasoning")
+                    Spacer()
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            if isExpanded {
+                MessageContentView(content: reasoning)
+                    .padding(.top, 6)
+                    .padding(.leading, 19)
+                    .foregroundStyle(.secondary)
             }
         }
         .font(.callout)
