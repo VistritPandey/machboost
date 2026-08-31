@@ -432,7 +432,12 @@ final class AppState {
             teamKeys = values.1
             self.traces = values.2
             self.evaluations = values.3
-            teamClients = values.4
+            teamClients = Self.deduplicatedTeamClients(
+                values.4,
+                localDeviceID: deviceID,
+                localDeviceName: Host.current().localizedName
+                    ?? ProcessInfo.processInfo.hostName
+            )
             teamModelRequests = values.5
         } catch MachBoostAPIError.server(status: 404, message: _) {
             teamStatus = nil
@@ -1348,6 +1353,47 @@ final class AppState {
         let created = UUID().uuidString.lowercased()
         UserDefaults.standard.set(created, forKey: deviceIDKey)
         return created
+    }
+
+    static func deduplicatedTeamClients(
+        _ clients: [TeamClient],
+        localDeviceID: String,
+        localDeviceName: String
+    ) -> [TeamClient] {
+        let localName = normalizedDeviceName(localDeviceName)
+        var selected: [String: TeamClient] = [:]
+        for client in clients {
+            let name = normalizedDeviceName(client.deviceName)
+            guard client.deviceID != localDeviceID, name != localName else { continue }
+            let key = name.isEmpty ? client.deviceID.lowercased() : name
+            guard let existing = selected[key] else {
+                selected[key] = client
+                continue
+            }
+            if shouldPreferTeamClient(client, over: existing) {
+                selected[key] = client
+            }
+        }
+        return Array(selected.values)
+    }
+
+    private static func normalizedDeviceName(_ value: String) -> String {
+        value.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            .unicodeScalars
+            .filter(CharacterSet.alphanumerics.contains)
+            .map(String.init)
+            .joined()
+    }
+
+    private static func shouldPreferTeamClient(
+        _ candidate: TeamClient,
+        over existing: TeamClient
+    ) -> Bool {
+        if candidate.online != existing.online { return candidate.online }
+        if candidate.lastSeenAt != existing.lastSeenAt {
+            return candidate.lastSeenAt > existing.lastSeenAt
+        }
+        return candidate.requestCount > existing.requestCount
     }
 
     private static func normalizedTeamEndpoint(_ value: String) throws -> URL {
