@@ -4768,8 +4768,21 @@ def configure_native_prompt_cache(
     configure = getattr(service, "configure_native_prompt_cache", None)
     if not callable(configure):
         return
+    explicit_setting = options.get("prompt_cache")
+    if explicit_setting is None:
+        enabled = bool(
+            options.get("workspace_prefix_cache", False)
+            or options.get("_tenant_key")
+        )
+    else:
+        enabled = bool(explicit_setting)
+    tenant_namespace = (
+        f"tenant:{options['_tenant_key']}"
+        if options.get("_tenant_key")
+        else "default"
+    )
     configure(
-        enabled=bool(options.get("workspace_prefix_cache", False)),
+        enabled=enabled,
         max_size=int(options.get("prompt_cache_size", 8)),
         max_bytes=int(
             options.get("prompt_cache_bytes", 2 * 1024 * 1024 * 1024)
@@ -4777,7 +4790,7 @@ def configure_native_prompt_cache(
         namespace=str(
             options.get("_prompt_cache_namespace")
             or options.get("_cache_namespace")
-            or "default"
+            or tenant_namespace
         ),
     )
 
