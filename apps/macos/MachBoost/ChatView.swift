@@ -1559,9 +1559,10 @@ struct ChatView: View {
                     ? conversation.workspaceID
                     : nil,
                 reasoningStrength: effectiveReasoningStrength,
-                tools: codingActive && !forceFinalResponse
-                    ? CodingWorkspace.tools(for: permissionMode)
-                    : nil,
+                // Keep the tool schema stable across rounds so the resident
+                // runtime can reuse the long coding prefix. The final-answer
+                // instruction below is what prevents another tool request.
+                tools: codingActive ? CodingWorkspace.tools(for: permissionMode) : nil,
                 machboost: chatExtensions
             )
             var roundContent = ""
@@ -1619,6 +1620,17 @@ struct ChatView: View {
                 if event.done { turnMetrics.absorb(event) }
             }
             turnMetrics.recordRoute(appState.consumeInferenceRoute(requestID: requestID))
+            if codingActive,
+               !forceFinalResponse,
+               roundToolCalls.isEmpty,
+               roundContent.isEmpty,
+               !activities.isEmpty {
+                // Some tool-capable models end a round after reading a tool
+                // result with only hidden reasoning/control tokens. Give them
+                // one explicit chance to produce the user-facing answer.
+                forceFinalResponse = true
+                continue
+            }
             guard
                 codingActive,
                 !forceFinalResponse,
