@@ -135,6 +135,16 @@ codesign "${SIGN_ARGUMENTS[@]}" --deep \
   "$APP"
 codesign --verify --deep --strict --verbose=2 "$APP"
 
+RUNTIME_VERSION="$(
+  PYTHONDONTWRITEBYTECODE=1 \
+    "$BUNDLED_RUNTIME/python/bin/python3" -m machboost.cli version 2>&1
+)"
+if [[ "$RUNTIME_VERSION" != "$VERSION" ]]; then
+  echo "Bundled MachBoost reports '$RUNTIME_VERSION', expected '$VERSION'." >&2
+  exit 4
+fi
+codesign --verify --deep --strict --verbose=2 "$APP"
+
 STAGING="$(mktemp -d "${TMPDIR:-/tmp}/machboost-dmg.XXXXXX")"
 trap 'rm -rf "$STAGING"' EXIT
 ditto "$APP" "$STAGING/MachBoost.app"
