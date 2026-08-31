@@ -28,6 +28,7 @@ from machboost.server import (
     extract_tool_calls,
     load_accelerator,
     model_config,
+    normalize_tools,
     parse_keep_alive,
     result_content_and_tool_calls,
 )
@@ -36,6 +37,47 @@ from machboost.workspace import WorkspaceStore
 
 
 class ToolCallParsingTests(unittest.TestCase):
+    def test_normalize_tools_canonicalizes_semantically_identical_schemas(self):
+        ordered = {
+            "type": "function",
+            "function": {
+                "name": "read_file",
+                "description": "Read a file.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Path"},
+                        "limit": {"type": "integer", "description": "Limit"},
+                    },
+                    "required": ["path"],
+                },
+            },
+        }
+        reordered = {
+            "function": {
+                "parameters": {
+                    "required": ["path"],
+                    "properties": {
+                        "limit": {"description": "Limit", "type": "integer"},
+                        "path": {"description": "Path", "type": "string"},
+                    },
+                    "type": "object",
+                },
+                "description": "Read a file.",
+                "name": "read_file",
+            },
+            "type": "function",
+        }
+
+        first = normalize_tools([ordered])
+        second = normalize_tools([reordered])
+
+        self.assertEqual(first, second)
+        self.assertEqual(
+            json.dumps(first, separators=(",", ":")),
+            json.dumps(second, separators=(",", ":")),
+        )
+
     def test_tool_aware_stream_preserves_prose_and_hides_split_protocol(self):
         emitted = []
         stream = ToolAwareTextStream(emitted.append)
