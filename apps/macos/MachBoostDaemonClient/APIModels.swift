@@ -740,6 +740,8 @@ public struct ChatRequest: Encodable, Sendable {
     public let keepAlive = "forever"
     public let options: Options
     public let workspaceID: String?
+    public let workspaceTopK: Int?
+    public let workspaceMaxChars: Int?
     public let reasoningStrength: String?
     public let tools: [APIToolDefinition]?
     public let machboost: Extensions?
@@ -751,6 +753,8 @@ public struct ChatRequest: Encodable, Sendable {
         context: [String],
         options: Options,
         workspaceID: String? = nil,
+        workspaceTopK: Int? = nil,
+        workspaceMaxChars: Int? = nil,
         reasoningStrength: String? = nil,
         tools: [APIToolDefinition]? = nil,
         machboost: Extensions? = nil
@@ -761,6 +765,8 @@ public struct ChatRequest: Encodable, Sendable {
         self.context = context
         self.options = options
         self.workspaceID = workspaceID
+        self.workspaceTopK = workspaceTopK
+        self.workspaceMaxChars = workspaceMaxChars
         self.reasoningStrength = reasoningStrength
         self.tools = tools
         self.machboost = machboost
@@ -786,9 +792,11 @@ public struct ChatRequest: Encodable, Sendable {
 
     public struct Extensions: Encodable, Sendable {
         public let route: Route?
+        public let memory: String?
 
-        public init(route: Route? = nil) {
+        public init(route: Route? = nil, memory: String? = nil) {
             self.route = route
+            self.memory = memory
         }
 
         public struct Route: Encodable, Sendable {
@@ -819,6 +827,8 @@ public struct ChatRequest: Encodable, Sendable {
         case keepAlive = "keep_alive"
         case options
         case workspaceID = "workspace_id"
+        case workspaceTopK = "workspace_top_k"
+        case workspaceMaxChars = "workspace_max_chars"
         case reasoningStrength = "think"
         case tools
         case machboost
