@@ -402,6 +402,7 @@ class MLXVLMAccelerator:
         tools: Optional[Sequence[dict[str, Any]]] = None,
         tool_choice: Any = "auto",
         reasoning_strength: Optional[str] = None,
+        cache_key: Optional[str] = None,
     ) -> tuple[str, VisionRunStats]:
         normalized, image_sources = normalize_multimodal_messages(messages)
         images = self.assets.materialize_all(image_sources)
@@ -431,6 +432,7 @@ class MLXVLMAccelerator:
             vision_calibration=vision_calibration,
             policy_prompt=_latest_user_text(normalized),
             reasoning_echoes=_user_texts(normalized),
+            cache_key=cache_key,
         )
 
     def _format_chat_prompt(
@@ -517,6 +519,7 @@ class MLXVLMAccelerator:
         vision_token_layer: Optional[int] = None,
         vision_token_bucket: Optional[int] = None,
         vision_calibration: Optional[dict[str, Any]] = None,
+        cache_key: Optional[str] = None,
     ) -> tuple[str, VisionRunStats]:
         materialized = self.assets.materialize_all(images or ())
         templated = self._apply_chat_template(
@@ -544,6 +547,7 @@ class MLXVLMAccelerator:
             vision_calibration=vision_calibration,
             policy_prompt=prompt,
             reasoning_echoes=(prompt,),
+            cache_key=cache_key,
         )
 
     def _generate(
@@ -566,6 +570,7 @@ class MLXVLMAccelerator:
         vision_calibration: Optional[dict[str, Any]],
         policy_prompt: str,
         reasoning_echoes: Sequence[str],
+        cache_key: Optional[str],
     ) -> tuple[str, VisionRunStats]:
         if self._closed:
             raise RuntimeError("MLX vision accelerator is closed")
@@ -588,6 +593,7 @@ class MLXVLMAccelerator:
             vision_calibration=vision_calibration,
             policy_prompt=policy_prompt,
             reasoning_echoes=reasoning_echoes,
+            cache_key=cache_key,
         )
         return future.result()
 
@@ -611,6 +617,7 @@ class MLXVLMAccelerator:
         vision_calibration: Optional[dict[str, Any]],
         policy_prompt: str,
         reasoning_echoes: Sequence[str],
+        cache_key: Optional[str],
     ) -> tuple[str, VisionRunStats]:
         with self._generation_lock:
             self._bind_thread_local_stream()
@@ -660,6 +667,12 @@ class MLXVLMAccelerator:
             }
             prompt_cache_enabled = False
             prompt_cache_prefix_tokens = 0
+            module_name = str(getattr(self._stream_generate, "__module__", ""))
+            if not images and cache_key and module_name.startswith("mlx_vlm"):
+                stream_options["prompt_cache_state"] = self._prompt_cache_for_key(
+                    f"affinity:{cache_key}"
+                )
+                prompt_cache_enabled = True
             apc_manager = None
             apc_matched_before = 0
             prepared = (
@@ -680,9 +693,7 @@ class MLXVLMAccelerator:
                 stream_options["vision_cache"] = self.vision_cache
             if (
                 apc_manager is None
-                and str(getattr(self._stream_generate, "__module__", "")).startswith(
-                    "mlx_vlm"
-                )
+                and module_name.startswith("mlx_vlm")
             ):
                 try:
                     apc_manager = self._get_apc_manager()
@@ -758,6 +769,10 @@ class MLXVLMAccelerator:
                     first_text_at = time.perf_counter()
                 emit_split(splitter.feed(text))
             emit_split(splitter.feed("", final=True), final=True)
+            prompt_cache_prefix_tokens = max(
+                prompt_cache_prefix_tokens,
+                int(getattr(last, "cached_tokens", 0) or 0),
+            )
             if apc_manager is not None:
                 apc_matched_after = int(
                     apc_manager.stats_snapshot().get("matched_tokens", 0)
@@ -919,7 +934,10 @@ class MLXVLMAccelerator:
         return self._apc_manager
 
     def _prompt_cache_for(self, images: Sequence[str]) -> Any:
-        key = self.vision_cache.key_for(list(images))
+        key = f"vision:{self.vision_cache.key_for(list(images))}"
+        return self._prompt_cache_for_key(key)
+
+    def _prompt_cache_for_key(self, key: str) -> Any:
         state = self._prompt_caches.get(key)
         if state is not None:
             self._prompt_caches.move_to_end(key)
