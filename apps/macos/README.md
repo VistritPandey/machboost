@@ -28,8 +28,9 @@ a separate MachBoost installation.
   savings, external OpenAI-compatible providers, monthly budgets, and Keychain
   secrets
 - automatic conversation compaction near a configurable context threshold
-- Bonjour discovery and a load-aware host pool that can route requests across
-  compatible MachBoost Macs, with optional local participation
+- Bonjour discovery and an automatic host pool that refreshes devices
+  concurrently, scores model residency, RTT, replicas, active work, and queue
+  depth, and can fail over before the first streamed output
 - an Apps screen that connects Claude Desktop's third-party inference gateway
   to this Mac or a saved authenticated MachBoost host
 - menu-bar lifecycle, optional launch at login, EdDSA-verified Sparkle updates,
