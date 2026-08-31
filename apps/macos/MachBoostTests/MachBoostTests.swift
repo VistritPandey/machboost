@@ -290,6 +290,30 @@ final class MachBoostTests: XCTestCase {
         )
     }
 
+    @MainActor
+    func testTeamClientsHideThisMacAndCollapseStaleDeviceIDs() throws {
+        let payload = """
+        [
+          {"device_id":"local-id","principal":{"id":"p1","name":"Local"},"device_name":"This Mac","app_version":"1","mode":"connect","first_seen_at":"2026-01-01T00:00:00Z","last_seen_at":"2026-01-01T00:00:03Z","request_count":3,"online":true},
+          {"device_id":"old-id","principal":{"id":"p2","name":"Old"},"device_name":"Build Mac","app_version":"1","mode":"connect","first_seen_at":"2026-01-01T00:00:00Z","last_seen_at":"2026-01-01T00:00:01Z","request_count":8,"online":false},
+          {"device_id":"new-id","principal":{"id":"p3","name":"New"},"device_name":"build mac","app_version":"2","mode":"connect","first_seen_at":"2026-01-01T00:00:02Z","last_seen_at":"2026-01-01T00:00:04Z","request_count":2,"online":true}
+        ]
+        """
+        let clients: [TeamClient] = try JSONDecoder().decode(
+            Array<TeamClient>.self,
+            from: Data(payload.utf8)
+        )
+
+        let visible = AppState.deduplicatedTeamClients(
+            clients,
+            localDeviceID: "local-id",
+            localDeviceName: "This Mac"
+        )
+
+        XCTAssertEqual(visible.count, 1)
+        XCTAssertEqual(visible.first?.deviceID, "new-id")
+    }
+
     func testCodingPermissionModesApplyDistinctWritePolicies() {
         let smallEdit = APIToolCall(
             function: .init(
@@ -327,7 +351,7 @@ final class MachBoostTests: XCTestCase {
             CodingWorkspace.permissionDecision(for: create, mode: .acceptEdits),
             .allow
         )
-        XCTAssertEqual(CodingWorkspace.tools(for: .plan).count, 3)
+        XCTAssertEqual(CodingWorkspace.tools(for: .plan).count, 4)
         guard case .deny = CodingWorkspace.permissionDecision(for: create, mode: .plan) else {
             return XCTFail("Plan mode must deny writes")
         }
@@ -1136,7 +1160,7 @@ final class MachBoostTests: XCTestCase {
         XCTAssertEqual(object["tool_call_id"] as? String, "call-1")
     }
 
-    func testCodingWorkspaceToolsAreBoundedToSelectedRepository() throws {
+    func testCodingWorkspaceToolsAreBoundedToSelectedRepository() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("machboost-tools-\(UUID().uuidString)", isDirectory: true)
         let source = root.appendingPathComponent("Sources/App.swift")
@@ -1155,7 +1179,7 @@ final class MachBoostTests: XCTestCase {
                 arguments: .object(["query": .string("greeting")])
             )
         )
-        let searchResult = try CodingWorkspace.execute(search, workspaceRoot: root.path)
+        let searchResult = try await CodingWorkspace.execute(search, workspaceRoot: root.path)
         XCTAssertTrue(searchResult.content.contains("Sources/App.swift"))
 
         let replace = APIToolCall(
@@ -1171,7 +1195,7 @@ final class MachBoostTests: XCTestCase {
             )
         )
         XCTAssertTrue(CodingWorkspace.isMutating(replace))
-        let replaceResult = try CodingWorkspace.execute(replace, workspaceRoot: root.path)
+        let replaceResult = try await CodingWorkspace.execute(replace, workspaceRoot: root.path)
         XCTAssertTrue(try String(contentsOf: source, encoding: .utf8).contains("hello team"))
         XCTAssertEqual(replaceResult.changedPath, "Sources/App.swift")
         XCTAssertTrue(replaceResult.changePatch?.contains("-hello") ?? false)
@@ -1190,7 +1214,10 @@ final class MachBoostTests: XCTestCase {
                 arguments: .object(["path": .string("../private.txt")])
             )
         )
-        XCTAssertThrowsError(try CodingWorkspace.execute(escape, workspaceRoot: root.path))
+        do {
+            _ = try await CodingWorkspace.execute(escape, workspaceRoot: root.path)
+            XCTFail("Expected the repository boundary to reject the path")
+        } catch {}
     }
 
     func testCodingToolActivitiesRoundTripMultipleCallsAndFormatResults() throws {
@@ -1234,7 +1261,47 @@ final class MachBoostTests: XCTestCase {
         )
     }
 
-    func testCodingWorkspaceRejectsSymlinkEscapesAndAmbiguousWrites() throws {
+    func testCodingWorkspaceDeletesFilesAndRunsBoundedCommands() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("machboost-command-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let doomed = root.appendingPathComponent("delete-me.txt")
+        try "remove me\n".write(to: doomed, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let command = APIToolCall(
+            function: .init(
+                name: "run_command",
+                arguments: .object([
+                    "command": .string("pwd"),
+                    "timeout_seconds": .number(5),
+                ])
+            )
+        )
+        let commandResult = try await CodingWorkspace.execute(command, workspaceRoot: root.path)
+        XCTAssertTrue(commandResult.content.contains(root.path))
+        XCTAssertEqual(
+            CodingWorkspace.permissionDecision(for: command, mode: .manual),
+            .ask
+        )
+        XCTAssertEqual(
+            CodingWorkspace.permissionDecision(for: command, mode: .bypass),
+            .allow
+        )
+
+        let delete = APIToolCall(
+            function: .init(
+                name: "delete_file",
+                arguments: .object(["path": .string("delete-me.txt")])
+            )
+        )
+        let deleteResult = try await CodingWorkspace.execute(delete, workspaceRoot: root.path)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: doomed.path))
+        XCTAssertEqual(deleteResult.changedPath, "delete-me.txt")
+        XCTAssertTrue(deleteResult.changePatch?.contains("+++ /dev/null") ?? false)
+    }
+
+    func testCodingWorkspaceRejectsSymlinkEscapesAndAmbiguousWrites() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("machboost-tools-\(UUID().uuidString)", isDirectory: true)
         let outside = FileManager.default.temporaryDirectory
@@ -1258,7 +1325,10 @@ final class MachBoostTests: XCTestCase {
                 arguments: .object(["path": .string("outside.txt")])
             )
         )
-        XCTAssertThrowsError(try CodingWorkspace.execute(readLink, workspaceRoot: root.path))
+        do {
+            _ = try await CodingWorkspace.execute(readLink, workspaceRoot: root.path)
+            XCTFail("Expected the symlink escape to fail")
+        } catch {}
 
         let ambiguous = APIToolCall(
             function: .init(
@@ -1270,7 +1340,10 @@ final class MachBoostTests: XCTestCase {
                 ])
             )
         )
-        XCTAssertThrowsError(try CodingWorkspace.execute(ambiguous, workspaceRoot: root.path))
+        do {
+            _ = try await CodingWorkspace.execute(ambiguous, workspaceRoot: root.path)
+            XCTFail("Expected the ambiguous replacement to fail")
+        } catch {}
     }
 
     func testMemoryCacheAndProviderSchemasDecode() throws {
@@ -1508,7 +1581,7 @@ final class MachBoostTests: XCTestCase {
                 body: """
                 {"request_id":"muse-stream-1","message":{"role":"assistant","content":"","thinking":"I should search."},"done":false}
                 {"request_id":"muse-stream-1","message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"search_repository","arguments":{"query":"cancellation"}}}]},"done":false}
-                {"request_id":"muse-stream-1","message":{"role":"assistant","content":"Found it."},"done":true,"done_reason":"stop"}
+                {"request_id":"muse-stream-1","message":{"role":"assistant","content":"Found it."},"machboost":{"full_content":"Found it."},"done":true,"done_reason":"stop"}
 
                 """
             )
@@ -1538,6 +1611,72 @@ final class MachBoostTests: XCTestCase {
             .object(["query": .string("cancellation")])
         )
         XCTAssertEqual(events[2].message?.content, "Found it.")
+        XCTAssertEqual(events[2].machboost?.fullContent, "Found it.")
+    }
+
+    func testChatRequestsEncodeToolSchemasDeterministically() async throws {
+        let lock = NSLock()
+        var bodies: [Data] = []
+        let session = mockSession { request in
+            if let body = request.httpBody {
+                lock.lock()
+                bodies.append(body)
+                lock.unlock()
+            }
+            return self.response(
+                for: request,
+                contentType: "application/x-ndjson",
+                body: #"{"request_id":"stable","message":{"role":"assistant","content":""},"done":true}"#
+                    + "\n"
+            )
+        }
+        let api = MachBoostAPI(
+            endpoint: URL(string: "http://127.0.0.1:11435")!,
+            session: session
+        )
+        var firstProperties: [String: JSONValue] = [:]
+        firstProperties["path"] = .object([
+            "type": .string("string"),
+            "description": .string("Repository path"),
+        ])
+        firstProperties["limit"] = .object([
+            "type": .string("integer"),
+            "description": .string("Result limit"),
+        ])
+        var secondProperties: [String: JSONValue] = [:]
+        secondProperties["limit"] = .object([
+            "description": .string("Result limit"),
+            "type": .string("integer"),
+        ])
+        secondProperties["path"] = .object([
+            "description": .string("Repository path"),
+            "type": .string("string"),
+        ])
+
+        for properties in [firstProperties, secondProperties] {
+            let request = ChatRequest(
+                requestID: "stable",
+                model: "muse-glimmer:30b",
+                messages: [.init(role: "user", content: "Inspect it")],
+                context: [],
+                options: .init(maxTokens: 8, temperature: 0, affinityKey: "conversation"),
+                tools: [
+                    .init(
+                        function: .init(
+                            name: "list_files",
+                            parameters: .object([
+                                "type": .string("object"),
+                                "properties": .object(properties),
+                            ])
+                        )
+                    ),
+                ]
+            )
+            for try await _ in api.streamChat(request) {}
+        }
+
+        XCTAssertEqual(bodies.count, 2)
+        XCTAssertEqual(bodies[0], bodies[1])
     }
 
     @MainActor
