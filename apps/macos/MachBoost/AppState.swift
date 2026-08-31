@@ -1,6 +1,22 @@
 import Foundation
 import Observation
 
+private struct InferenceCandidate: Sendable {
+    let score: Double
+    let api: any MachBoostAPIProtocol
+    let profile: TeamHostProfile?
+    let hostID: UUID
+}
+
+private struct TeamHostRefreshResult: Sendable {
+    let profile: TeamHostProfile
+    let api: MachBoostAPI?
+    let connected: TeamConnectResponse?
+    let metrics: ServerMetrics?
+    let roundTripSeconds: Double
+    let error: String?
+}
+
 @MainActor
 @Observable
 final class AppState {
@@ -50,7 +66,11 @@ final class AppState {
     private var requestAPIs: [String: any MachBoostAPIProtocol] = [:]
     private var requestHostIDs: [String: UUID] = [:]
     private var reservedRequests: [UUID: Int] = [:]
+    private var hostFailureCounts: [UUID: Int] = [:]
+    private var hostCooldownUntil: [UUID: Date] = [:]
     private var lastPresenceAt: [UUID: Date] = [:]
+    private(set) var lastRoutedHostID: UUID?
+    private(set) var lastRouteExpectedDelay: Double?
     let deviceID: String
     var showOnboarding = false
     var presentedError: String?
@@ -138,6 +158,14 @@ final class AppState {
         set { UserDefaults.standard.set(newValue, forKey: Self.includeLocalPoolKey) }
     }
 
+    var lastRouteWasLocal: Bool {
+        lastRoutedHostID == Self.localPoolID
+    }
+
+    func wasLastRouted(to profile: TeamHostProfile) -> Bool {
+        lastRoutedHostID == profile.id
+    }
+
     func connectToTeamHost(endpoint rawEndpoint: String, token: String) async {
         do {
             let endpoint = try Self.normalizedTeamEndpoint(rawEndpoint)
@@ -156,7 +184,10 @@ final class AppState {
                 apiToken: normalizedToken,
                 deviceID: deviceID
             )
-            let connected = try await remote.teamConnect()
+            let started = Date()
+            async let connectedRequest = remote.teamConnect()
+            async let metricsRequest = remote.metrics()
+            let (connected, hostMetrics) = try await (connectedRequest, metricsRequest)
             let profile = TeamHostProfile(
                 id: profileID,
                 endpoint: endpoint,
@@ -178,7 +209,8 @@ final class AppState {
                 profile: profile,
                 catalog: connected.models,
                 loadedModels: connected.loadedModels,
-                metrics: try? await remote.metrics(),
+                metrics: hostMetrics,
+                roundTripSeconds: Date().timeIntervalSince(started),
                 isOnline: true,
                 lastError: nil,
                 updatedAt: .now
@@ -710,30 +742,70 @@ final class AppState {
     }
 
     func streamChat(_ request: ChatRequest) throws -> AsyncThrowingStream<ChatEvent, Error> {
-        let selected = try inferenceSelection(for: request.model)
-        requestAPIs[request.requestID] = selected.api
-        requestHostIDs[request.requestID] = selected.hostID
-        reservedRequests[selected.hostID, default: 0] += 1
-        let source = selected.api.streamChat(request)
+        let candidates = try inferenceCandidates(for: request.model)
         return AsyncThrowingStream { continuation in
-            let task = Task {
-                do {
-                    for try await event in source {
-                        continuation.yield(event)
-                    }
-                    continuation.finish()
-                } catch {
-                    continuation.finish(throwing: error)
+            let task = Task { @MainActor [weak self] in
+                guard let self else {
+                    continuation.finish(throwing: CancellationError())
+                    return
                 }
-                _ = await MainActor.run {
-                    self.requestAPIs.removeValue(forKey: request.requestID)
-                    if let hostID = self.requestHostIDs.removeValue(forKey: request.requestID) {
-                        self.reservedRequests[hostID] = max(
-                            0,
-                            (self.reservedRequests[hostID] ?? 1) - 1
+                var lastError: Error?
+                for (index, selected) in candidates.enumerated() {
+                    if Task.isCancelled {
+                        continuation.finish()
+                        return
+                    }
+                    self.beginRequestRoute(requestID: request.requestID, candidate: selected)
+                    var emittedOutput = false
+                    var receivedDone = false
+                    do {
+                        for try await event in selected.api.streamChat(request) {
+                            if !emittedOutput, let message = event.error, !message.isEmpty {
+                                throw MachBoostAPIError.stream(message)
+                            }
+                            let visible = Self.hasVisibleOutput(event)
+                            emittedOutput = emittedOutput || visible
+                            receivedDone = receivedDone || event.done
+                            if visible || event.done {
+                                continuation.yield(event)
+                            }
+                        }
+                        if !emittedOutput && !receivedDone {
+                            throw MachBoostAPIError.stream(
+                                "Host closed the response before producing output."
+                            )
+                        }
+                        self.markRouteSuccessful(selected)
+                        self.endRequestRoute(
+                            requestID: request.requestID,
+                            hostID: selected.hostID
                         )
+                        continuation.finish()
+                        return
+                    } catch {
+                        lastError = error
+                        _ = try? await selected.api.cancel(requestID: request.requestID)
+                        self.markRouteFailed(selected)
+                        self.endRequestRoute(
+                            requestID: request.requestID,
+                            hostID: selected.hostID
+                        )
+                        let hasAnotherHost = index + 1 < candidates.count
+                        guard hasAnotherHost,
+                              HostRoutingPolicy.canFailOver(
+                                  error: error,
+                                  emittedOutput: emittedOutput
+                              ) else {
+                            if error is CancellationError || Task.isCancelled {
+                                continuation.finish()
+                            } else {
+                                continuation.finish(throwing: error)
+                            }
+                            return
+                        }
                     }
                 }
+                continuation.finish(throwing: lastError ?? MachBoostAPIError.invalidResponse)
             }
             continuation.onTermination = { _ in task.cancel() }
         }
@@ -747,8 +819,11 @@ final class AppState {
     func selectTeamHost(_ profile: TeamHostProfile) {
         guard let remote = teamAPIs[profile.id] else { return }
         teamHost = profile
+        inferenceMode = .team
         inferenceAPI = remote
         Self.saveTeamProfile(profile)
+        Self.saveInferenceMode(.team)
+        startHeartbeat()
     }
 
     func removeTeamHost(_ profile: TeamHostProfile) {
@@ -779,9 +854,7 @@ final class AppState {
             useLocalInference()
             return
         }
-        for profile in teamHosts {
-            await refreshTeamHost(profile)
-        }
+        await refreshTeamHostsConcurrently()
         rebuildTeamCatalog()
         if let selected = teamHost, let remote = teamAPIs[selected.id] {
             inferenceAPI = remote
@@ -801,7 +874,7 @@ final class AppState {
         heartbeatTask?.cancel()
         heartbeatTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
                 guard let self, !Task.isCancelled, self.inferenceMode == .team else {
                     return
                 }
@@ -811,40 +884,111 @@ final class AppState {
     }
 
     private func reconnectTeamHostsWithoutRestartingHeartbeat() async {
-        for profile in teamHosts {
-            await refreshTeamHost(profile)
-        }
+        await refreshTeamHostsConcurrently()
         rebuildTeamCatalog()
     }
 
-    private func refreshTeamHost(_ profile: TeamHostProfile) async {
-        guard let token = await KeychainStore.teamTokenAsync(profileID: profile.id) else {
-            teamHostSnapshots[profile.id] = TeamHostSnapshot(
+    private func refreshTeamHostsConcurrently() async {
+        let profiles = teamHosts
+        let currentDeviceID = deviceID
+        let deviceName = Host.current().localizedName ?? ProcessInfo.processInfo.hostName
+        let appVersion = Bundle.main.object(
+            forInfoDictionaryKey: "CFBundleShortVersionString"
+        ) as? String ?? "development"
+        await withTaskGroup(of: TeamHostRefreshResult.self) { group in
+            for profile in profiles {
+                let token = await KeychainStore.teamTokenAsync(profileID: profile.id)
+                let shouldReport = Date().timeIntervalSince(
+                    lastPresenceAt[profile.id] ?? .distantPast
+                ) >= 30
+                if shouldReport {
+                    lastPresenceAt[profile.id] = .now
+                }
+                group.addTask {
+                    await Self.fetchTeamHost(
+                        profile,
+                        token: token,
+                        deviceID: currentDeviceID,
+                        deviceName: deviceName,
+                        appVersion: appVersion,
+                        reportPresence: shouldReport
+                    )
+                }
+            }
+            for await result in group {
+                applyTeamHostRefresh(result)
+            }
+        }
+    }
+
+    private nonisolated static func fetchTeamHost(
+        _ profile: TeamHostProfile,
+        token: String?,
+        deviceID: String,
+        deviceName: String,
+        appVersion: String,
+        reportPresence: Bool
+    ) async -> TeamHostRefreshResult {
+        guard let token else {
+            return TeamHostRefreshResult(
                 profile: profile,
-                catalog: [],
-                loadedModels: [],
+                api: nil,
+                connected: nil,
                 metrics: nil,
-                isOnline: false,
-                lastError: "Missing API key",
-                updatedAt: .now
+                roundTripSeconds: 0,
+                error: "Missing API key"
             )
-            return
         }
         let remote = MachBoostAPI(
             endpoint: profile.endpoint,
             apiToken: token,
             deviceID: deviceID
         )
+        let started = Date()
         do {
             async let connected = remote.teamConnect()
             async let metrics = remote.metrics()
             let values = try await (connected, metrics)
+            if reportPresence {
+                _ = try? await remote.reportTeamPresence(
+                    deviceID: deviceID,
+                    deviceName: deviceName,
+                    appVersion: appVersion,
+                    workspaceName: nil,
+                    workspaceFingerprint: nil,
+                    model: nil
+                )
+            }
+            return TeamHostRefreshResult(
+                profile: profile,
+                api: remote,
+                connected: values.0,
+                metrics: values.1,
+                roundTripSeconds: Date().timeIntervalSince(started),
+                error: nil
+            )
+        } catch {
+            return TeamHostRefreshResult(
+                profile: profile,
+                api: nil,
+                connected: nil,
+                metrics: nil,
+                roundTripSeconds: Date().timeIntervalSince(started),
+                error: error.localizedDescription
+            )
+        }
+    }
+
+    private func applyTeamHostRefresh(_ result: TeamHostRefreshResult) {
+        let profile = result.profile
+        guard teamHosts.contains(where: { $0.id == profile.id }) else { return }
+        if let connected = result.connected, let remote = result.api {
             let updated = TeamHostProfile(
                 id: profile.id,
                 endpoint: profile.endpoint,
-                hostName: values.0.host.name,
-                hostVersion: values.0.host.version,
-                principalName: values.0.principal.name,
+                hostName: connected.host.name,
+                hostVersion: connected.host.version,
+                principalName: connected.principal.name,
                 connectedAt: profile.connectedAt
             )
             if let index = teamHosts.firstIndex(where: { $0.id == profile.id }) {
@@ -853,34 +997,26 @@ final class AppState {
             teamAPIs[profile.id] = remote
             teamHostSnapshots[profile.id] = TeamHostSnapshot(
                 profile: updated,
-                catalog: values.0.models,
-                loadedModels: values.0.loadedModels,
-                metrics: values.1,
+                catalog: connected.models,
+                loadedModels: connected.loadedModels,
+                metrics: result.metrics,
+                roundTripSeconds: smoothedRoundTrip(
+                    previous: teamHostSnapshots[profile.id]?.roundTripSeconds,
+                    observed: result.roundTripSeconds
+                ),
                 isOnline: true,
                 lastError: nil,
                 updatedAt: .now
             )
-            if Date().timeIntervalSince(lastPresenceAt[profile.id] ?? .distantPast) >= 30 {
-                _ = try? await remote.reportTeamPresence(
-                    deviceID: deviceID,
-                    deviceName: Host.current().localizedName ?? ProcessInfo.processInfo.hostName,
-                    appVersion: Bundle.main.object(
-                        forInfoDictionaryKey: "CFBundleShortVersionString"
-                    ) as? String ?? "development",
-                    workspaceName: nil,
-                    workspaceFingerprint: nil,
-                    model: nil
-                )
-                lastPresenceAt[profile.id] = .now
-            }
-        } catch {
+        } else {
             teamHostSnapshots[profile.id] = TeamHostSnapshot(
                 profile: profile,
                 catalog: teamHostSnapshots[profile.id]?.catalog ?? [],
                 loadedModels: teamHostSnapshots[profile.id]?.loadedModels ?? [],
                 metrics: teamHostSnapshots[profile.id]?.metrics,
+                roundTripSeconds: teamHostSnapshots[profile.id]?.roundTripSeconds ?? 0,
                 isOnline: false,
-                lastError: error.localizedDescription,
+                lastError: result.error,
                 updatedAt: .now
             )
             teamAPIs.removeValue(forKey: profile.id)
@@ -904,52 +1040,114 @@ final class AppState {
         Self.saveTeamProfiles(teamHosts)
     }
 
-    private func inferenceSelection(
-        for model: String
-    ) throws -> (api: any MachBoostAPIProtocol, hostID: UUID) {
-        guard inferenceMode == .team else { return (api, Self.localPoolID) }
-        var candidates: [(
-            score: Double,
-            api: any MachBoostAPIProtocol,
-            profile: TeamHostProfile?,
-            hostID: UUID
-        )] = []
+    private func inferenceCandidates(for model: String) throws -> [InferenceCandidate] {
+        guard inferenceMode == .team else {
+            return [InferenceCandidate(score: 0, api: api, profile: nil, hostID: Self.localPoolID)]
+        }
+        let now = Date()
+        var candidates: [InferenceCandidate] = []
         if includeLocalInHostPool,
+           hostCooldownUntil[Self.localPoolID, default: .distantPast] <= now,
            catalog.contains(where: {
                ($0.name == model || $0.repository == model) && $0.cached && $0.support == "ready"
            }) {
-            let loaded = loadedModels.contains { $0.model == model }
+            let instance = loadedModels.first { $0.model == model }
             let score = HostRoutingPolicy.score(
                 metrics: metrics,
-                modelLoaded: loaded,
-                reservedRequests: reservedRequests[Self.localPoolID] ?? 0
+                modelLoaded: instance != nil,
+                reservedRequests: reservedRequests[Self.localPoolID] ?? 0,
+                replicas: instance?.scheduler.replicas ?? 1,
+                activeRequests: instance?.scheduler.activeRequests,
+                queuedRequests: instance?.scheduler.queuedRequests
             )
-            candidates.append((score, api, nil, Self.localPoolID))
+            candidates.append(
+                InferenceCandidate(
+                    score: score,
+                    api: api,
+                    profile: nil,
+                    hostID: Self.localPoolID
+                )
+            )
         }
-        for snapshot in teamHostSnapshots.values where snapshot.isOnline && snapshot.supports(model: model) {
+        for snapshot in teamHostSnapshots.values
+        where snapshot.isOnline
+            && snapshot.supports(model: model)
+            && hostCooldownUntil[snapshot.id, default: .distantPast] <= now {
             guard let remote = teamAPIs[snapshot.id] else { continue }
-            candidates.append((
-                HostRoutingPolicy.score(
+            let scheduler = snapshot.scheduler(model: model)
+            candidates.append(
+                InferenceCandidate(
+                    score: HostRoutingPolicy.score(
                     metrics: snapshot.metrics,
                     modelLoaded: snapshot.hasLoaded(model: model),
-                    reservedRequests: reservedRequests[snapshot.id] ?? 0
-                ),
-                remote,
-                snapshot.profile,
-                snapshot.id
-            ))
+                    reservedRequests: reservedRequests[snapshot.id] ?? 0,
+                    roundTripSeconds: snapshot.roundTripSeconds,
+                    replicas: scheduler?.replicas ?? 1,
+                    activeRequests: scheduler?.activeRequests,
+                    queuedRequests: scheduler?.queuedRequests
+                    ),
+                    api: remote,
+                    profile: snapshot.profile,
+                    hostID: snapshot.id
+                )
+            )
         }
-        guard let selected = candidates.min(by: { $0.score < $1.score }) else {
+        guard !candidates.isEmpty else {
             throw AppStateError.invalidTeamHost(
                 "No online host has \(model) ready. Download it on a host or enable this Mac in the pool."
             )
         }
-        if let profile = selected.profile {
+        return candidates.sorted {
+            if $0.score == $1.score {
+                return $0.hostID.uuidString < $1.hostID.uuidString
+            }
+            return $0.score < $1.score
+        }
+    }
+
+    private func beginRequestRoute(requestID: String, candidate: InferenceCandidate) {
+        requestAPIs[requestID] = candidate.api
+        requestHostIDs[requestID] = candidate.hostID
+        reservedRequests[candidate.hostID, default: 0] += 1
+    }
+
+    private func endRequestRoute(requestID: String, hostID: UUID) {
+        if requestHostIDs[requestID] == hostID {
+            requestAPIs.removeValue(forKey: requestID)
+            requestHostIDs.removeValue(forKey: requestID)
+        }
+        reservedRequests[hostID] = max(0, (reservedRequests[hostID] ?? 1) - 1)
+    }
+
+    private func markRouteSuccessful(_ candidate: InferenceCandidate) {
+        hostFailureCounts[candidate.hostID] = 0
+        hostCooldownUntil[candidate.hostID] = nil
+        lastRoutedHostID = candidate.hostID
+        lastRouteExpectedDelay = candidate.score
+        inferenceAPI = candidate.api
+        if let profile = candidate.profile {
             teamHost = profile
-            inferenceAPI = selected.api
             Self.saveTeamProfile(profile)
         }
-        return (selected.api, selected.hostID)
+    }
+
+    private func markRouteFailed(_ candidate: InferenceCandidate) {
+        let failures = (hostFailureCounts[candidate.hostID] ?? 0) + 1
+        hostFailureCounts[candidate.hostID] = failures
+        let cooldown = min(60, 10 * pow(2, Double(max(0, failures - 1))))
+        hostCooldownUntil[candidate.hostID] = Date().addingTimeInterval(cooldown)
+    }
+
+    private static func hasVisibleOutput(_ event: ChatEvent) -> Bool {
+        guard let message = event.message else { return false }
+        return !message.content.isEmpty
+            || !(message.thinking ?? "").isEmpty
+            || !(message.toolCalls ?? []).isEmpty
+    }
+
+    private func smoothedRoundTrip(previous: Double?, observed: Double) -> Double {
+        guard let previous, previous > 0 else { return max(0, observed) }
+        return previous * 0.7 + max(0, observed) * 0.3
     }
 
     private func updateHostAdvertisement() {
