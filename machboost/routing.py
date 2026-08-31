@@ -187,6 +187,25 @@ class MachBoostHostPool:
     def pull(self, model: str, **kwargs: Any) -> Any:
         return self._call_with_failover("pull", model, model, kwargs, require_support=False)
 
+    def ps(self) -> list[dict[str, Any]]:
+        models: list[dict[str, Any]] = []
+        for target in self.targets:
+            runtime = self._runtimes[target.id]
+            try:
+                rows = runtime.client.ps()
+            except MachBoostAPIError:
+                continue
+            for row in rows:
+                models.append(
+                    {
+                        **row,
+                        "fabric_host_id": target.id,
+                        "fabric_host_name": target.name,
+                        "fabric_endpoint": target.endpoint,
+                    }
+                )
+        return models
+
     def stop(self, model: Optional[str] = None) -> dict[str, Any]:
         if model and self.last_route is not None:
             runtime = self._runtimes[self.last_route.target.id]
