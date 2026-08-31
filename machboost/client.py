@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import platform
 import subprocess
 import sys
 import time
@@ -36,6 +37,26 @@ def default_endpoint() -> str:
     if "://" not in value:
         value = f"http://{value}"
     return value.rstrip("/")
+
+
+def machboost_app_api_token() -> str:
+    if platform.system() != "Darwin" or not Path("/usr/bin/security").exists():
+        return ""
+    result = subprocess.run(
+        [
+            "/usr/bin/security",
+            "find-generic-password",
+            "-w",
+            "-s",
+            "io.machboost.MachBoost",
+            "-a",
+            "lan-api-token",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.strip() if result.returncode == 0 else ""
 
 
 class MachBoostClient:
@@ -696,19 +717,28 @@ class MachBoostClient:
 
     def stream(self, path: str, payload: dict[str, Any]) -> Iterator[dict[str, Any]]:
         data = json.dumps(payload).encode("utf-8")
-        request = Request(
-            self.endpoint + path,
-            method="POST",
-            data=data,
-            headers=self._headers(
-                content_type=True,
-                accept="application/x-ndjson",
-            ),
-        )
-        try:
-            response = urlopen(request, timeout=self.timeout)
-        except (HTTPError, URLError, TimeoutError, OSError) as exc:
-            raise api_error(exc) from exc
+        response = None
+        for attempt in range(2):
+            request = Request(
+                self.endpoint + path,
+                method="POST",
+                data=data,
+                headers=self._headers(
+                    content_type=True,
+                    accept="application/x-ndjson",
+                ),
+            )
+            try:
+                response = urlopen(request, timeout=self.timeout)
+                break
+            except HTTPError as exc:
+                if attempt == 0 and self._authorize_local_retry(exc.code):
+                    continue
+                raise api_error(exc) from exc
+            except (URLError, TimeoutError, OSError) as exc:
+                raise api_error(exc) from exc
+        if response is None:
+            raise MachBoostAPIError("server did not return a streaming response")
         with response:
             for raw_line in response:
                 line = raw_line.decode("utf-8").strip()
@@ -729,17 +759,24 @@ class MachBoostClient:
         payload: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
         data = None if payload is None else json.dumps(payload).encode("utf-8")
-        request = Request(
-            self.endpoint + path,
-            method=method,
-            data=data,
-            headers=self._headers(content_type=data is not None),
-        )
-        try:
-            with urlopen(request, timeout=self.timeout) as response:
-                raw = response.read().decode("utf-8")
-        except (HTTPError, URLError, TimeoutError, OSError) as exc:
-            raise api_error(exc) from exc
+        raw = ""
+        for attempt in range(2):
+            request = Request(
+                self.endpoint + path,
+                method=method,
+                data=data,
+                headers=self._headers(content_type=data is not None),
+            )
+            try:
+                with urlopen(request, timeout=self.timeout) as response:
+                    raw = response.read().decode("utf-8")
+                break
+            except HTTPError as exc:
+                if attempt == 0 and self._authorize_local_retry(exc.code):
+                    continue
+                raise api_error(exc) from exc
+            except (URLError, TimeoutError, OSError) as exc:
+                raise api_error(exc) from exc
         try:
             value = json.loads(raw)
         except json.JSONDecodeError as exc:
@@ -749,6 +786,15 @@ class MachBoostClient:
         if "error" in value:
             raise MachBoostAPIError(str(value["error"]))
         return value
+
+    def _authorize_local_retry(self, status: int) -> bool:
+        if status != 401 or self.api_token:
+            return False
+        host = (urlparse(self.endpoint).hostname or "").lower()
+        if host not in {"127.0.0.1", "localhost", "::1"}:
+            return False
+        self.api_token = machboost_app_api_token() or None
+        return self.api_token is not None
 
     def _headers(
         self,
