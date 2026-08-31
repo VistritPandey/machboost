@@ -1281,11 +1281,20 @@ class HTTPServerTests(unittest.TestCase):
         response = json.loads(body)
         accelerator = self.loaded[0][1]
         messages, _, draft_context = accelerator.chat_calls[0]
+        stable_context = next(
+            message["content"]
+            for message in messages
+            if message["role"] == "system"
+            and "stable repository map" in message["content"]
+        )
         evidence = next(
             message["content"]
             for message in messages
             if message["role"] == "system"
+            and "request-specific repository evidence" in message["content"]
         )
+        self.assertIn("auth.py: authenticate_user", stable_context)
+        self.assertNotIn("return lookup_user", stable_context)
         self.assertIn("auth.py:1-3", evidence)
         self.assertIn("authenticate_user", evidence)
         self.assertTrue(
@@ -1339,7 +1348,7 @@ class HTTPServerTests(unittest.TestCase):
             message["content"]
             for message in call["messages"]
             if message["role"] == "system"
-            and "repository evidence" in message["content"]
+            and "request-specific repository evidence" in message["content"]
         )
         self.assertIn("permissions.py:1-2", evidence)
         self.assertIn("can_view_report", evidence)
