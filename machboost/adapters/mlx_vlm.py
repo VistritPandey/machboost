@@ -433,6 +433,9 @@ class MLXVLMAccelerator:
             policy_prompt=_latest_user_text(normalized),
             reasoning_echoes=_user_texts(normalized),
             cache_key=cache_key,
+            thinking_budget=(
+                _thinking_budget(reasoning_strength) if enable_thinking else None
+            ),
         )
 
     def _format_chat_prompt(
@@ -548,6 +551,7 @@ class MLXVLMAccelerator:
             policy_prompt=prompt,
             reasoning_echoes=(prompt,),
             cache_key=cache_key,
+            thinking_budget=None,
         )
 
     def _generate(
@@ -571,6 +575,7 @@ class MLXVLMAccelerator:
         policy_prompt: str,
         reasoning_echoes: Sequence[str],
         cache_key: Optional[str],
+        thinking_budget: Optional[int],
     ) -> tuple[str, VisionRunStats]:
         if self._closed:
             raise RuntimeError("MLX vision accelerator is closed")
@@ -594,6 +599,7 @@ class MLXVLMAccelerator:
             policy_prompt=policy_prompt,
             reasoning_echoes=reasoning_echoes,
             cache_key=cache_key,
+            thinking_budget=thinking_budget,
         )
         return future.result()
 
@@ -618,6 +624,7 @@ class MLXVLMAccelerator:
         policy_prompt: str,
         reasoning_echoes: Sequence[str],
         cache_key: Optional[str],
+        thinking_budget: Optional[int],
     ) -> tuple[str, VisionRunStats]:
         with self._generation_lock:
             self._bind_thread_local_stream()
@@ -665,6 +672,8 @@ class MLXVLMAccelerator:
                 "max_tokens": max_tokens,
                 "temperature": temperature,
             }
+            if thinking_budget is not None:
+                stream_options["thinking_budget"] = thinking_budget
             prompt_cache_enabled = False
             prompt_cache_prefix_tokens = 0
             module_name = str(getattr(self._stream_generate, "__module__", ""))
@@ -1008,6 +1017,14 @@ def config_value(config: Any, name: str, default: Any = None) -> Any:
     if isinstance(config, dict):
         return config.get(name, default)
     return getattr(config, name, default)
+
+
+def _thinking_budget(reasoning_strength: Optional[str]) -> Optional[int]:
+    return {
+        "low": 64,
+        "medium": 256,
+        "high": 768,
+    }.get(str(reasoning_strength or "").lower())
 
 
 def _latest_user_text(messages: Sequence[dict[str, str]]) -> str:
