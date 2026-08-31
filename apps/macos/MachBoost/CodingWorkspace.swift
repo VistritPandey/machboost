@@ -8,6 +8,8 @@ enum CodingWorkspaceError: LocalizedError {
     case unsupportedFile(String)
     case ambiguousReplacement(Int)
     case fileAlreadyExists(String)
+    case commandFailed(Int, String)
+    case commandTimedOut(Int)
 
     var errorDescription: String? {
         switch self {
@@ -18,6 +20,10 @@ enum CodingWorkspaceError: LocalizedError {
         case let .ambiguousReplacement(count):
             "The old text must occur exactly once; MachBoost found \(count) matches."
         case let .fileAlreadyExists(path): "A file already exists at \(path)."
+        case let .commandFailed(status, output):
+            "Command exited with status \(status).\(output.isEmpty ? "" : "\n\(output)")"
+        case let .commandTimedOut(seconds):
+            "Command exceeded the \(seconds)-second time limit."
         }
     }
 }
@@ -105,7 +111,9 @@ enum CodingPermissionDecision: Equatable, Sendable {
 
 enum CodingWorkspace {
     static let maximumToolRounds = 8
-    static let mutatingTools: Set<String> = ["replace_in_file", "create_file"]
+    static let mutatingTools: Set<String> = [
+        "replace_in_file", "create_file", "delete_file", "run_command",
+    ]
 
     static let tools: [APIToolDefinition] = [
         definition(
@@ -155,6 +163,27 @@ enum CodingWorkspace {
             ],
             required: ["path", "content"]
         ),
+        definition(
+            name: "delete_file",
+            description: "Delete one repository file. Directories cannot be deleted.",
+            properties: ["path": stringProperty("Repository-relative file path")],
+            required: ["path"]
+        ),
+        definition(
+            name: "git_diff",
+            description: "Show the repository working-tree diff, optionally for one path.",
+            properties: ["path": stringProperty("Optional repository-relative file path")]
+        ),
+        definition(
+            name: "run_command",
+            description: "Run one non-shell command in the repository and return bounded output.",
+            properties: [
+                "command": stringProperty("Executable name, such as git, rg, npm, go, or swift"),
+                "arguments": stringArrayProperty("Argument list; shell syntax is not supported"),
+                "timeout_seconds": numberProperty("Time limit from 1 to 120 seconds"),
+            ],
+            required: ["command"]
+        ),
     ]
 
     static func isMutating(_ call: APIToolCall) -> Bool {
@@ -199,6 +228,16 @@ enum CodingWorkspace {
         mode: CodingPermissionMode
     ) -> CodingPermissionDecision {
         guard isMutating(call) else { return .allow }
+        if call.function.name == "run_command" {
+            switch mode {
+            case .plan:
+                return .deny("Plan mode does not allow local commands.")
+            case .bypass:
+                return .allow
+            case .automatic, .manual, .acceptEdits:
+                return .ask
+            }
+        }
         switch mode {
         case .plan:
             return .deny("Plan mode does not allow repository changes.")
@@ -227,6 +266,10 @@ enum CodingWorkspace {
         switch call.function.name {
         case "replace_in_file": return "Edit \(path)"
         case "create_file": return "Create \(path)"
+        case "delete_file": return "Delete \(path)"
+        case "git_diff": return "Review workspace changes"
+        case "run_command":
+            return "Run \(string(arguments["command"]) ?? "repository command")"
         case "read_file": return "Read \(path)"
         case "search_code": return "Search for \(string(arguments["query"]) ?? "text")"
         default: return "Run \(call.function.name)"
@@ -242,6 +285,9 @@ enum CodingWorkspace {
         case "search_code": return "Searched for \(string(arguments["query"]) ?? "text")"
         case "replace_in_file": return "Edited \(path)"
         case "create_file": return "Created \(path)"
+        case "delete_file": return "Deleted \(path)"
+        case "git_diff": return "Reviewed workspace changes"
+        case "run_command": return "Ran \(string(arguments["command"]) ?? "command")"
         default: return "Ran \(call.function.name)"
         }
     }
@@ -263,8 +309,14 @@ enum CodingWorkspace {
                 ("Query", string(arguments["query"]) ?? ""),
                 ("Location", path ?? "Entire repository"),
             ]
-        case "replace_in_file", "create_file":
+        case "replace_in_file", "create_file", "delete_file":
             return [("File", path ?? "Unknown")]
+        case "git_diff":
+            return [("File", path ?? "Entire repository")]
+        case "run_command":
+            let command = string(arguments["command"]) ?? "Unknown"
+            let arguments = stringArray(arguments["arguments"]).joined(separator: " ")
+            return [("Command", ([command, arguments].filter { !$0.isEmpty }).joined(separator: " "))]
         default:
             return []
         }
@@ -294,6 +346,7 @@ enum CodingWorkspace {
         if let path = object["path"] as? String, let status = object["status"] as? String {
             return "\(status.capitalized) \(path)"
         }
+        if let output = object["output"] as? String { return output }
         return content
     }
 
@@ -334,7 +387,16 @@ enum CodingWorkspace {
         return file
     }
 
-    static func execute(_ call: APIToolCall, workspaceRoot: String) throws -> CodingToolResult {
+    static func execute(_ call: APIToolCall, workspaceRoot: String) async throws -> CodingToolResult {
+        try await Task.detached(priority: .userInitiated) {
+            try executeSynchronously(call, workspaceRoot: workspaceRoot)
+        }.value
+    }
+
+    private static func executeSynchronously(
+        _ call: APIToolCall,
+        workspaceRoot: String
+    ) throws -> CodingToolResult {
         let root = URL(fileURLWithPath: workspaceRoot, isDirectory: true)
             .standardizedFileURL.resolvingSymlinksInPath()
         var isDirectory: ObjCBool = false
@@ -396,6 +458,25 @@ enum CodingWorkspace {
             )
             changedPath = path
             changePatch = patch(path: path, before: "", after: newContent, created: true)
+        case "delete_file":
+            let path = try requiredString(arguments, "path")
+            let previous = try deleteFile(root: root, path: path)
+            content = json(["status": "deleted", "path": path])
+            changedPath = path
+            changePatch = deletionPatch(path: path, content: previous)
+        case "git_diff":
+            content = try gitDiff(root: root, path: string(arguments["path"]))
+            changedPath = nil
+            changePatch = nil
+        case "run_command":
+            content = try runCommand(
+                root: root,
+                command: requiredString(arguments, "command"),
+                arguments: stringArray(arguments["arguments"]),
+                timeout: boundedInt(arguments["timeout_seconds"], default: 30, range: 1 ... 120)
+            )
+            changedPath = ""
+            changePatch = nil
         default:
             throw CodingWorkspaceError.invalidArguments(
                 "Unknown coding tool: \(call.function.name)"
@@ -428,6 +509,14 @@ enum CodingWorkspace {
         if beforeLines.count > 200 || afterLines.count > 200 {
             lines.append("... patch preview truncated ...")
         }
+        return String(lines.joined(separator: "\n").prefix(24_000))
+    }
+
+    private static func deletionPatch(path: String, content: String) -> String {
+        var lines = ["--- a/\(path)", "+++ /dev/null", "@@ deleted file @@"]
+        let contentLines = content.components(separatedBy: .newlines)
+        lines.append(contentsOf: contentLines.prefix(400).map { "-\($0)" })
+        if contentLines.count > 400 { lines.append("... patch preview truncated ...") }
         return String(lines.joined(separator: "\n").prefix(24_000))
     }
 
@@ -557,6 +646,121 @@ enum CodingWorkspace {
         return json(["status": "created", "path": path, "bytes": content.utf8.count])
     }
 
+    private static func deleteFile(root: URL, path: String) throws -> String {
+        let file = try safeURL(root: root, relativePath: path, mustExist: true)
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: file.path, isDirectory: &isDirectory),
+              !isDirectory.boolValue else {
+            throw CodingWorkspaceError.invalidArguments("delete_file only accepts files")
+        }
+        let previous = try textFile(file, displayPath: path)
+        try FileManager.default.removeItem(at: file)
+        return previous
+    }
+
+    private static func gitDiff(root: URL, path: String?) throws -> String {
+        var arguments = ["diff", "--no-ext-diff", "--"]
+        if let path, !path.isEmpty {
+            _ = try safeURL(root: root, relativePath: path, mustExist: false)
+            arguments.append(path)
+        }
+        return try runCommand(root: root, command: "git", arguments: arguments, timeout: 30)
+    }
+
+    private static func runCommand(
+        root: URL,
+        command: String,
+        arguments: [String],
+        timeout: Int
+    ) throws -> String {
+        guard command.range(of: #"^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$"#, options: .regularExpression) != nil else {
+            throw CodingWorkspaceError.invalidArguments("command must be an executable name without a path")
+        }
+        let blocked = Set([
+            "bash", "curl", "env", "fish", "launchctl", "open", "osascript", "rm",
+            "scp", "security", "sh", "ssh", "sudo", "zsh",
+        ])
+        guard !blocked.contains(command.lowercased()) else {
+            throw CodingWorkspaceError.invalidArguments("\(command) is not available to repository tools")
+        }
+        guard arguments.count <= 128,
+              arguments.allSatisfy({ !$0.contains("\0") && $0.utf8.count <= 8_192 }) else {
+            throw CodingWorkspaceError.invalidArguments("command arguments are too large")
+        }
+
+        let temporary = FileManager.default.temporaryDirectory
+            .appendingPathComponent("machboost-command-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        let stdoutURL = temporary.appendingPathComponent("stdout")
+        let stderrURL = temporary.appendingPathComponent("stderr")
+        FileManager.default.createFile(atPath: stdoutURL.path, contents: nil)
+        FileManager.default.createFile(atPath: stderrURL.path, contents: nil)
+        let stdout = try FileHandle(forWritingTo: stdoutURL)
+        let stderr = try FileHandle(forWritingTo: stderrURL)
+        defer {
+            try? stdout.close()
+            try? stderr.close()
+        }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = [command] + arguments
+        process.currentDirectoryURL = root
+        process.environment = commandEnvironment()
+        process.standardOutput = stdout
+        process.standardError = stderr
+        try process.run()
+        let deadline = Date().addingTimeInterval(TimeInterval(timeout))
+        while process.isRunning, Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.025)
+        }
+        if process.isRunning {
+            process.terminate()
+            process.waitUntilExit()
+            throw CodingWorkspaceError.commandTimedOut(timeout)
+        }
+        process.waitUntilExit()
+        try? stdout.synchronize()
+        try? stderr.synchronize()
+        let output = boundedCommandOutput(stdoutURL: stdoutURL, stderrURL: stderrURL)
+        guard process.terminationStatus == 0 else {
+            throw CodingWorkspaceError.commandFailed(Int(process.terminationStatus), output)
+        }
+        return json([
+            "status": "completed",
+            "command": command,
+            "exit_code": Int(process.terminationStatus),
+            "output": output.isEmpty ? "Command completed with no output." : output,
+        ])
+    }
+
+    private static func boundedCommandOutput(stdoutURL: URL, stderrURL: URL) -> String {
+        let limit = 128 * 1024
+        let stdout = (try? Data(contentsOf: stdoutURL)) ?? Data()
+        let stderr = (try? Data(contentsOf: stderrURL)) ?? Data()
+        var sections: [String] = []
+        if !stdout.isEmpty {
+            sections.append(String(decoding: stdout.prefix(limit), as: UTF8.self))
+        }
+        if !stderr.isEmpty {
+            sections.append(String(decoding: stderr.prefix(limit), as: UTF8.self))
+        }
+        let combined = sections.joined(separator: sections.count > 1 ? "\n" : "")
+        return String(combined.prefix(limit))
+    }
+
+    private static func commandEnvironment() -> [String: String] {
+        let inherited = ProcessInfo.processInfo.environment
+        return [
+            "HOME": inherited["HOME"] ?? NSHomeDirectory(),
+            "LANG": inherited["LANG"] ?? "en_US.UTF-8",
+            "LC_ALL": inherited["LC_ALL"] ?? "en_US.UTF-8",
+            "PATH": inherited["PATH"] ?? "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin",
+            "TMPDIR": inherited["TMPDIR"] ?? NSTemporaryDirectory(),
+        ]
+    }
+
     private static func candidateFiles(at start: URL) throws -> [URL] {
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: start.path, isDirectory: &isDirectory) else {
@@ -668,6 +872,11 @@ enum CodingWorkspace {
         return Int(number)
     }
 
+    private static func stringArray(_ value: JSONValue?) -> [String] {
+        guard case let .array(values) = value else { return [] }
+        return values.compactMap(string)
+    }
+
     private static func boundedInt(
         _ value: JSONValue?,
         default defaultValue: Int,
@@ -704,6 +913,14 @@ enum CodingWorkspace {
 
     private static func numberProperty(_ description: String) -> JSONValue {
         .object(["type": .string("integer"), "description": .string(description)])
+    }
+
+    private static func stringArrayProperty(_ description: String) -> JSONValue {
+        .object([
+            "type": .string("array"),
+            "description": .string(description),
+            "items": .object(["type": .string("string")]),
+        ])
     }
 
     private static func json(_ object: Any) -> String {
