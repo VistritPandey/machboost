@@ -30,6 +30,7 @@ struct TeamHostSnapshot: Identifiable, Sendable {
     var catalog: [CatalogModel]
     var loadedModels: [ModelInstance]
     var metrics: ServerMetrics?
+    var roundTripSeconds: Double = 0
     var isOnline: Bool
     var lastError: String?
     var updatedAt: Date
@@ -47,23 +48,58 @@ struct TeamHostSnapshot: Identifiable, Sendable {
     func hasLoaded(model: String) -> Bool {
         loadedModels.contains { $0.model == model }
     }
+
+    func scheduler(model: String) -> ModelInstance.Scheduler? {
+        loadedModels.first { $0.model == model }?.scheduler
+    }
 }
 
 enum HostRoutingPolicy {
     static func score(
         metrics: ServerMetrics?,
         modelLoaded: Bool,
-        reservedRequests: Int = 0
+        reservedRequests: Int = 0,
+        roundTripSeconds: Double = 0,
+        replicas: Int = 1,
+        activeRequests: Int? = nil,
+        queuedRequests: Int? = nil
     ) -> Double {
-        let active = Double(metrics?.scheduler.activeRequests ?? 0)
-        let queued = Double(metrics?.scheduler.queuedRequests ?? 0)
-        let latency = max(0.25, metrics?.operations.latencySeconds.p50 ?? 0.75)
-        let requestCost = max(0.75, latency)
-        return (modelLoaded ? 0 : 3)
-            + queued * requestCost
-            + active * 0.25
-            + Double(reservedRequests) * requestCost
-            + latency * 0.1
+        let active = max(0, activeRequests ?? metrics?.scheduler.activeRequests ?? 0)
+        let queued = max(0, queuedRequests ?? metrics?.scheduler.queuedRequests ?? 0)
+        let capacity = max(1, replicas)
+        let service = max(0.05, metrics?.operations.latencySeconds.p50 ?? 0.75)
+        let demandAhead = queued + max(0, reservedRequests)
+        let activeOverCapacity = max(0, active - capacity + 1)
+        let queueDelay = Double(demandAhead + activeOverCapacity)
+            * service / Double(capacity)
+        let coldLoadPenalty = modelLoaded ? 0 : max(2, service * 4)
+        return max(0, roundTripSeconds) + service + queueDelay + coldLoadPenalty
+    }
+
+    static func canFailOver(error: Error, emittedOutput: Bool) -> Bool {
+        guard !emittedOutput else { return false }
+        if error is CancellationError {
+            return false
+        }
+        if let urlError = error as? URLError {
+            return [
+                .timedOut,
+                .cannotFindHost,
+                .cannotConnectToHost,
+                .networkConnectionLost,
+                .dnsLookupFailed,
+                .notConnectedToInternet,
+            ].contains(urlError.code)
+        }
+        if case let MachBoostAPIError.server(status, _) = error {
+            return [408, 425, 429, 500, 502, 503, 504].contains(status)
+        }
+        if case let MachBoostAPIError.stream(message) = error {
+            let normalized = message.lowercased()
+            return ["timeout", "connection", "queue", "unavailable", "overloaded"]
+                .contains { normalized.contains($0) }
+        }
+        return false
     }
 }
 
