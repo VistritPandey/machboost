@@ -674,6 +674,9 @@ class MLXVLMAccelerator:
             }
             if thinking_budget is not None:
                 stream_options["thinking_budget"] = thinking_budget
+                if config_value(self.model.config, "model_type", "") == "muse_glimmer":
+                    stream_options["thinking_start_token"] = "to=self"
+                    stream_options["thinking_end_token"] = "<|eom|>"
             prompt_cache_enabled = False
             prompt_cache_prefix_tokens = 0
             module_name = str(getattr(self._stream_generate, "__module__", ""))
