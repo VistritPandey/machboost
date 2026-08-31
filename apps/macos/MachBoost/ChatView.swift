@@ -2224,14 +2224,15 @@ private struct MessageRow: View {
                     Spacer()
                     messageActions
                 }
-                if
-                    visibleContent.isEmpty,
-                    message.reasoningContent?.isEmpty != false,
-                    message.toolCallsJSON?.isEmpty != false,
-                    message.toolActivityJSON?.isEmpty != false
-                {
-                    ProgressView()
-                        .controlSize(.small)
+                if hasNoVisibleOutput {
+                    if isStreaming {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Text("No visible response was generated. Try regenerating the response.")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
                 } else {
                     if timeline.isEmpty {
                         legacyMessageBody
@@ -2438,6 +2439,13 @@ private struct MessageRow: View {
         }
         let decoded = (try? JSONDecoder().decode([APIToolCall].self, from: data)) ?? []
         return decoded.filter(CodingWorkspace.supports)
+    }
+
+    private var hasNoVisibleOutput: Bool {
+        visibleContent.isEmpty
+            && message.reasoningContent?.isEmpty != false
+            && message.toolCallsJSON?.isEmpty != false
+            && message.toolActivityJSON?.isEmpty != false
     }
 
     private var toolActivities: [CodingToolActivity] {
