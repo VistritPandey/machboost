@@ -129,7 +129,10 @@ Claude Desktop calls `/v1/models`, `/v1/messages/count_tokens`, and
 `/v1/messages`. Shared hosts use the same bearer key already stored for the
 MachBoost connection. The key is passed from the app to the bundled runtime
 through its protected process environment and is never placed in command-line
-arguments or app logs.
+arguments or app logs. Because Claude rejects plain HTTP gateways away from
+loopback, MachBoost starts a private authenticated localhost bridge for a saved
+LAN host and forwards the stream with the host credential. The Apps screen
+continues to display the actual destination rather than the bridge address.
 
 ## Repository Workspaces
 
@@ -291,8 +294,8 @@ Build an ad-hoc signed DMG for local packaging and runtime tests without Apple
 credentials:
 
 ```sh
-./scripts/release_macos.sh 0.15.1-local --local
-open dist/macos/MachBoost-0.15.1-local-arm64.dmg
+./scripts/release_macos.sh 0.15.2-local --local
+open dist/macos/MachBoost-0.15.2-local-arm64.dmg
 ```
 
 Local mode builds the locked runtime, archives the arm64 app, embeds and signs
@@ -313,14 +316,14 @@ export MACHBOOST_DEVELOPER_ID='Developer ID Application: ...'
 export MACHBOOST_NOTARY_PROFILE=...
 export SPARKLE_PUBLIC_ED_KEY=...
 export SPARKLE_PRIVATE_KEY=/secure/path/to/sparkle-private-key
-./scripts/release_macos.sh 0.15.1
-./scripts/publish_macos_release.sh 0.15.1 ./release-notes/0.15.1.md
+./scripts/release_macos.sh 0.15.2
+./scripts/publish_macos_release.sh 0.15.2 ./release-notes/0.15.2.md
 ```
 
 The release script builds the embedded runtime, archives the arm64 app, signs
 nested Mach-O files and the app, creates and notarizes a DMG, staples the
 ticket, runs Gatekeeper verification, writes a SHA-256 checksum, and produces a
-signed Sparkle appcast. The publisher requires an existing `v0.15.1` tag, an
+signed Sparkle appcast. The publisher requires an existing `v0.15.2` tag, an
 authenticated GitHub CLI session, and an explicit release-notes file. It refuses
 to overwrite an existing release and uploads the DMG, checksum, and appcast to
 the matching GitHub release.
