@@ -886,6 +886,7 @@ public struct ChatEvent: Decodable, Sendable {
         public let scheduler: Scheduler?
         public let workspace: WorkspaceResult?
         public let route: Route?
+        public let fullContent: String?
 
         public init(
             backend: String?,
@@ -893,7 +894,8 @@ public struct ChatEvent: Decodable, Sendable {
             timeToFirstTokenSeconds: Double?,
             scheduler: Scheduler? = nil,
             workspace: WorkspaceResult? = nil,
-            route: Route? = nil
+            route: Route? = nil,
+            fullContent: String? = nil
         ) {
             self.backend = backend
             self.stats = stats
@@ -901,6 +903,7 @@ public struct ChatEvent: Decodable, Sendable {
             self.scheduler = scheduler
             self.workspace = workspace
             self.route = route
+            self.fullContent = fullContent
         }
 
         enum CodingKeys: String, CodingKey {
@@ -909,6 +912,7 @@ public struct ChatEvent: Decodable, Sendable {
             case timeToFirstTokenSeconds = "time_to_first_token_seconds"
             case workspace
             case route
+            case fullContent = "full_content"
         }
     }
 
