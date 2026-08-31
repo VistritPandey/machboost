@@ -1112,6 +1112,10 @@ struct ChatView: View {
         ].joined(separator: "|")
     }
 
+    private var conversationAffinityKey: String {
+        "conversation:\(conversation.id.uuidString.lowercased())"
+    }
+
     private var routeMode: ChatRouteMode {
         ChatRouteMode(rawValue: routeModeValue) ?? .localOnly
     }
@@ -1273,8 +1277,7 @@ struct ChatView: View {
             options: .init(
                 maxTokens: 1,
                 temperature: 0,
-                affinityKey: selectedWorkspace?.revision.map { "workspace:\($0)" }
-                    ?? conversation.id.uuidString
+                affinityKey: conversationAffinityKey
             ),
             reasoningStrength: effectiveReasoningStrength,
             tools: CodingWorkspace.tools(for: permissionMode),
@@ -1527,6 +1530,8 @@ struct ChatView: View {
             try Task.checkCancellation()
             let requestID = round == 0 ? requestPrefix : "\(requestPrefix)-\(round)"
             activeRequestID = requestID
+            let assistantContentPrefix = assistant.content
+            let timelineStart = timeline.count
             var requestTranscript = transcript
             if forceFinalResponse {
                 requestTranscript.append(
@@ -1548,8 +1553,7 @@ struct ChatView: View {
                 options: .init(
                     maxTokens: maxTokens,
                     temperature: temperature,
-                    affinityKey: workspace?.revision.map { "workspace:\($0)" }
-                        ?? conversation.id.uuidString
+                    affinityKey: conversationAffinityKey
                 ),
                 workspaceID: appState.inferenceMode == .local && !codingActive
                     ? conversation.workspaceID
@@ -1601,6 +1605,16 @@ struct ChatView: View {
                     )
                     persist(activities, to: assistant)
                     persist(timeline, to: assistant)
+                }
+                if let fullContent = event.machboost?.fullContent {
+                    reconcileRoundContent(
+                        fullContent,
+                        roundContent: &roundContent,
+                        assistantContentPrefix: assistantContentPrefix,
+                        assistant: assistant,
+                        timeline: &timeline,
+                        timelineStart: timelineStart
+                    )
                 }
                 if event.done { turnMetrics.absorb(event) }
             }
@@ -1673,7 +1687,7 @@ struct ChatView: View {
                     persist(activities, to: assistant)
                     persist(timeline, to: assistant)
                     do {
-                        let toolResult = try CodingWorkspace.execute(
+                        let toolResult = try await CodingWorkspace.execute(
                             call,
                             workspaceRoot: workspace.path
                         )
@@ -1714,6 +1728,34 @@ struct ChatView: View {
         guard let data = try? JSONEncoder().encode(activities) else { return }
         message.toolActivityJSON = String(decoding: data, as: UTF8.self)
         try? modelContext.save()
+    }
+
+    private func reconcileRoundContent(
+        _ rawContent: String,
+        roundContent: inout String,
+        assistantContentPrefix: String,
+        assistant: ChatMessage,
+        timeline: inout [AssistantTimelineEntry],
+        timelineStart: Int
+    ) {
+        let fullContent = CodingWorkspace.visibleAssistantText(rawContent)
+        guard fullContent != roundContent else { return }
+        assistant.content = assistantContentPrefix + fullContent
+        let contentIndexes = timeline.indices.filter {
+            $0 >= timelineStart && timeline[$0].kind == .content
+        }
+        if contentIndexes.isEmpty, !fullContent.isEmpty {
+            timeline.append(AssistantTimelineEntry(kind: .content, text: fullContent))
+        } else if contentIndexes.count == 1, let index = contentIndexes.first {
+            timeline[index].text = fullContent
+        } else {
+            let streamed = contentIndexes.map { timeline[$0].text }.joined()
+            if fullContent.hasPrefix(streamed), let index = contentIndexes.last {
+                timeline[index].append(String(fullContent.dropFirst(streamed.count)))
+            }
+        }
+        roundContent = fullContent
+        persist(timeline, to: assistant)
     }
 
     private func persist(_ timeline: [AssistantTimelineEntry], to message: ChatMessage) {
@@ -1924,8 +1966,7 @@ struct ChatView: View {
                     ConversationCompaction.clampedMaxTokens(maxTokens)
                 ),
                 temperature: 0,
-                affinityKey: conversation.workspaceID.map { "workspace:\($0)" }
-                    ?? conversation.id.uuidString
+                affinityKey: conversationAffinityKey
             ),
             reasoningStrength: selectedModelRequiresReasoning ? "low" : nil,
             machboost: chatExtensions
