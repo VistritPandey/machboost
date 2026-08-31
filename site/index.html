@@ -23,7 +23,7 @@
     <title>MachBoost — Faster local inference on Apple Silicon</title>
     <link rel="icon" href="assets/machboost-mark.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="assets/machboost-icon.png">
-    <link rel="stylesheet" href="styles.css?v=0.15.1">
+    <link rel="stylesheet" href="styles.css?v=0.15.2">
     <script
       defer
       src="https://cdn.jsdelivr.net/npm/lucide@0.468.0/dist/umd/lucide.min.js"
@@ -202,6 +202,8 @@
               Kilo Code, or another compatible client at a private endpoint. The
               desktop app can discover several MachBoost Macs and route each new
               request to a compatible resident model with the best current load.
+              A conversation can instead pin a preferred device and retain local
+              fallback, while every response records which host actually served it.
               Each host enforces model access, concurrency, request rates, and fair
               queueing between employees. Revision-aware memory can
               reuse validated repository knowledge without exposing private work,
@@ -677,6 +679,8 @@ export OPENAI_API_KEY="mbk_employee_key"</code></pre>
               reachable address and token for teammates on the same private network.
               Claude Desktop connects through its native third-party inference gateway,
               not MCP, and can use models resident on this Mac or a saved team host.
+              For private-network HTTP hosts, MachBoost supplies Claude with a secure
+              localhost bridge so Claude's HTTPS-only remote gateway rule is satisfied.
             </p>
           </div>
           <div class="code-samples">
