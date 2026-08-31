@@ -23,6 +23,7 @@ from machboost.server import (
     RequestCancelled,
     RuntimeManager,
     ToolAwareTextStream,
+    configure_native_prompt_cache,
     download_progress_class,
     extract_tool_calls,
     load_accelerator,
@@ -232,6 +233,55 @@ class FakeAccelerator:
         if on_text is not None:
             on_text("completed")
         return "completed", FakeStats(generated_tokens=1)
+
+
+class NativePromptCacheConfigurationTests(unittest.TestCase):
+    def test_server_requests_enable_tenant_isolated_prompt_cache(self):
+        accelerator = FakeAccelerator()
+
+        configure_native_prompt_cache(
+            accelerator,
+            {"_tenant_key": "team-member", "prompt_cache_size": 4},
+        )
+
+        self.assertEqual(
+            accelerator.service.prompt_cache_configs[-1],
+            {
+                "enabled": True,
+                "max_size": 4,
+                "max_bytes": 2 * 1024 * 1024 * 1024,
+                "namespace": "tenant:team-member",
+            },
+        )
+
+    def test_request_can_disable_prompt_cache_explicitly(self):
+        accelerator = FakeAccelerator()
+
+        configure_native_prompt_cache(
+            accelerator,
+            {"_tenant_key": "team-member", "prompt_cache": False},
+        )
+
+        self.assertFalse(
+            accelerator.service.prompt_cache_configs[-1]["enabled"]
+        )
+
+    def test_workspace_namespace_takes_precedence_over_tenant(self):
+        accelerator = FakeAccelerator()
+
+        configure_native_prompt_cache(
+            accelerator,
+            {
+                "_tenant_key": "team-member",
+                "workspace_prefix_cache": True,
+                "_prompt_cache_namespace": "workspace:repo:revision",
+            },
+        )
+
+        self.assertEqual(
+            accelerator.service.prompt_cache_configs[-1]["namespace"],
+            "workspace:repo:revision",
+        )
 
 
 class ToolCallingAccelerator(FakeAccelerator):
