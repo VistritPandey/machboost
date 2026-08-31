@@ -118,10 +118,17 @@ struct AppsView: View {
 
                 if let currentEndpoint = status.endpoint, status.connected {
                     LabeledContent("Active connection") {
-                        Text(currentEndpoint)
-                            .foregroundStyle(.green)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
+                        HStack(spacing: 6) {
+                            if status.relayed {
+                                Image(systemName: "lock.shield.fill")
+                                    .foregroundStyle(.green)
+                                    .help("Claude connects through a private localhost bridge")
+                            }
+                            Text(status.upstream ?? currentEndpoint)
+                                .foregroundStyle(.green)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
                     }
                 }
 
@@ -157,7 +164,7 @@ struct AppsView: View {
 
     private func selectCurrentSource() {
         status = ClaudeDesktopConnectionStatus.current()
-        guard let endpoint = status.endpoint else { return }
+        guard let endpoint = status.upstream ?? status.endpoint else { return }
         if endpoint == appState.configuration.endpoint.absoluteString {
             selectedSource = "local"
         } else if let host = appState.teamHosts.first(where: {
@@ -267,6 +274,8 @@ private enum ClaudeDesktopAction {
 private struct ClaudeDesktopConnectionStatus {
     let connected: Bool
     let endpoint: String?
+    let upstream: String?
+    let relayed: Bool
 
     static func current() -> Self {
         let support = FileManager.default.urls(
@@ -276,7 +285,9 @@ private struct ClaudeDesktopConnectionStatus {
         let library = support?
             .appendingPathComponent("Claude-3p", isDirectory: true)
             .appendingPathComponent("configLibrary", isDirectory: true)
-        guard let library else { return Self(connected: false, endpoint: nil) }
+        guard let library else {
+            return Self(connected: false, endpoint: nil, upstream: nil, relayed: false)
+        }
         let meta = json(at: library.appendingPathComponent("_meta.json"))
         let profile = json(
             at: library.appendingPathComponent(
@@ -286,9 +297,20 @@ private struct ClaudeDesktopConnectionStatus {
         let connected = meta["appliedId"] as? String
             == "00000000-0000-4000-8000-000000000135"
             && profile["inferenceProvider"] as? String == "gateway"
+        let endpoint = connected ? profile["inferenceGatewayBaseUrl"] as? String : nil
+        let relay = json(
+            at: FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent(".machboost", isDirectory: true)
+                .appendingPathComponent("claude-loopback-relay.json")
+        )
+        let relayed = connected
+            && relay["schema"] as? String == "machboost.claude-loopback-relay.v1"
+            && relay["endpoint"] as? String == endpoint
         return Self(
             connected: connected,
-            endpoint: connected ? profile["inferenceGatewayBaseUrl"] as? String : nil
+            endpoint: endpoint,
+            upstream: relayed ? relay["upstream"] as? String : endpoint,
+            relayed: relayed
         )
     }
 
