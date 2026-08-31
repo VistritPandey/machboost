@@ -29,6 +29,7 @@ from .connections import ConnectionStore, normalize_endpoint
 from .context_bench import benchmark_context_acceleration, context_fingerprint
 from .latency import benchmark_chat_latency
 from .models import alias_rows, backend_available, catalog_rows, resolve_model
+from .routing import HostTarget, MachBoostHostPool
 from .server import (
     DEFAULT_HOST,
     DEFAULT_MAX_QUEUE,
@@ -494,12 +495,15 @@ def run_connect(args: argparse.Namespace, *, output_stream=None, error_stream=No
         client = MachBoostClient(endpoint, api_token=token, timeout=args.timeout)
         health = client.health()
         client.catalog()
-        profile = ConnectionStore().save(name, endpoint, api_token=token)
+        store = ConnectionStore()
+        profile = store.save(name, endpoint, api_token=token)
+        store.select("auto")
     except (MachBoostAPIError, RuntimeError, ValueError) as exc:
         print(f"machboost connect error: {exc}", file=error_stream)
         return 2
     print(f"connected to {profile.name} ({profile.endpoint})", file=output_stream)
     print(f"server {health.get('version') or health.get('status') or 'ready'}", file=output_stream)
+    print("automatic routing enabled across this Mac and saved devices", file=output_stream)
     return 0
 
 
@@ -508,6 +512,7 @@ def run_connections(args: argparse.Namespace, *, output_stream=None, error_strea
     error_stream = error_stream or sys.stderr
     try:
         store = ConnectionStore()
+        mode = store.mode()
         active = store.active()
         profiles = store.list()
     except ValueError as exc:
@@ -517,20 +522,35 @@ def run_connections(args: argparse.Namespace, *, output_stream=None, error_strea
         print(
             json.dumps(
                 {
-                    "schema": "machboost.connections.v1",
-                    "active": active.id if active else "local",
+                    "schema": "machboost.connections.v2",
+                    "active": (
+                        "auto" if mode == "auto" else active.id if active else "local"
+                    ),
                     "connections": [asdict(profile) for profile in profiles],
+                    **(
+                        {"routing": _connection_route_status(store, args)}
+                        if args.probe
+                        else {}
+                    ),
                 },
                 indent=2,
             ),
             file=output_stream,
         )
         return 0
+    if mode == "auto":
+        print("routing: automatic (lowest expected completion time)", file=output_stream)
     print("ACTIVE  NAME                 ENDPOINT", file=output_stream)
-    print(f"{'*' if active is None else ' ':<7} local                http://{DEFAULT_HOST}:{DEFAULT_PORT}", file=output_stream)
+    print(
+        f"{'*' if mode == 'local' else ' ':<7} "
+        f"local                http://{DEFAULT_HOST}:{DEFAULT_PORT}",
+        file=output_stream,
+    )
     for profile in profiles:
-        marker = "*" if active and active.id == profile.id else " "
+        marker = "*" if mode == "fixed" and active and active.id == profile.id else " "
         print(f"{marker:<7} {profile.name:<20} {profile.endpoint}", file=output_stream)
+    if args.probe:
+        print_connection_routes(_connection_route_status(store, args), stream=output_stream)
     return 0
 
 
@@ -538,11 +558,14 @@ def run_use_connection(args: argparse.Namespace, *, output_stream=None, error_st
     output_stream = output_stream or sys.stdout
     error_stream = error_stream or sys.stderr
     try:
-        profile = ConnectionStore().select(args.name)
+        store = ConnectionStore()
+        profile = store.select(args.name)
     except (KeyError, ValueError) as exc:
         print(f"machboost use error: connection {exc} was not found", file=error_stream)
         return 2
-    if profile is None:
+    if store.mode() == "auto":
+        print("using automatic routing across this Mac and saved devices", file=output_stream)
+    elif profile is None:
         print("using local MachBoost server", file=output_stream)
     else:
         print(f"using {profile.name} ({profile.endpoint})", file=output_stream)
@@ -1077,9 +1100,111 @@ def native_server_options(args: argparse.Namespace) -> dict:
     }
 
 
-def connect_resident(args: argparse.Namespace, *, error_stream=None) -> MachBoostClient:
+def _automatic_host_pool(
+    args: argparse.Namespace,
+    *,
+    error_stream=None,
+    autostart: Optional[bool] = None,
+) -> Optional[MachBoostHostPool]:
+    if args.endpoint is not None or os.environ.get("MACHBOOST_HOST", "").strip():
+        return None
+    store = ConnectionStore()
+    if store.mode() != "auto":
+        return None
+
     error_stream = error_stream or sys.stderr
-    if args.no_autostart:
+    targets: list[HostTarget] = []
+    local_endpoint = f"http://{DEFAULT_HOST}:{DEFAULT_PORT}"
+    should_autostart = (
+        not getattr(args, "no_autostart", False)
+        if autostart is None
+        else autostart
+    )
+    if should_autostart:
+        try:
+            _local, started = ensure_server(
+                local_endpoint,
+                timeout=min(30.0, args.timeout),
+            )
+            if started:
+                print(
+                    f"started resident MachBoost server at {local_endpoint}",
+                    file=error_stream,
+                )
+        except MachBoostAPIError as exc:
+            print(f"local host unavailable: {exc}", file=error_stream)
+    targets.append(
+        HostTarget(
+            id="local",
+            name="This Mac",
+            endpoint=local_endpoint,
+            api_token=_machboost_app_api_token(),
+        )
+    )
+    targets.extend(
+        HostTarget(
+            id=profile.id,
+            name=profile.name,
+            endpoint=profile.endpoint,
+            api_token=store.token(profile),
+        )
+        for profile in store.list()
+    )
+    return MachBoostHostPool(targets, timeout=args.timeout)
+
+
+def _connection_route_status(store: ConnectionStore, args: argparse.Namespace) -> dict:
+    targets = [
+        HostTarget(
+            "local",
+            "This Mac",
+            f"http://{DEFAULT_HOST}:{DEFAULT_PORT}",
+            _machboost_app_api_token(),
+        ),
+        *[
+            HostTarget(profile.id, profile.name, profile.endpoint, store.token(profile))
+            for profile in store.list()
+        ],
+    ]
+    pool = MachBoostHostPool(targets, timeout=args.timeout)
+    return pool.route_status(args.model)
+
+
+def print_connection_routes(status: dict, *, stream=None) -> None:
+    stream = stream or sys.stdout
+    print("", file=stream)
+    print("AUTO ROUTE PROBE", file=stream)
+    print(
+        f"{'HOST':<20} {'STATE':<8} {'MODEL':<8} {'LOAD':<6} "
+        f"{'RTT':>8} {'ACTIVE':>7} {'QUEUE':>6} {'ETA':>8}",
+        file=stream,
+    )
+    selected = status.get("selected")
+    for host in status.get("hosts") or ():
+        state = "online" if host["online"] else "offline"
+        model = "ready" if host["supports_model"] else "missing"
+        loaded = "warm" if host["model_loaded"] else "cold"
+        rtt = f"{float(host['round_trip_seconds']) * 1000:.0f}ms"
+        score = host.get("score")
+        eta = f"{float(score):.2f}s" if score is not None else "-"
+        marker = "*" if host["id"] == selected else " "
+        print(
+            f"{marker}{host['name'][:18]:<19} {state:<8} {model:<8} {loaded:<6} "
+            f"{rtt:>8} {int(host['active_requests']):>7} {int(host['queued_requests']):>6} {eta:>8}",
+            file=stream,
+        )
+
+
+def connect_resident(
+    args: argparse.Namespace,
+    *,
+    error_stream=None,
+) -> MachBoostClient | MachBoostHostPool:
+    error_stream = error_stream or sys.stderr
+    pool = _automatic_host_pool(args, error_stream=error_stream)
+    if pool is not None:
+        return pool
+    if getattr(args, "no_autostart", False):
         client = MachBoostClient(args.endpoint, timeout=args.timeout)
         if not client.is_healthy():
             raise MachBoostAPIError("MachBoost server is not running; start it with `machboost serve`")
@@ -1283,11 +1408,14 @@ def run_resident_chat(
             )
             continue
         if command == "/route":
-            route = chat_route_options(args)
-            print(
-                "route: " + (json.dumps(route["route"], sort_keys=True) if route else "local_only"),
-                file=output_stream,
-            )
+            if isinstance(client, MachBoostHostPool):
+                print_connection_routes(client.route_status(args.model), stream=output_stream)
+            else:
+                route = chat_route_options(args)
+                print(
+                    "route: " + (json.dumps(route["route"], sort_keys=True) if route else "local_only"),
+                    file=output_stream,
+                )
             continue
         if command.startswith("/stats"):
             setting = command.partition(" ")[2].strip().lower()
@@ -2235,7 +2363,11 @@ def print_latency_benchmark(artifact: dict, *, stream=None) -> None:
 def run_ps(args: argparse.Namespace, *, output_stream=None, error_stream=None) -> int:
     output_stream = output_stream or sys.stdout
     error_stream = error_stream or sys.stderr
-    client = MachBoostClient(args.endpoint, timeout=args.timeout)
+    client = _automatic_host_pool(
+        args,
+        error_stream=error_stream,
+        autostart=False,
+    ) or MachBoostClient(args.endpoint, timeout=args.timeout)
     if not client.is_healthy():
         print("MachBoost server is not running.", file=output_stream)
         return 0
@@ -2251,15 +2383,20 @@ def run_ps(args: argparse.Namespace, *, output_stream=None, error_stream=None) -
         print("No resident models.", file=output_stream)
         return 0
     print(
-        f"{'NAME':<44} {'BACKEND':<8} {'REQ':>6} {'REP':>4} "
+        f"{'NAME':<38} {'HOST':<14} {'BACKEND':<8} {'REQ':>6} {'REP':>4} "
         f"{'ACTIVE':>6} {'QUEUE':>5} {'IDLE':>9} {'KEEP ALIVE':>12}",
         file=output_stream,
     )
     for model in models:
-        keep_alive = "forever" if model["keep_alive_seconds"] < 0 else f"{model['keep_alive_seconds']:.0f}s"
+        keep_alive = (
+            "forever"
+            if model["keep_alive_seconds"] < 0
+            else f"{model['keep_alive_seconds']:.0f}s"
+        )
         scheduler = model.get("scheduler") or {}
         print(
-            f"{model['model']:<44} {model['backend']:<8} {model['requests']:>6} "
+            f"{model['model']:<38} {str(model.get('fabric_host_name') or 'local')[:14]:<14} "
+            f"{model['backend']:<8} {model['requests']:>6} "
             f"{int(scheduler.get('replicas', 1)):>4} "
             f"{int(scheduler.get('active_requests', 0)):>6} "
             f"{int(scheduler.get('queued_requests', 0)):>5} "
@@ -2563,9 +2700,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     connections = subcommands.add_parser("connections", help="List saved MachBoost devices.")
     connections.add_argument("--json", action="store_true")
+    connections.add_argument(
+        "--probe",
+        action="store_true",
+        help="Measure live latency, load, and model readiness.",
+    )
+    connections.add_argument("--model", help="Model to use when scoring automatic routes.")
+    connections.add_argument("--timeout", type=float, default=10.0)
 
     use_connection = subcommands.add_parser("use", help="Use local or a saved MachBoost device.")
-    use_connection.add_argument("name", help="Connection name, or local.")
+    use_connection.add_argument("name", help="Connection name, local, or auto.")
 
     disconnect = subcommands.add_parser("disconnect", help="Forget a saved MachBoost device.")
     disconnect.add_argument("name", help="Connection name to forget.")
