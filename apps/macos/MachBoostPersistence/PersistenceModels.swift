@@ -18,6 +18,7 @@ public final class Conversation {
     public var title: String
     public var model: String
     public var workspaceID: String?
+    public var preferredInferenceHostID: String?
     public var contextSummary: String?
     public var summarizedThrough: Date?
     public var summaryUpdatedAt: Date?
@@ -39,6 +40,7 @@ public final class Conversation {
         self.title = title
         self.model = model
         self.workspaceID = workspaceID
+        self.preferredInferenceHostID = nil
         self.contextSummary = nil
         self.summarizedThrough = nil
         self.summaryUpdatedAt = nil
@@ -72,9 +74,16 @@ public final class ChatMessage {
     public var generatedTokens: Int?
     public var tokensPerSecond: Double?
     public var inferenceSource: String?
+    public var inferenceHostID: String?
+    public var inferenceHostName: String?
     public var providerID: String?
     public var providerLatencySeconds: Double?
     public var providerCostUSD: Double?
+    public var modelLoadSeconds: Double?
+    public var queueWaitSeconds: Double?
+    public var promptEvalSeconds: Double?
+    public var promptTokens: Int?
+    public var cachedPromptTokens: Int?
     public var wasCancelled: Bool
     public var conversation: Conversation?
 
@@ -98,9 +107,16 @@ public final class ChatMessage {
         self.timelineJSON = timelineJSON
         self.createdAt = createdAt
         self.inferenceSource = nil
+        self.inferenceHostID = nil
+        self.inferenceHostName = nil
         self.providerID = nil
         self.providerLatencySeconds = nil
         self.providerCostUSD = nil
+        self.modelLoadSeconds = nil
+        self.queueWaitSeconds = nil
+        self.promptEvalSeconds = nil
+        self.promptTokens = nil
+        self.cachedPromptTokens = nil
         self.wasCancelled = false
         self.conversation = conversation
     }
