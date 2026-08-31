@@ -349,6 +349,25 @@ class MLXVLMAcceleratorTests(unittest.TestCase):
         self.assertEqual(options["tool_choice"], "required")
         self.assertEqual(options["reasoning_strength"], "medium")
 
+    def test_low_reasoning_strength_bounds_native_thinking(self):
+        self.accelerator.generate_chat(
+            [{"role": "user", "content": "Inspect the code."}],
+            max_tokens=256,
+            enable_thinking=True,
+            reasoning_strength="low",
+        )
+
+        self.assertEqual(self.stream.calls[0]["kwargs"]["thinking_budget"], 64)
+
+    def test_disabled_thinking_does_not_apply_reasoning_budget(self):
+        self.accelerator.generate_chat(
+            [{"role": "user", "content": "Inspect the code."}],
+            max_tokens=256,
+            reasoning_strength="low",
+        )
+
+        self.assertNotIn("thinking_budget", self.stream.calls[0]["kwargs"])
+
     def test_streams_reasoning_separately_across_marker_boundaries(self):
         self.accelerator.model.config = {
             "model_type": "muse_glimmer",
