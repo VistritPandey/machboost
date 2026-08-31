@@ -1220,6 +1220,33 @@ final class MachBoostTests: XCTestCase {
         } catch {}
     }
 
+    func testCodingWorkspaceDefaultsFileReadsToOneHundredTwentyLines() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("machboost-read-limit-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let source = root.appendingPathComponent("Large.swift")
+        let lines = (1 ... 180).map { "let value\($0) = \($0)" }
+        try lines.joined(separator: "\n").write(to: source, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let call = APIToolCall(
+            function: .init(
+                name: "read_file",
+                arguments: .object(["path": .string("Large.swift")])
+            )
+        )
+        let result = try await CodingWorkspace.execute(call, workspaceRoot: root.path)
+        let data = try XCTUnwrap(result.content.data(using: .utf8))
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
+
+        XCTAssertEqual(object["start_line"] as? Int, 1)
+        XCTAssertEqual(object["end_line"] as? Int, 120)
+        XCTAssertEqual(object["truncated"] as? Bool, true)
+        XCTAssertFalse((object["content"] as? String ?? "").contains("value121"))
+    }
+
     func testCodingToolActivitiesRoundTripMultipleCallsAndFormatResults() throws {
         let calls = [
             APIToolCall(
