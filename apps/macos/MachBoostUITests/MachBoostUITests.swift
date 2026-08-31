@@ -171,7 +171,7 @@ final class MachBoostUITests: XCTestCase {
 
         send("Use Muse tools", in: app)
 
-        let reasoning = app.disclosureTriangles["message-reasoning"]
+        let reasoning = app.descendants(matching: .any)["message-reasoning"]
         let tool = app.descendants(matching: .any)["tool-call-search_repository"]
         let response = app.staticTexts["Fixture response."]
         XCTAssertTrue(reasoning.waitForExistence(timeout: 8))
