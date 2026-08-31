@@ -130,7 +130,7 @@ enum CodingWorkspace {
             properties: [
                 "path": stringProperty("Repository-relative file path"),
                 "start_line": numberProperty("First one-based line; defaults to 1"),
-                "end_line": numberProperty("Last one-based line; at most 400 lines are returned"),
+                "end_line": numberProperty("Last one-based line; defaults to 120 and at most 400 lines are returned"),
             ],
             required: ["path"]
         ),
@@ -423,7 +423,7 @@ enum CodingWorkspace {
                 root: root,
                 path: path,
                 startLine: boundedInt(arguments["start_line"], default: 1, range: 1 ... 1_000_000),
-                endLine: boundedInt(arguments["end_line"], default: 400, range: 1 ... 1_000_000)
+                endLine: boundedInt(arguments["end_line"], default: 120, range: 1 ... 1_000_000)
             )
             changedPath = nil
             changePatch = nil
