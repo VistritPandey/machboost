@@ -2895,8 +2895,12 @@ class TeamGatewayHTTPTests(unittest.TestCase):
             for message in messages
             if message.get("role") == "system"
         ]
-        self.assertIn("repository evidence", system_messages[0])
-        self.assertIn("prior team experience", system_messages[1])
+        self.assertTrue(
+            any("stable repository map" in message for message in system_messages)
+        )
+        self.assertTrue(
+            any("prior team experience" in message for message in system_messages)
+        )
         self.assertEqual(response["machboost"]["memory"]["retrieved"], 1)
         self.assertEqual(deleted["removed"], 1)
 
