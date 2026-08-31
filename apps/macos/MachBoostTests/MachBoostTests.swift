@@ -201,6 +201,49 @@ final class MachBoostTests: XCTestCase {
         XCTAssertEqual(message.tokensPerSecond, 25)
     }
 
+    func testTurnMetricsPersistHostAndPromptPrefillBreakdown() throws {
+        let event = try JSONDecoder().decode(
+            ChatEvent.self,
+            from: Data(
+                #"{"request_id":"prefill-1","message":{"role":"assistant","content":"Done"},"done":true,"total_duration":18200000000,"load_duration":0,"prompt_eval_duration":17700000000,"prompt_eval_count":2204,"eval_duration":500000000,"eval_count":20,"machboost":{"backend":"mlx-vlm","time_to_first_token_seconds":18.0,"scheduler":{"queue_wait_seconds":0.0},"stats":{"cached_prompt_tokens":2188,"prompt_cache_prefix_tokens":2188}}}"#.utf8
+            )
+        )
+        var metrics = GenerationTurnMetrics()
+        metrics.absorb(event)
+        metrics.recordRoute(
+            InferenceRouteRecord(
+                hostID: "studio-id",
+                hostName: "Mac Studio",
+                expectedDelay: 0.1
+            )
+        )
+        let message = ChatMessage(role: .assistant, content: "Done")
+
+        metrics.apply(to: message)
+
+        XCTAssertEqual(message.inferenceHostID, "studio-id")
+        XCTAssertEqual(message.inferenceHostName, "Mac Studio")
+        XCTAssertEqual(message.timeToFirstTokenSeconds, 18)
+        XCTAssertEqual(message.modelLoadSeconds, nil)
+        XCTAssertEqual(message.queueWaitSeconds, 0)
+        XCTAssertEqual(message.promptEvalSeconds, 17.7)
+        XCTAssertEqual(message.promptTokens, 2_204)
+        XCTAssertEqual(message.cachedPromptTokens, 2_188)
+        XCTAssertEqual(message.tokensPerSecond, 40)
+    }
+
+    @MainActor
+    func testConversationPersistsPreferredInferenceDevice() {
+        let conversation = Conversation(
+            title: "Shared coding task",
+            model: "mlx-community/Muse-Glimmer-30B-4bit"
+        )
+
+        conversation.preferredInferenceHostID = "studio-id"
+
+        XCTAssertEqual(conversation.preferredInferenceHostID, "studio-id")
+    }
+
     @MainActor
     func testHostDiscoveryRecognizesOnlyMatchingDeviceIdentityAsSelf() {
         XCTAssertTrue(
