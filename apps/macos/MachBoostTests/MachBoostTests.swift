@@ -84,9 +84,55 @@ final class MachBoostTests: XCTestCase {
             HostRoutingPolicy.score(
                 metrics: availableResident,
                 modelLoaded: true,
-                reservedRequests: 2
+                reservedRequests: 8
             ),
             HostRoutingPolicy.score(metrics: idleColdHost, modelLoaded: false)
+        )
+
+        XCTAssertLessThan(
+            HostRoutingPolicy.score(
+                metrics: availableResident,
+                modelLoaded: true,
+                roundTripSeconds: 0.01,
+                replicas: 2,
+                activeRequests: 1,
+                queuedRequests: 1
+            ),
+            HostRoutingPolicy.score(
+                metrics: availableResident,
+                modelLoaded: true,
+                roundTripSeconds: 0.2,
+                replicas: 1,
+                activeRequests: 2,
+                queuedRequests: 2
+            )
+        )
+    }
+
+    func testHostRoutingFailsOverOnlyBeforeVisibleOutput() {
+        XCTAssertTrue(
+            HostRoutingPolicy.canFailOver(
+                error: MachBoostAPIError.server(status: 503, message: "busy"),
+                emittedOutput: false
+            )
+        )
+        XCTAssertTrue(
+            HostRoutingPolicy.canFailOver(
+                error: URLError(.timedOut),
+                emittedOutput: false
+            )
+        )
+        XCTAssertFalse(
+            HostRoutingPolicy.canFailOver(
+                error: MachBoostAPIError.server(status: 503, message: "busy"),
+                emittedOutput: true
+            )
+        )
+        XCTAssertFalse(
+            HostRoutingPolicy.canFailOver(
+                error: MachBoostAPIError.server(status: 400, message: "bad request"),
+                emittedOutput: false
+            )
         )
     }
 
