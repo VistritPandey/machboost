@@ -1489,7 +1489,9 @@ struct ChatView: View {
                 if isCancellation(error) {
                     assistant.wasCancelled = true
                 } else {
-                    if assistant.content.isEmpty, assistant.toolCallsJSON == nil {
+                    if assistant.content.isEmpty,
+                       assistant.reasoningContent?.isEmpty != false,
+                       assistant.toolCallsJSON == nil {
                         modelContext.delete(assistant)
                     }
                     appState.presentedError = error.localizedDescription
@@ -1550,7 +1552,7 @@ struct ChatView: View {
         defer {
             turnMetrics.apply(to: assistant)
         }
-        let roundLimit = codingActive ? CodingWorkspace.maximumToolRounds + 1 : 1
+        let roundLimit = codingActive ? CodingWorkspace.maximumToolRounds + 1 : 2
         for round in 0 ..< roundLimit {
             try Task.checkCancellation()
             let requestID = round == 0 ? requestPrefix : "\(requestPrefix)-\(round)"
@@ -1562,7 +1564,9 @@ struct ChatView: View {
                 requestTranscript.append(
                     APIChatMessage(
                         role: MessageRole.system.rawValue,
-                        content: "The repository tool phase is complete. Answer the user now using the results already returned. Do not request another tool."
+                        content: codingActive
+                            ? "The repository tool phase is complete. Answer the user now using the results already returned. Do not request another tool."
+                            : "Answer the user now with visible text. Do not emit only hidden reasoning or control tokens."
                     )
                 )
             }
@@ -1649,16 +1653,16 @@ struct ChatView: View {
                 if event.done { turnMetrics.absorb(event) }
             }
             turnMetrics.recordRoute(appState.consumeInferenceRoute(requestID: requestID))
-            if codingActive,
-               !forceFinalResponse,
-               roundToolCalls.isEmpty,
-               roundContent.isEmpty,
-               !activities.isEmpty {
-                // Some tool-capable models end a round after reading a tool
-                // result with only hidden reasoning/control tokens. Give them
-                // one explicit chance to produce the user-facing answer.
-                forceFinalResponse = true
-                continue
+            if roundToolCalls.isEmpty, roundContent.isEmpty {
+                if !forceFinalResponse {
+                    // Some models occasionally stop after hidden reasoning or
+                    // protocol tokens. Retry once before treating it as an error.
+                    forceFinalResponse = true
+                    continue
+                }
+                throw MachBoostAPIError.stream(
+                    "The model ended without producing a visible answer after one automatic retry."
+                )
             }
             guard
                 codingActive,
