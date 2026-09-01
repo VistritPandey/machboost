@@ -30,6 +30,7 @@ from machboost.server import (
     model_config,
     normalize_tools,
     parse_keep_alive,
+    request_affinity_key,
     result_content_and_tool_calls,
 )
 from machboost.team import TeamStore
@@ -286,6 +287,28 @@ class PrefixDroppingAccelerator(FakeAccelerator):
 
 
 class NativePromptCacheConfigurationTests(unittest.TestCase):
+    def test_vlm_requests_use_tenant_as_implicit_cache_affinity(self):
+        self.assertEqual(
+            request_affinity_key({"_tenant_key": "claude-desktop"}),
+            "tenant:claude-desktop",
+        )
+
+    def test_explicit_and_image_affinity_take_precedence_over_tenant(self):
+        options = {
+            "_tenant_key": "claude-desktop",
+            "affinity_key": "conversation-42",
+        }
+        self.assertEqual(
+            request_affinity_key(options, image_sources=["image.png"]),
+            "client:conversation-42",
+        )
+        self.assertTrue(
+            request_affinity_key(
+                {"_tenant_key": "claude-desktop"},
+                image_sources=["image.png"],
+            ).startswith("images:"),
+        )
+
     def test_server_requests_enable_tenant_isolated_prompt_cache(self):
         accelerator = FakeAccelerator()
 
