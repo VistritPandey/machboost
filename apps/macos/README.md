@@ -312,8 +312,8 @@ Build an ad-hoc signed DMG for local packaging and runtime tests without Apple
 credentials:
 
 ```sh
-./scripts/release_macos.sh 0.15.3-local --local
-open dist/macos/MachBoost-0.15.3-local-arm64.dmg
+./scripts/release_macos.sh 0.16.0-local --local
+open dist/macos/MachBoost-0.16.0-local-arm64.dmg
 ```
 
 Local mode builds the locked runtime, archives the arm64 app, embeds and signs
@@ -334,14 +334,14 @@ export MACHBOOST_DEVELOPER_ID='Developer ID Application: ...'
 export MACHBOOST_NOTARY_PROFILE=...
 export SPARKLE_PUBLIC_ED_KEY=...
 export SPARKLE_PRIVATE_KEY=/secure/path/to/sparkle-private-key
-./scripts/release_macos.sh 0.15.3
-./scripts/publish_macos_release.sh 0.15.3 ./release-notes/0.15.3.md
+./scripts/release_macos.sh 0.16.0
+./scripts/publish_macos_release.sh 0.16.0 ./release-notes/0.16.0.md
 ```
 
 The release script builds the embedded runtime, archives the arm64 app, signs
 nested Mach-O files and the app, creates and notarizes a DMG, staples the
 ticket, runs Gatekeeper verification, writes a SHA-256 checksum, and produces a
-signed Sparkle appcast. The publisher requires an existing `v0.15.3` tag, an
+signed Sparkle appcast. The publisher requires an existing `v0.16.0` tag, an
 authenticated GitHub CLI session, and an explicit release-notes file. It refuses
 to overwrite an existing release and uploads the DMG, checksum, and appcast to
 the matching GitHub release.
