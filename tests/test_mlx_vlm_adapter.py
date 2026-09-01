@@ -37,6 +37,19 @@ class FakeModel:
     config = {"model_type": "fake_vlm"}
 
 
+class FakeTokenizer:
+    def __init__(self, decoded: str) -> None:
+        self.decoded = decoded
+
+    def decode(self, token_ids, *, skip_special_tokens=False):
+        return self.decoded
+
+
+class FakeProcessor:
+    def __init__(self, decoded: str) -> None:
+        self.tokenizer = FakeTokenizer(decoded)
+
+
 class FakeVisionStream:
     def __init__(self) -> None:
         self.calls = []
@@ -177,6 +190,35 @@ class MLXVLMAcceleratorTests(unittest.TestCase):
         self.assertEqual(text, "AB")
         self.assertAlmostEqual(stats.mean_token_logprob, -0.45)
         self.assertAlmostEqual(stats.minimum_token_logprob, -0.7)
+
+    def test_final_token_decode_repairs_a_missing_stream_prefix(self):
+        def truncated_stream(model, processor, prompt, **kwargs):
+            yield FakeGenerationRow("", generation_tokens=1, token=10)
+            yield FakeGenerationRow("’re ", generation_tokens=2, token=11)
+            yield FakeGenerationRow("welcome!", generation_tokens=3, token=12)
+            yield FakeGenerationRow("", generation_tokens=3, token=12)
+
+        accelerator = MLXVLMAccelerator(
+            FakeModel(),
+            FakeProcessor("You’re welcome!"),
+            model_name="fake-vlm",
+            asset_cache_dir=self.root / "repair-assets",
+            stream_generate_fn=truncated_stream,
+            apply_chat_template_fn=lambda *args, **kwargs: "templated prompt",
+        )
+        emitted = []
+        try:
+            text, stats = accelerator.generate(
+                "Thanks.",
+                max_tokens=3,
+                on_text=emitted.append,
+            )
+        finally:
+            accelerator.close()
+
+        self.assertEqual("".join(emitted), "’re welcome!")
+        self.assertEqual(text, "You’re welcome!")
+        self.assertEqual(stats.generated_tokens, 3)
 
     def test_cold_vision_resize_reaches_native_stream_and_stats(self):
         decision = ColdVisionDecision(
