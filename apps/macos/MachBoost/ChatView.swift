@@ -58,6 +58,8 @@ struct ChatView: View {
     @AppStorage("machboost.chat.maxTokens") private var maxTokens = 512
     @AppStorage("machboost.chat.temperature") private var temperature = 0.2
     @AppStorage("machboost.chat.reasoningStrength") private var reasoningStrength = "off"
+    @AppStorage("machboost.chat.extensionToolsEnabled") private var extensionToolsEnabled = false
+    @AppStorage("machboost.chat.repositoryContextEnabled") private var repositoryContextEnabled = false
     @AppStorage("machboost.chat.showReasoning") private var showReasoning = true
     @AppStorage("machboost.chat.autoSummarize") private var autoSummarize = true
     @AppStorage("machboost.chat.summaryThreshold") private var summaryThreshold = 90
@@ -98,13 +100,17 @@ struct ChatView: View {
             }
         }
         .confirmationDialog(
-            "Allow repository change?",
+            toolApproval.call.map(ExtensionTools.supports) == true
+                ? "Allow connected tool?"
+                : "Allow repository change?",
             isPresented: Binding(
                 get: { toolApproval.call != nil },
                 set: { if !$0 { resolveToolApproval(false) } }
             )
         ) {
-            Button("Apply Change") { resolveToolApproval(true) }
+            Button(toolApproval.call.map(ExtensionTools.supports) == true ? "Allow Once" : "Apply Change") {
+                resolveToolApproval(true)
+            }
             Button("Deny", role: .cancel) { resolveToolApproval(false) }
         } message: {
             if let call = toolApproval.call {
@@ -958,6 +964,16 @@ struct ChatView: View {
 
             HStack(spacing: 8) {
                 developerModeButton
+                if appState.mcpServers.contains(where: \.enabled) {
+                    Divider()
+                        .frame(height: 14)
+                    extensionToolsButton
+                }
+                if selectedWorkspace != nil, !codingSessionAvailable {
+                    Divider()
+                        .frame(height: 14)
+                    repositoryContextButton
+                }
                 if codingSessionAvailable {
                     Divider()
                         .frame(height: 14)
@@ -1009,6 +1025,36 @@ struct ChatView: View {
                 ? "Choose a repository and enable developer tools"
                 : "Allow the model to inspect and edit the selected repository"
         )
+    }
+
+    private var extensionToolsButton: some View {
+        Button {
+            extensionToolsEnabled.toggle()
+        } label: {
+            Label("Tools", systemImage: "wrench.and.screwdriver")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(extensionToolsEnabled ? Color.green : Color.secondary)
+        }
+        .buttonStyle(.borderless)
+        .fixedSize()
+        .accessibilityLabel("Connected tools")
+        .accessibilityValue(extensionToolsEnabled ? "On" : "Off")
+        .help("Allow this chat to search and call enabled MCP connectors")
+    }
+
+    private var repositoryContextButton: some View {
+        Button {
+            repositoryContextEnabled.toggle()
+        } label: {
+            Label("Repo context", systemImage: "text.magnifyingglass")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(repositoryContextEnabled ? Color.green : Color.secondary)
+        }
+        .buttonStyle(.borderless)
+        .fixedSize()
+        .accessibilityLabel("Repository context")
+        .accessibilityValue(repositoryContextEnabled ? "On" : "Off")
+        .help("Retrieve relevant repository text for this chat")
     }
 
     private var permissionMenu: some View {
@@ -1150,7 +1196,10 @@ struct ChatView: View {
                 providerID: remote || !mode.usesExternal ? nil : selectedProvider?.id,
                 model: remote || !mode.usesExternal ? nil : effectiveProviderModel
             ),
-            memory: memory
+            memory: memory,
+            // The app sends its local reusable instructions explicitly so
+            // they follow a request to whichever shared host wins routing.
+            skills: "off"
         )
     }
 
@@ -1261,7 +1310,11 @@ struct ChatView: View {
     }
 
     private func prepareCodingPrefixIfNeeded() async {
-        guard codingSessionAvailable, !isGenerating else { return }
+        guard
+            codingSessionAvailable,
+            !isGenerating,
+            conversation.orderedMessages.isEmpty
+        else { return }
         let requestID = "coding-prefix-\(UUID().uuidString.lowercased())"
         codingPrefixRequestID = requestID
         isPreparingCodingPrefix = true
@@ -1549,10 +1602,15 @@ struct ChatView: View {
         var turnMetrics = GenerationTurnMetrics()
         var completedToolResults: [APIToolCall.Function: String] = [:]
         var forceFinalResponse = false
+        let usesExtensionTools = extensionToolsEnabled
+            && appState.mcpServers.contains { $0.enabled }
+        let availableTools = (codingActive ? CodingWorkspace.tools(for: permissionMode) : [])
+            + (usesExtensionTools ? ExtensionTools.definitions : [])
+        let toolsActive = !availableTools.isEmpty
         defer {
             turnMetrics.apply(to: assistant)
         }
-        let roundLimit = codingActive ? CodingWorkspace.maximumToolRounds + 1 : 2
+        let roundLimit = toolsActive ? CodingWorkspace.maximumToolRounds + 1 : 2
         for round in 0 ..< roundLimit {
             try Task.checkCancellation()
             let requestID = round == 0 ? requestPrefix : "\(requestPrefix)-\(round)"
@@ -1564,8 +1622,8 @@ struct ChatView: View {
                 requestTranscript.append(
                     APIChatMessage(
                         role: MessageRole.system.rawValue,
-                        content: codingActive
-                            ? "The repository tool phase is complete. Answer the user now using the results already returned. Do not request another tool."
+                        content: toolsActive
+                            ? "The tool phase is complete. Answer the user now using the results already returned. Do not request another tool."
                             : "Answer the user now with visible text. Do not emit only hidden reasoning or control tokens."
                     )
                 )
@@ -1582,11 +1640,15 @@ struct ChatView: View {
                 options: .init(
                     maxTokens: maxTokens,
                     temperature: temperature,
-                    affinityKey: conversationAffinityKey
+                    affinityKey: round == 0
+                        ? conversationAffinityKey
+                        : "\(conversationAffinityKey):turn:\(requestPrefix)"
                 ),
                 // Dev mode reads targeted files through tools; injecting the whole
                 // repository map here duplicates context and delays the first token.
-                workspaceID: appState.inferenceMode == .local && !codingActive
+                workspaceID: appState.inferenceMode == .local
+                    && !codingActive
+                    && repositoryContextEnabled
                     ? conversation.workspaceID
                     : nil,
                 workspaceTopK: nil,
@@ -1595,18 +1657,20 @@ struct ChatView: View {
                 // Keep the tool schema stable across rounds so the resident
                 // runtime can reuse the long coding prefix. The final-answer
                 // instruction below is what prevents another tool request.
-                tools: codingActive ? CodingWorkspace.tools(for: permissionMode) : nil,
+                tools: toolsActive ? availableTools : nil,
                 machboost: requestExtensions(memory: codingActive ? "off" : nil)
             )
             var roundContent = ""
             var roundToolCalls: [APIToolCall] = []
             var hasVisibleRoundContent = false
+            var hasVisibleRoundOutput = false
             for try await event in try appState.streamChat(
                 request,
                 preferredHostID: conversation.preferredInferenceHostID
             ) {
                 if let error = event.error { throw MachBoostAPIError.stream(error) }
                 if let thinking = event.message?.thinking, !thinking.isEmpty {
+                    hasVisibleRoundOutput = true
                     assistant.reasoningContent = (assistant.reasoningContent ?? "") + thinking
                     timeline.appendText(thinking, kind: .reasoning)
                     persist(timeline, to: assistant)
@@ -1620,6 +1684,7 @@ struct ChatView: View {
                         hasVisibleRoundContent = !visibleChunk.isEmpty
                     }
                     if !visibleChunk.isEmpty {
+                        hasVisibleRoundOutput = true
                         roundContent += visibleChunk
                         assistant.content += visibleChunk
                         timeline.appendText(visibleChunk, kind: .content)
@@ -1627,6 +1692,7 @@ struct ChatView: View {
                     }
                 }
                 if let calls = event.message?.toolCalls, !calls.isEmpty {
+                    hasVisibleRoundOutput = true
                     roundToolCalls.append(contentsOf: calls)
                     allToolCalls.append(contentsOf: calls)
                     if let data = try? JSONEncoder().encode(allToolCalls) {
@@ -1649,8 +1715,15 @@ struct ChatView: View {
                         timeline: &timeline,
                         timelineStart: timelineStart
                     )
+                    hasVisibleRoundOutput = hasVisibleRoundOutput
+                        || !CodingWorkspace.visibleAssistantText(fullContent).isEmpty
                 }
-                if event.done { turnMetrics.absorb(event) }
+                if event.done {
+                    turnMetrics.absorb(
+                        event,
+                        producedVisibleOutput: hasVisibleRoundOutput
+                    )
+                }
             }
             turnMetrics.recordRoute(appState.consumeInferenceRoute(requestID: requestID))
             if roundToolCalls.isEmpty, roundContent.isEmpty {
@@ -1665,10 +1738,9 @@ struct ChatView: View {
                 )
             }
             guard
-                codingActive,
+                toolsActive,
                 !forceFinalResponse,
-                !roundToolCalls.isEmpty,
-                let workspace
+                !roundToolCalls.isEmpty
             else { return }
 
             transcript.append(
@@ -1701,10 +1773,15 @@ struct ChatView: View {
                     continue
                 }
                 repeatedOnly = false
-                let permission = CodingWorkspace.permissionDecision(
-                    for: call,
-                    mode: permissionMode
-                )
+                let permission: CodingPermissionDecision
+                if ExtensionTools.supports(call) {
+                    permission = ExtensionTools.requiresApproval(call) ? .ask : .allow
+                } else {
+                    permission = CodingWorkspace.permissionDecision(
+                        for: call,
+                        mode: permissionMode
+                    )
+                }
                 let approved: Bool
                 let denialMessage: String
                 switch permission {
@@ -1713,7 +1790,9 @@ struct ChatView: View {
                     denialMessage = ""
                 case .ask:
                     approved = await requestToolApproval(call)
-                    denialMessage = "The user denied this repository change."
+                    denialMessage = ExtensionTools.supports(call)
+                        ? "The user denied this connected tool call."
+                        : "The user denied this repository change."
                 case let .deny(reason):
                     approved = false
                     denialMessage = reason
@@ -1732,10 +1811,19 @@ struct ChatView: View {
                     persist(activities, to: assistant)
                     persist(timeline, to: assistant)
                     do {
-                        let toolResult = try await CodingWorkspace.execute(
-                            call,
-                            workspaceRoot: workspace.path
-                        )
+                        let toolResult: CodingToolResult
+                        if ExtensionTools.supports(call) {
+                            toolResult = try await ExtensionTools.execute(call, appState: appState)
+                        } else if let workspace {
+                            toolResult = try await CodingWorkspace.execute(
+                                call,
+                                workspaceRoot: workspace.path
+                            )
+                        } else {
+                            throw CodingWorkspaceError.invalidArguments(
+                                "Select a repository before using coding tools."
+                            )
+                        }
                         result = toolResult.content
                         activities[activityIndex].state = .succeeded
                         activities[activityIndex].output = toolResult.content
@@ -1828,6 +1916,18 @@ struct ChatView: View {
         codingActive: Bool
     ) throws -> [APIChatMessage] {
         var messages: [APIChatMessage] = []
+        let enabledSkills = appState.skills.filter(\.enabled)
+        if !enabledSkills.isEmpty {
+            let instructions = enabledSkills.map {
+                "## \($0.name)\n\($0.instructions)"
+            }.joined(separator: "\n\n")
+            messages.append(
+                APIChatMessage(
+                    role: MessageRole.system.rawValue,
+                    content: "Reusable instructions enabled in MachBoost:\n\n\(instructions)"
+                )
+            )
+        }
         if codingActive {
             messages.append(
                 APIChatMessage(
