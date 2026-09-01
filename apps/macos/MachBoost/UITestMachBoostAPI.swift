@@ -9,6 +9,7 @@ final class UITestMachBoostAPI: MachBoostAPIProtocol, @unchecked Sendable {
     ]
     private var cancelledRequests: Set<String> = []
     private var chatRequestCount = 0
+    private var chatAffinityByRequestPrefix: [String: String] = [:]
     private lazy var fixtureWorkspaceRoot: String = {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("machboost-ui-workspace-\(ProcessInfo.processInfo.processIdentifier)")
@@ -148,6 +149,7 @@ final class UITestMachBoostAPI: MachBoostAPIProtocol, @unchecked Sendable {
         return AsyncThrowingStream { continuation in
             let task = Task<Void, Never> {
                 do {
+                    try self.validateStableAffinity(request)
                     if self.isCodingFixture(request) {
                         try await self.streamCodingFixture(
                             request,
@@ -211,6 +213,29 @@ final class UITestMachBoostAPI: MachBoostAPIProtocol, @unchecked Sendable {
                 }
             }
             continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    private func validateStableAffinity(_ request: ChatRequest) throws {
+        let components = request.requestID.split(separator: "-")
+        let prefix: String
+        if components.last.flatMap({ Int($0) }) != nil {
+            prefix = components.dropLast().joined(separator: "-")
+        } else {
+            prefix = request.requestID
+        }
+        let affinity = request.options.affinityKey ?? "<none>"
+        let changed = lock.withLock { () -> Bool in
+            if let previous = chatAffinityByRequestPrefix[prefix] {
+                return previous != affinity
+            }
+            chatAffinityByRequestPrefix[prefix] = affinity
+            return false
+        }
+        if changed {
+            throw MachBoostAPIError.stream(
+                "Agent rounds changed cache affinity and discarded the resident prefix."
+            )
         }
     }
 
