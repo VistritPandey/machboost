@@ -218,7 +218,7 @@ def select_anthropic_tools(
     if limit <= 0 or len(candidates) <= limit:
         return candidates
 
-    query = _latest_anthropic_user_text(messages)
+    query = _initial_anthropic_user_text(messages)
     query_terms = _tool_terms(query)
     used_names = _anthropic_tool_names(messages)
     forced_name = ""
@@ -263,10 +263,10 @@ def select_anthropic_tools(
     return [tool for index, tool in enumerate(candidates) if index in selected_indexes]
 
 
-def _latest_anthropic_user_text(messages: Any) -> str:
+def _initial_anthropic_user_text(messages: Any) -> str:
     if not isinstance(messages, list):
         return ""
-    for message in reversed(messages):
+    for message in messages:
         if not isinstance(message, dict) or message.get("role") != "user":
             continue
         return _anthropic_text(message.get("content", ""))[-16_000:]
