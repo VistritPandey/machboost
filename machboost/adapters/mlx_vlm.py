@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import os
 import re
+import sys
 import threading
 import time
 from collections import OrderedDict
@@ -716,6 +717,8 @@ class MLXVLMAccelerator:
                     stream_options["apc_manager"] = apc_manager
                     prompt_cache_enabled = True
             if apc_manager is not None:
+                if cache_key:
+                    stream_options["apc_tenant"] = cache_key
                 apc_matched_before = int(
                     apc_manager.stats_snapshot().get("matched_tokens", 0)
                 )
@@ -1005,7 +1008,43 @@ class MLXVLMAccelerator:
                 )
             except ValueError:
                 num_blocks = 2048
-            self._apc_manager = apc.APCManager(num_blocks=num_blocks, block_size=16)
+            manager_options: dict[str, Any] = {
+                "num_blocks": num_blocks,
+                "block_size": 16,
+            }
+            disk_enabled = os.environ.get(
+                "MACHBOOST_MLX_APC_DISK", "1"
+            ).strip().lower() not in {"0", "false", "no", "off"}
+            disk_store = getattr(apc, "DiskBlockStore", None)
+            if disk_enabled and callable(disk_store):
+                configured_root = os.environ.get("MACHBOOST_MLX_APC_DISK_PATH")
+                if configured_root:
+                    disk_root = Path(configured_root).expanduser()
+                elif sys.platform == "darwin":
+                    disk_root = Path.home() / "Library" / "Caches" / "MachBoost" / "apc"
+                else:
+                    disk_root = Path(
+                        os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")
+                    ).expanduser() / "machboost" / "apc"
+                try:
+                    max_gb = max(
+                        0.25,
+                        float(os.environ.get("MACHBOOST_MLX_APC_DISK_GB", "8")),
+                    )
+                except ValueError:
+                    max_gb = 8.0
+                try:
+                    manager_options["disk"] = disk_store(
+                        disk_root,
+                        namespace=self.model_name,
+                        num_workers=1,
+                        max_bytes=int(max_gb * (1 << 30)),
+                    )
+                except Exception:
+                    # Disk persistence is an acceleration tier, never a reason
+                    # to make local inference unavailable.
+                    pass
+            self._apc_manager = apc.APCManager(**manager_options)
         return self._apc_manager
 
     def _prompt_cache_for(self, images: Sequence[str]) -> Any:
@@ -1072,6 +1111,11 @@ class MLXVLMAccelerator:
         if self._closed:
             return
         self.reset_cache()
+        manager = self._apc_manager
+        self._apc_manager = None
+        close_manager = getattr(manager, "close", None)
+        if callable(close_manager):
+            self._executor.submit(close_manager).result()
         self._closed = True
         self._executor.shutdown(wait=True, cancel_futures=True)
 
