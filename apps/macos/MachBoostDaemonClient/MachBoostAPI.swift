@@ -67,6 +67,33 @@ public protocol MachBoostAPIProtocol: AnyObject, Sendable {
     func cacheMetrics() async throws -> CacheMetrics
     func deleteMemory(id: String) async throws
     func providers() async throws -> [ProviderSummary]
+    func extensions() async throws -> ExtensionsResponse
+    func configureMCPServer(
+        id: String?,
+        name: String,
+        transport: String,
+        url: String?,
+        command: String?,
+        args: [String],
+        environment: [String: String],
+        headers: [String: String],
+        enabled: Bool
+    ) async throws -> MCPServerSummary
+    func deleteMCPServer(id: String) async throws
+    func testMCPServer(id: String) async throws -> [MCPToolSummary]
+    func searchMCPTools(query: String, limit: Int) async throws -> [MCPToolSummary]
+    func callMCPTool(
+        serverID: String,
+        name: String,
+        arguments: JSONValue
+    ) async throws -> MCPToolResult
+    func configureSkill(
+        id: String?,
+        name: String,
+        instructions: String,
+        enabled: Bool
+    ) async throws -> SkillSummary
+    func deleteSkill(id: String) async throws
     func configureProvider(
         id: String?,
         name: String,
@@ -163,6 +190,46 @@ public extension MachBoostAPIProtocol {
     }
     func deleteMemory(id: String) async throws {}
     func providers() async throws -> [ProviderSummary] { [] }
+    func extensions() async throws -> ExtensionsResponse {
+        ExtensionsResponse(
+            schema: "machboost.extensions.v1",
+            mcpServers: [],
+            skills: [],
+            gatewayTools: []
+        )
+    }
+    func configureMCPServer(
+        id: String?,
+        name: String,
+        transport: String,
+        url: String?,
+        command: String?,
+        args: [String],
+        environment: [String: String],
+        headers: [String: String],
+        enabled: Bool
+    ) async throws -> MCPServerSummary {
+        throw MachBoostAPIError.server(status: 501, message: "MCP connectors are unavailable.")
+    }
+    func deleteMCPServer(id: String) async throws {}
+    func testMCPServer(id: String) async throws -> [MCPToolSummary] { [] }
+    func searchMCPTools(query: String, limit: Int) async throws -> [MCPToolSummary] { [] }
+    func callMCPTool(
+        serverID: String,
+        name: String,
+        arguments: JSONValue
+    ) async throws -> MCPToolResult {
+        throw MachBoostAPIError.server(status: 501, message: "MCP connectors are unavailable.")
+    }
+    func configureSkill(
+        id: String?,
+        name: String,
+        instructions: String,
+        enabled: Bool
+    ) async throws -> SkillSummary {
+        throw MachBoostAPIError.server(status: 501, message: "Reusable instructions are unavailable.")
+    }
+    func deleteSkill(id: String) async throws {}
     func configureProvider(
         id: String?,
         name: String,
@@ -496,6 +563,107 @@ public final class MachBoostAPI: MachBoostAPIProtocol, @unchecked Sendable {
         return response.providers
     }
 
+    public func extensions() async throws -> ExtensionsResponse {
+        try await get("/api/extensions")
+    }
+
+    public func configureMCPServer(
+        id: String?,
+        name: String,
+        transport: String,
+        url: String?,
+        command: String?,
+        args: [String],
+        environment: [String: String],
+        headers: [String: String],
+        enabled: Bool
+    ) async throws -> MCPServerSummary {
+        struct Response: Decodable { let server: MCPServerSummary }
+        var payload: [String: Any] = [
+            "name": name,
+            "transport": transport,
+            "args": args,
+            "enabled": enabled,
+        ]
+        if let id { payload["id"] = id }
+        if id == nil || !environment.isEmpty { payload["env"] = environment }
+        if id == nil || !headers.isEmpty { payload["headers"] = headers }
+        if let url { payload["url"] = url }
+        if let command { payload["command"] = command }
+        let response: Response = try await post("/api/mcp/servers", jsonObject: payload)
+        return response.server
+    }
+
+    public func deleteMCPServer(id: String) async throws {
+        struct Response: Decodable { let removed: Bool }
+        let response: Response = try await post(
+            "/api/mcp/servers/delete",
+            jsonObject: ["server_id": id]
+        )
+        guard response.removed else { throw MachBoostAPIError.invalidResponse }
+    }
+
+    public func testMCPServer(id: String) async throws -> [MCPToolSummary] {
+        struct Response: Decodable { let tools: [MCPToolSummary] }
+        let response: Response = try await post(
+            "/api/mcp/servers/test",
+            jsonObject: ["server_id": id]
+        )
+        return response.tools
+    }
+
+    public func searchMCPTools(query: String, limit: Int = 8) async throws -> [MCPToolSummary] {
+        struct Response: Decodable { let tools: [MCPToolSummary] }
+        let response: Response = try await post(
+            "/api/mcp/search",
+            jsonObject: ["query": query, "limit": limit]
+        )
+        return response.tools
+    }
+
+    public func callMCPTool(
+        serverID: String,
+        name: String,
+        arguments: JSONValue
+    ) async throws -> MCPToolResult {
+        struct Response: Decodable { let result: MCPToolResult }
+        let response: Response = try await post(
+            "/api/mcp/call",
+            jsonObject: [
+                "server_id": serverID,
+                "name": name,
+                "arguments": Self.foundationValue(arguments),
+            ]
+        )
+        return response.result
+    }
+
+    public func configureSkill(
+        id: String?,
+        name: String,
+        instructions: String,
+        enabled: Bool
+    ) async throws -> SkillSummary {
+        struct Response: Decodable { let skill: SkillSummary }
+        var payload: [String: Any] = [
+            "name": name,
+            "instructions": instructions,
+            "enabled": enabled,
+        ]
+        if let id { payload["id"] = id }
+        let response: Response = try await post("/api/skills", jsonObject: payload)
+        return response.skill
+    }
+
+    public func deleteSkill(id: String) async throws {
+        struct Response: Decodable { let removed: Bool }
+        let response: Response = try await post(
+            "/api/skills/delete",
+            jsonObject: ["skill_id": id]
+        )
+        guard response.removed else { throw MachBoostAPIError.invalidResponse }
+    }
+
     public func configureProvider(
         id: String? = nil,
         name: String,
@@ -773,6 +941,23 @@ public final class MachBoostAPI: MachBoostAPIProtocol, @unchecked Sendable {
             return message
         }
         return String(data: data, encoding: .utf8) ?? "Unknown error"
+    }
+
+    private static func foundationValue(_ value: JSONValue) -> Any {
+        switch value {
+        case let .object(object):
+            return object.mapValues(foundationValue)
+        case let .array(array):
+            return array.map(foundationValue)
+        case let .string(string):
+            return string
+        case let .number(number):
+            return number
+        case let .boolean(boolean):
+            return boolean
+        case .null:
+            return NSNull()
+        }
     }
 }
 
