@@ -167,6 +167,9 @@ def anthropic_messages(payload: dict[str, Any]) -> list[dict[str, Any]]:
                         "content": _anthropic_text(part.get("content", "")),
                     }
                 )
+            elif part_type in {"thinking", "redacted_thinking"}:
+                # Thinking blocks are transport metadata, not conversation context.
+                continue
             else:
                 raise ValueError(f"unsupported Anthropic content block: {part_type}")
 
