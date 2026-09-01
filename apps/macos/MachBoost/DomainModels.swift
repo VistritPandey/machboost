@@ -6,6 +6,7 @@ enum SidebarDestination: Hashable {
     case conversation(UUID)
     case apps
     case connections
+    case extensions
     case models
     case server
     case settings
