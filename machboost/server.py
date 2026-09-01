@@ -4672,9 +4672,12 @@ def request_affinity_key(
     if explicit is not None and str(explicit):
         return f"client:{explicit}"
     sources = tuple(str(source) for source in (image_sources or ()) if source)
-    if not sources:
-        return None
-    return "images:" + json.dumps(sources, separators=(",", ":"), ensure_ascii=True)
+    if sources:
+        return "images:" + json.dumps(sources, separators=(",", ":"), ensure_ascii=True)
+    tenant = options.get("_tenant_key")
+    if tenant is not None and str(tenant):
+        return f"tenant:{tenant}"
+    return None
 
 
 def message_image_sources(messages: Sequence[dict[str, Any]]) -> tuple[str, ...]:
