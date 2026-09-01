@@ -272,6 +272,8 @@ enum CodingWorkspace {
             return "Run \(string(arguments["command"]) ?? "repository command")"
         case "read_file": return "Read \(path)"
         case "search_code": return "Search for \(string(arguments["query"]) ?? "text")"
+        case "search_mcp_tools": return "Search connected tools"
+        case "call_mcp_tool": return "Use \(string(arguments["name"]) ?? "connected tool")"
         default: return "Run \(call.function.name)"
         }
     }
@@ -288,6 +290,8 @@ enum CodingWorkspace {
         case "delete_file": return "Deleted \(path)"
         case "git_diff": return "Reviewed workspace changes"
         case "run_command": return "Ran \(string(arguments["command"]) ?? "command")"
+        case "search_mcp_tools": return "Searched connected tools"
+        case "call_mcp_tool": return "Used \(string(arguments["name"]) ?? "connected tool")"
         default: return "Ran \(call.function.name)"
         }
     }
@@ -317,6 +321,13 @@ enum CodingWorkspace {
             let command = string(arguments["command"]) ?? "Unknown"
             let arguments = stringArray(arguments["arguments"]).joined(separator: " ")
             return [("Command", ([command, arguments].filter { !$0.isEmpty }).joined(separator: " "))]
+        case "search_mcp_tools":
+            return [("Query", string(arguments["query"]) ?? "")]
+        case "call_mcp_tool":
+            return [
+                ("Tool", string(arguments["name"]) ?? "Unknown"),
+                ("Connector", string(arguments["server_id"]) ?? "Unknown"),
+            ]
         default:
             return []
         }
