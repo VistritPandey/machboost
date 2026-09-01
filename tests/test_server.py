@@ -277,6 +277,14 @@ class FakeAccelerator:
         return "completed", FakeStats(generated_tokens=1)
 
 
+class PrefixDroppingAccelerator(FakeAccelerator):
+    def generate_chat(self, messages, *, max_tokens, on_text=None, **_kwargs):
+        self.chat_calls.append((messages, max_tokens, None))
+        if on_text is not None:
+            on_text("'re welcome!")
+        return "You're welcome!", FakeStats(generated_tokens=4)
+
+
 class NativePromptCacheConfigurationTests(unittest.TestCase):
     def test_server_requests_enable_tenant_isolated_prompt_cache(self):
         accelerator = FakeAccelerator()
@@ -1136,6 +1144,8 @@ class HTTPServerTests(unittest.TestCase):
     def _load(self, config):
         if config.model.endswith("failing"):
             accelerator = FailingAccelerator()
+        elif config.model.endswith("prefix-dropping"):
+            accelerator = PrefixDroppingAccelerator()
         elif config.model.endswith("streaming-tool-calling"):
             accelerator = StreamingToolCallingAccelerator()
         elif config.model.endswith("tool-calling"):
@@ -1603,6 +1613,28 @@ class HTTPServerTests(unittest.TestCase):
         self.assertEqual(headers.get_content_type(), "application/x-ndjson")
         self.assertEqual("".join(row["message"]["content"] for row in rows), "hello world")
         self.assertFalse(rows[0]["done"])
+        self.assertTrue(rows[-1]["done"])
+
+    def test_plain_chat_reconciles_a_stream_with_a_missing_prefix(self):
+        _, _, body = self.request(
+            "/api/chat",
+            {
+                "model": "mlx-community/prefix-dropping",
+                "messages": [{"role": "user", "content": "thanks"}],
+                "stream": True,
+            },
+        )
+
+        rows = [json.loads(line) for line in body.splitlines()]
+        streamed = "".join(row["message"]["content"] for row in rows)
+        correction = next(
+            row for row in rows if row.get("machboost", {}).get("full_content")
+        )
+
+        self.assertEqual(streamed, "'re welcome!")
+        self.assertEqual(correction["message"]["content"], "")
+        self.assertEqual(correction["machboost"]["full_content"], "You're welcome!")
+        self.assertFalse(correction["done"])
         self.assertTrue(rows[-1]["done"])
 
     def test_client_request_id_is_returned_in_every_stream_event(self):
