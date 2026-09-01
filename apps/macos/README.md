@@ -33,6 +33,8 @@ a separate MachBoost installation.
   depth, and can fail over before the first streamed output
 - an Apps screen that connects Claude Desktop's third-party inference gateway
   to this Mac or a saved authenticated MachBoost host
+- an Extensions screen for local stdio or remote Streamable HTTP MCP servers
+  and reusable chat instructions, with connector secrets kept local
 - menu-bar lifecycle, optional launch at login, EdDSA-verified Sparkle updates,
   automatic checks, and a manual **Check Now** action
 - localhost serving by default; authenticated LAN serving is opt-in
@@ -137,9 +139,11 @@ continues to display the actual destination rather than the bridge address.
 ## Repository Workspaces
 
 Choose **Repository > Open Repository...** in the chat toolbar to index a local
-codebase. The selected workspace is stored with that conversation and remains
-active for follow-up questions until **No Repository** is selected. The same
-menu can refresh the index after code changes or remove MachBoost's local index.
+codebase. The selected workspace is stored with that conversation. Turn on
+**Dev mode** for bounded file tools, or **Repo context** for retrieval-only
+questions. Both are off by default in ordinary chat so a selected repository
+does not silently add thousands of tokens to unrelated prompts. The same menu
+can refresh the index after code changes or remove MachBoost's local index.
 Removing a workspace never deletes or modifies the source repository.
 
 Coding activity appears as collapsible human-readable rows instead of model
@@ -174,6 +178,20 @@ output-token decoding. Plain chat does not opt into this cache.
 
 Workspace metadata and indexes stay in MachBoost Application Support. Source
 files remain in their original location and no repository content is uploaded.
+
+## Extensions
+
+Open **Extensions** to add an MCP connector or reusable instructions. Local
+connectors use stdio commands; remote connectors use MCP Streamable HTTP. The
+app stores connector configuration locally, keeps secret values redacted in API
+responses, and bundles the MCP client runtime.
+
+Connected tools are off by default in each chat. Turn on **Tools** beside the
+composer when a conversation should search or call enabled connectors. The
+model sees two stable MachBoost gateway tools instead of every connector schema,
+and a real external tool call asks for one-time approval. Reusable instructions
+are injected into local and shared-host requests while remaining editable from
+the Extensions screen.
 
 ## Team Memory And Provider Fallback
 
