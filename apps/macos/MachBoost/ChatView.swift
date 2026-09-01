@@ -1621,7 +1621,11 @@ struct ChatView: View {
             if forceFinalResponse {
                 requestTranscript.append(
                     APIChatMessage(
-                        role: MessageRole.system.rawValue,
+                        // A trailing system role is invalid for several chat
+                        // templates and can make them replay their tool prefix.
+                        // Keep this as a continuation turn so the prior prompt
+                        // remains byte-for-byte reusable by the native cache.
+                        role: MessageRole.user.rawValue,
                         content: toolsActive
                             ? "The tool phase is complete. Answer the user now using the results already returned. Do not request another tool."
                             : "Answer the user now with visible text. Do not emit only hidden reasoning or control tokens."
@@ -1640,9 +1644,11 @@ struct ChatView: View {
                 options: .init(
                     maxTokens: maxTokens,
                     temperature: temperature,
-                    affinityKey: round == 0
-                        ? conversationAffinityKey
-                        : "\(conversationAffinityKey):turn:\(requestPrefix)"
+                    // Every reasoning, tool, and final-answer round extends the
+                    // same conversation prefix. Changing this key discards the
+                    // resident KV state and turns a quick continuation into a
+                    // full prompt prefill.
+                    affinityKey: conversationAffinityKey
                 ),
                 // Dev mode reads targeted files through tools; injecting the whole
                 // repository map here duplicates context and delays the first token.
