@@ -665,6 +665,7 @@ class MLXVLMAccelerator:
             parts: list[str] = []
             thinking_parts: list[str] = []
             token_logprobs: list[float] = []
+            generated_token_ids: list[int] = []
             observed_generation_steps: set[int] = set()
             last: Any = None
             stream_image: Optional[list[str]] = list(images) or None
@@ -767,13 +768,18 @@ class MLXVLMAccelerator:
                     generation_step > 0
                     and generation_step not in observed_generation_steps
                     and token is not None
-                    and logprobs is not None
                 ):
                     observed_generation_steps.add(generation_step)
-                    try:
-                        token_logprobs.append(float(logprobs[int(token)].item()))
-                    except (AttributeError, IndexError, TypeError, ValueError):
-                        pass
+                    token_id = _token_int(token)
+                    if token_id is not None:
+                        generated_token_ids.append(token_id)
+                        if logprobs is not None:
+                            try:
+                                token_logprobs.append(
+                                    float(logprobs[token_id].item())
+                                )
+                            except (AttributeError, IndexError, TypeError, ValueError):
+                                pass
                 text = str(getattr(row, "text", "") or "")
                 if not text:
                     continue
@@ -781,6 +787,29 @@ class MLXVLMAccelerator:
                     first_text_at = time.perf_counter()
                 emit_split(splitter.feed(text))
             emit_split(splitter.feed("", final=True), final=True)
+            rebuilt = self._decode_complete_generation(
+                generated_token_ids,
+                enable_thinking=enable_thinking,
+                thinking_start=thinking_start,
+                thinking_end=thinking_end,
+                reasoning_echoes=reasoning_echoes,
+            )
+            if rebuilt is not None:
+                rebuilt_content, rebuilt_thinking = rebuilt
+                streamed_content = "".join(parts)
+                streamed_thinking = "".join(thinking_parts)
+                if rebuilt_content != streamed_content:
+                    if rebuilt_content.startswith(streamed_content):
+                        suffix = rebuilt_content[len(streamed_content) :]
+                        if suffix and on_text is not None:
+                            on_text(suffix)
+                    parts = [rebuilt_content] if rebuilt_content else []
+                if rebuilt_thinking != streamed_thinking:
+                    if rebuilt_thinking.startswith(streamed_thinking):
+                        suffix = rebuilt_thinking[len(streamed_thinking) :]
+                        if suffix and on_thinking is not None:
+                            on_thinking(suffix)
+                    thinking_parts = [rebuilt_thinking] if rebuilt_thinking else []
             prompt_cache_prefix_tokens = max(
                 prompt_cache_prefix_tokens,
                 int(getattr(last, "cached_tokens", 0) or 0),
@@ -839,6 +868,40 @@ class MLXVLMAccelerator:
             thinking="".join(thinking_parts).strip(),
         )
         return "".join(parts), stats
+
+    def _decode_complete_generation(
+        self,
+        token_ids: Sequence[int],
+        *,
+        enable_thinking: bool,
+        thinking_start: Optional[str],
+        thinking_end: Optional[str],
+        reasoning_echoes: Sequence[str],
+    ) -> Optional[tuple[str, str]]:
+        if not token_ids:
+            return None
+        tokenizer = getattr(self.processor, "tokenizer", self.processor)
+        decode = getattr(tokenizer, "decode", None)
+        if not callable(decode):
+            return None
+        try:
+            raw = decode(list(token_ids), skip_special_tokens=False)
+        except TypeError:
+            raw = decode(list(token_ids))
+        except Exception:
+            return None
+        if not raw:
+            return None
+        splitter = ThinkingStreamSplitter(
+            starts_in_thinking=bool(enable_thinking)
+            and thinking_start in {None, "<think>", "<|START_THINKING|>"},
+            start_marker=thinking_start,
+            end_marker=thinking_end,
+        )
+        delta = splitter.feed(str(raw), final=True)
+        echo_filter = InitialReasoningEchoFilter(reasoning_echoes)
+        reasoning = echo_filter.feed(delta.reasoning, final=True)
+        return delta.content.lstrip(), reasoning
 
     def _bind_thread_local_stream(self) -> None:
         module_name = str(getattr(self._stream_generate, "__module__", ""))
@@ -1020,6 +1083,14 @@ def config_value(config: Any, name: str, default: Any = None) -> Any:
     if isinstance(config, dict):
         return config.get(name, default)
     return getattr(config, name, default)
+
+
+def _token_int(token: Any) -> Optional[int]:
+    try:
+        value = token.item() if hasattr(token, "item") else token
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _thinking_budget(reasoning_strength: Optional[str]) -> Optional[int]:
