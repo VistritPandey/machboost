@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import unittest
 
-from machboost.protocols import anthropic_messages, select_anthropic_tools
+from machboost.protocols import (
+    anthropic_cache_affinity,
+    anthropic_messages,
+    compact_claude_code_messages,
+    select_anthropic_tools,
+)
 
 
 def tool(name: str, description: str = "") -> dict:
@@ -30,7 +35,7 @@ class AnthropicToolSelectionTests(unittest.TestCase):
         )
 
         names = {item["name"] for item in selected}
-        self.assertEqual(len(selected), 8)
+        self.assertLessEqual(len(selected), 8)
         self.assertIn("mcp__filesystem__read_file", names)
         self.assertIn("get_revenue_report", names)
 
@@ -93,6 +98,122 @@ class AnthropicToolSelectionTests(unittest.TestCase):
 
         self.assertEqual(follow_up_names, initial_names)
         self.assertIn("read_file", initial_names)
+
+    def test_irrelevant_large_tools_do_not_fill_the_cap(self):
+        tools = [
+            tool("Bash", "Run a command"),
+            tool("Read", "Read a file"),
+            tool("Edit", "Edit a file"),
+            tool("Write", "Write a file"),
+            tool("Monitor", "M" * 12_000),
+            tool("DesignSync", "D" * 12_000),
+        ]
+
+        selected = select_anthropic_tools(
+            tools,
+            [{"role": "user", "content": "Reply with exactly OK"}],
+            limit=12,
+        )
+
+        self.assertEqual(
+            [item["name"] for item in selected],
+            ["Bash", "Read", "Edit", "Write"],
+        )
+
+
+class AnthropicCacheAffinityTests(unittest.TestCase):
+    def test_separates_agent_and_utility_requests_in_one_claude_session(self):
+        base = {
+            "model": "claude-opus-5",
+            "metadata": {
+                "user_id": '{"device_id":"device-1","session_id":"session-42"}'
+            },
+            "messages": [{"role": "user", "content": "Inspect this repository"}],
+        }
+
+        utility = anthropic_cache_affinity(base, [])
+        agent = anthropic_cache_affinity(base, [tool("Read")])
+
+        self.assertNotEqual(agent, utility)
+        self.assertEqual(
+            agent,
+            anthropic_cache_affinity(
+                {
+                    **base,
+                    "messages": [
+                        *base["messages"],
+                        {"role": "assistant", "content": "I will inspect it."},
+                    ],
+                },
+                [tool("Read")],
+            ),
+        )
+
+    def test_fallback_affinity_is_stable_across_follow_ups(self):
+        initial = {
+            "model": "local-model",
+            "system": "stable system",
+            "messages": [{"role": "user", "content": "Initial request"}],
+        }
+        follow_up = {
+            **initial,
+            "messages": [
+                *initial["messages"],
+                {"role": "assistant", "content": "First answer"},
+                {"role": "user", "content": "Continue"},
+            ],
+        }
+
+        self.assertEqual(
+            anthropic_cache_affinity(initial, [tool("Read")]),
+            anthropic_cache_affinity(follow_up, [tool("Read")]),
+        )
+
+
+class ClaudeCodeCompactionTests(unittest.TestCase):
+    def test_compacts_harness_boilerplate_and_drops_unavailable_agent_catalog(self):
+        messages = [
+            {
+                "role": "system",
+                "content": """
+You are an interactive agent that helps users with software engineering tasks.
+
+# Harness
+Long generic harness instructions.
+
+# Environment
+ - Primary working directory: /tmp/project
+ - Is a git repository: true
+ - Platform: darwin
+ - Shell: zsh
+
+# Corrections
+Long correction instructions.
+""",
+            },
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Available agent types for the Agent tool:\n- Explore\n\nThe following skills are available for use with the Skill tool:\n- docs",
+                    }
+                ],
+            },
+            {"role": "user", "content": "Inspect the repository"},
+        ]
+
+        compacted = compact_claude_code_messages(
+            messages,
+            selected_tool_names={"Bash", "Read", "Edit", "Write"},
+        )
+
+        self.assertEqual(len(compacted), 2)
+        system = str(compacted[0]["content"])
+        self.assertIn("interactive coding agent", system)
+        self.assertIn("Primary working directory: /tmp/project", system)
+        self.assertNotIn("Long correction instructions", system)
+        self.assertEqual(compacted[-1], messages[-1])
 
 
 class AnthropicMessageTests(unittest.TestCase):
