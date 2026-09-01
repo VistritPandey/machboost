@@ -812,8 +812,12 @@ class MLXVLMAcceleratorTests(unittest.TestCase):
 
         mlx_stream.__module__ = "mlx_vlm.generate"
         self.accelerator._stream_generate = mlx_stream
+        generation = SimpleNamespace(PromptCacheState=FakePromptCacheState)
 
-        with patch.object(
+        with patch(
+            "machboost.adapters.mlx_vlm.importlib.import_module",
+            return_value=generation,
+        ), patch.object(
             self.accelerator,
             "_get_apc_manager",
             return_value=FakeAPCManager(),
