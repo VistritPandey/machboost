@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from machboost.protocols import select_anthropic_tools
+from machboost.protocols import anthropic_messages, select_anthropic_tools
 
 
 def tool(name: str, description: str = "") -> dict:
@@ -68,6 +68,65 @@ class AnthropicToolSelectionTests(unittest.TestCase):
         tools = [tool("read_file"), tool("write_file")]
 
         self.assertEqual(select_anthropic_tools(tools, [], limit=48), tools)
+
+
+class AnthropicMessageTests(unittest.TestCase):
+    def test_prior_thinking_is_accepted_without_replaying_private_reasoning(self):
+        messages = anthropic_messages(
+            {
+                "messages": [
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "thinking",
+                                "thinking": "I should inspect the repository first.",
+                                "signature": "signed-reasoning",
+                            },
+                            {"type": "text", "text": "I will inspect the repository."},
+                            {
+                                "type": "tool_use",
+                                "id": "tool_1",
+                                "name": "list_files",
+                                "input": {"path": "."},
+                            },
+                        ],
+                    },
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": "tool_1",
+                                "content": "README.md\nsrc",
+                            }
+                        ],
+                    },
+                ]
+            }
+        )
+
+        self.assertEqual(messages[0]["content"], [{"type": "text", "text": "I will inspect the repository."}])
+        self.assertEqual(messages[0]["tool_calls"][0]["function"]["name"], "list_files")
+        self.assertEqual(messages[1]["role"], "tool")
+        self.assertNotIn("inspect the repository first", str(messages))
+
+    def test_redacted_thinking_block_is_accepted(self):
+        messages = anthropic_messages(
+            {
+                "messages": [
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {"type": "redacted_thinking", "data": "opaque"},
+                            {"type": "text", "text": "Done."},
+                        ],
+                    }
+                ]
+            }
+        )
+
+        self.assertEqual(messages, [{"role": "assistant", "content": [{"type": "text", "text": "Done."}]}])
 
 
 if __name__ == "__main__":
