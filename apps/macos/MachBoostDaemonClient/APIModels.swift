@@ -793,10 +793,12 @@ public struct ChatRequest: Encodable, Sendable {
     public struct Extensions: Encodable, Sendable {
         public let route: Route?
         public let memory: String?
+        public let skills: String?
 
-        public init(route: Route? = nil, memory: String? = nil) {
+        public init(route: Route? = nil, memory: String? = nil, skills: String? = nil) {
             self.route = route
             self.memory = memory
+            self.skills = skills
         }
 
         public struct Route: Encodable, Sendable {
@@ -1131,6 +1133,83 @@ public struct ModelInstance: Decodable, Identifiable, Sendable {
 
 public struct ModelsResponse: Decodable, Sendable {
     public let models: [ModelInstance]
+}
+
+public struct MCPServerSummary: Codable, Identifiable, Hashable, Sendable {
+    public let id: String
+    public let name: String
+    public let transport: String
+    public let url: String?
+    public let command: String?
+    public let args: [String]
+    public let enabled: Bool
+    public let toolCount: Int
+    public let lastStatus: String?
+    public let lastError: String?
+    public let envKeys: [String]
+    public let headerNames: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, transport, url, command, args, enabled
+        case toolCount = "tool_count"
+        case lastStatus = "last_status"
+        case lastError = "last_error"
+        case envKeys = "env_keys"
+        case headerNames = "header_names"
+    }
+}
+
+public struct SkillSummary: Codable, Identifiable, Hashable, Sendable {
+    public let id: String
+    public let name: String
+    public let instructions: String
+    public let enabled: Bool
+}
+
+public struct MCPToolSummary: Codable, Identifiable, Hashable, Sendable {
+    public let serverID: String
+    public let serverName: String
+    public let name: String
+    public let title: String?
+    public let description: String?
+    public let inputSchema: JSONValue
+
+    public var id: String { "\(serverID):\(name)" }
+
+    enum CodingKeys: String, CodingKey {
+        case name, title, description
+        case serverID = "server_id"
+        case serverName = "server_name"
+        case inputSchema = "input_schema"
+    }
+}
+
+public struct MCPToolResult: Decodable, Sendable {
+    public let serverID: String
+    public let serverName: String
+    public let tool: String
+    public let isError: Bool
+    public let text: String
+
+    enum CodingKeys: String, CodingKey {
+        case tool, text
+        case serverID = "server_id"
+        case serverName = "server_name"
+        case isError = "is_error"
+    }
+}
+
+public struct ExtensionsResponse: Decodable, Sendable {
+    public let schema: String
+    public let mcpServers: [MCPServerSummary]
+    public let skills: [SkillSummary]
+    public let gatewayTools: [JSONValue]
+
+    enum CodingKeys: String, CodingKey {
+        case schema, skills
+        case mcpServers = "mcp_servers"
+        case gatewayTools = "gateway_tools"
+    }
 }
 
 public struct ModelLoadResponse: Decodable, Sendable {
