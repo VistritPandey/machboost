@@ -17,18 +17,21 @@ from machboost.models import resolve_model
 from machboost.scheduler import RequestAdmissionError
 from machboost.providers import ProviderStore
 from machboost.server import (
+    GenerationResult,
     MachBoostHTTPServer,
     ModelConfig,
     OperationRegistry,
     RequestCancelled,
     RuntimeManager,
     ToolAwareTextStream,
+    anthropic_tool_limit,
     configure_native_prompt_cache,
     download_progress_class,
     extract_tool_calls,
     load_accelerator,
     model_config,
     normalize_tools,
+    openai_machboost_result,
     parse_keep_alive,
     request_affinity_key,
     result_content_and_tool_calls,
@@ -39,6 +42,17 @@ from machboost.workspace import WorkspaceStore
 
 
 class ToolCallParsingTests(unittest.TestCase):
+    def test_anthropic_tool_budget_defaults_to_cold_prefill_limit(self):
+        with patch.dict("os.environ", {}, clear=True):
+            self.assertEqual(anthropic_tool_limit(), 24)
+
+        with patch.dict(
+            "os.environ",
+            {"MACHBOOST_ANTHROPIC_TOOL_LIMIT": "36"},
+            clear=True,
+        ):
+            self.assertEqual(anthropic_tool_limit(), 36)
+
     def test_normalize_tools_canonicalizes_semantically_identical_schemas(self):
         ordered = {
             "type": "function",
@@ -986,6 +1000,40 @@ class RuntimeManagerTests(unittest.TestCase):
         self.assertEqual(entry.warmups, 1)
         self.assertEqual(entry.requests, 0)
         self.assertEqual(entry.accelerator.chat_calls[0][1], 1)
+
+    def test_compile_warmup_runs_for_native_vision_models(self):
+        manager = RuntimeManager(loader=lambda config: FakeVisionAccelerator())
+        with patch("machboost.models.native_mlx_vlm_available", return_value=True):
+            entry, _ = manager.get_or_load("muse-glimmer:30b")
+
+        duration, performed = manager.warm(entry)
+
+        self.assertTrue(performed)
+        self.assertGreaterEqual(duration, 0.0)
+        self.assertEqual(entry.config.backend, "mlx-vlm")
+        self.assertEqual(entry.warmups, 1)
+        self.assertEqual(entry.requests, 0)
+        self.assertEqual(entry.accelerator.chat_calls[0][1], 1)
+
+    def test_openai_metadata_separates_load_prefill_and_generation_time(self):
+        result = GenerationResult(
+            model="mlx-community/example",
+            backend="mlx-vlm",
+            text="done",
+            stats={"generated_tokens": 4},
+            load_duration_s=4.5,
+            total_duration_s=7.25,
+            prompt_eval_duration_s=2.25,
+            eval_duration_s=0.5,
+            time_to_first_token_s=2.5,
+        )
+
+        metadata = openai_machboost_result(result)
+
+        self.assertEqual(metadata["load_duration_seconds"], 4.5)
+        self.assertEqual(metadata["prompt_eval_duration_seconds"], 2.25)
+        self.assertEqual(metadata["generation_duration_seconds"], 0.5)
+        self.assertEqual(metadata["total_duration_seconds"], 7.25)
 
     def test_model_configuration_separates_context_indexes(self):
         loaded = []
