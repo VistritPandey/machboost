@@ -109,6 +109,8 @@ struct RootView: View {
                         .tag(SidebarDestination.apps)
                     Label("Connections", systemImage: "point.3.connected.trianglepath.dotted")
                         .tag(SidebarDestination.connections)
+                    Label("Extensions", systemImage: "puzzlepiece.extension")
+                        .tag(SidebarDestination.extensions)
                     Label("Models", systemImage: "shippingbox")
                         .tag(SidebarDestination.models)
                     Label("Server", systemImage: "server.rack")
@@ -153,6 +155,8 @@ struct RootView: View {
             AppsView()
         case .connections:
             ConnectionsView()
+        case .extensions:
+            ExtensionsView()
         case .models:
             ModelsView()
         case .server:
