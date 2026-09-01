@@ -53,6 +53,7 @@ struct ChatView: View {
     @State private var isRefreshingWorkspaceChanges = false
     @State private var workspaceChangesTask: Task<Void, Never>?
     @State private var isPreparingCodingPrefix = false
+    @State private var codingPrefixRequestID: String?
     @FocusState private var composerIsFocused: Bool
     @AppStorage("machboost.chat.maxTokens") private var maxTokens = 512
     @AppStorage("machboost.chat.temperature") private var temperature = 0.2
@@ -160,6 +161,7 @@ struct ChatView: View {
         }
         .onDisappear {
             stop()
+            cancelCodingPrefixPreparation()
             workspaceChangesTask?.cancel()
         }
         .task(id: codingWarmupKey) {
@@ -912,7 +914,7 @@ struct ChatView: View {
                             .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
                     }
                     .onSubmit {
-                        guard !isGenerating, !isPreparingCodingPrefix else { return }
+                        guard !isGenerating else { return }
                         send()
                     }
                     .onAppear {
@@ -945,7 +947,6 @@ struct ChatView: View {
                         .buttonStyle(.borderedProminent)
                         .disabled(
                             draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                                || isPreparingCodingPrefix
                         )
                         .accessibilityLabel("Send message")
                         .help("Send")
@@ -1261,9 +1262,15 @@ struct ChatView: View {
 
     private func prepareCodingPrefixIfNeeded() async {
         guard codingSessionAvailable, !isGenerating else { return }
-        isPreparingCodingPrefix = true
-        defer { isPreparingCodingPrefix = false }
         let requestID = "coding-prefix-\(UUID().uuidString.lowercased())"
+        codingPrefixRequestID = requestID
+        isPreparingCodingPrefix = true
+        defer {
+            if codingPrefixRequestID == requestID {
+                codingPrefixRequestID = nil
+                isPreparingCodingPrefix = false
+            }
+        }
         let request = ChatRequest(
             requestID: requestID,
             model: conversation.model,
@@ -1301,6 +1308,16 @@ struct ChatView: View {
         } catch {
             // The visible request reports actionable connection errors.
         }
+    }
+
+    private func cancelCodingPrefixPreparation() {
+        guard let requestID = codingPrefixRequestID else {
+            isPreparingCodingPrefix = false
+            return
+        }
+        codingPrefixRequestID = nil
+        isPreparingCodingPrefix = false
+        Task { _ = await appState.cancelInference(requestID: requestID) }
     }
 
     private func selectAvailableProviderIfNeeded() {
@@ -1413,7 +1430,8 @@ struct ChatView: View {
 
     private func send(_ textOverride: String? = nil) {
         let text = (textOverride ?? draft).trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, !isGenerating, !isPreparingCodingPrefix else { return }
+        guard !text.isEmpty, !isGenerating else { return }
+        cancelCodingPrefixPreparation()
         let images = conversation.orderedAttachments.filter { $0.kind == .image }
         if !images.isEmpty, appState.model(named: conversation.model)?.supportsVision != true {
             appState.presentedError = "\(conversation.model) cannot read images. Choose a vision model first."
