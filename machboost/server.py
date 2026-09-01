@@ -540,8 +540,6 @@ class RuntimeManager:
             return entry, load_duration
 
     def warm(self, entry: LoadedModel) -> tuple[float, bool]:
-        if entry.config.backend.endswith("-vlm"):
-            return 0.0, False
         with entry.lock:
             if entry.warmups > 0:
                 entry.last_used_at = self.clock()
@@ -5090,9 +5088,9 @@ def openai_options(payload: dict[str, Any]) -> dict[str, Any]:
 
 def anthropic_tool_limit() -> int:
     try:
-        return max(0, int(os.environ.get("MACHBOOST_ANTHROPIC_TOOL_LIMIT", "48")))
+        return max(0, int(os.environ.get("MACHBOOST_ANTHROPIC_TOOL_LIMIT", "24")))
     except ValueError:
-        return 48
+        return 24
 
 
 def compatibility_tool_choice(choice: Any) -> Any:
@@ -5485,6 +5483,10 @@ def openai_machboost_result(
     response = {
         **result.stats,
         "backend": result.backend,
+        "load_duration_seconds": result.load_duration_s,
+        "prompt_eval_duration_seconds": result.prompt_eval_duration_s,
+        "generation_duration_seconds": result.eval_duration_s,
+        "total_duration_seconds": result.total_duration_s,
         "time_to_first_token_seconds": result.time_to_first_token_s,
         "scheduler": dict(result.scheduler or {}),
     }
