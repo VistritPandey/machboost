@@ -799,6 +799,33 @@ class MLXVLMAcceleratorTests(unittest.TestCase):
         self.assertIs(states[0], states[1])
         self.assertIsNot(states[0], states[2])
 
+    def test_text_only_apc_is_scoped_to_the_request_affinity(self):
+        calls = []
+
+        class FakeAPCManager:
+            def stats_snapshot(self):
+                return {"matched_tokens": 0}
+
+        def mlx_stream(model, processor, prompt, **kwargs):
+            calls.append(kwargs)
+            yield FakeGenerationRow("cached")
+
+        mlx_stream.__module__ = "mlx_vlm.generate"
+        self.accelerator._stream_generate = mlx_stream
+
+        with patch.object(
+            self.accelerator,
+            "_get_apc_manager",
+            return_value=FakeAPCManager(),
+        ), patch.object(self.accelerator, "_bind_thread_local_stream"):
+            self.accelerator.generate(
+                "Repository prompt",
+                max_tokens=8,
+                cache_key="conversation-a",
+            )
+
+        self.assertEqual(calls[0]["apc_tenant"], "conversation-a")
+
     def test_qwen_partial_prefix_drops_untrimmed_attention_mask(self):
         self.accelerator.model.config = {"model_type": "qwen2_5_vl"}
         self.accelerator._stream_generate.__module__ = "mlx_vlm.generate"
@@ -877,12 +904,97 @@ class MLXVLMAcceleratorTests(unittest.TestCase):
 
         self.assertEqual(observed, {"num_blocks": 1024, "block_size": 16})
 
+    def test_apc_disk_cache_uses_model_namespace_and_bounded_storage(self):
+        observed = {}
+
+        class FakeDiskBlockStore:
+            def __init__(self, root, **kwargs):
+                observed["disk"] = self
+                observed["disk_root"] = root
+                observed["disk_options"] = kwargs
+
+        class FakeAPCManager:
+            def __init__(self, **kwargs):
+                observed["manager_options"] = kwargs
+
+            def clear(self):
+                pass
+
+        disk_root = self.root / "persistent-apc"
+        with patch.dict(
+            "os.environ",
+            {
+                "MACHBOOST_MLX_APC_DISK": "1",
+                "MACHBOOST_MLX_APC_DISK_PATH": str(disk_root),
+                "MACHBOOST_MLX_APC_DISK_GB": "1.5",
+            },
+        ), patch(
+            "machboost.adapters.mlx_vlm.importlib.import_module",
+            return_value=SimpleNamespace(
+                APCManager=FakeAPCManager,
+                DiskBlockStore=FakeDiskBlockStore,
+            ),
+        ):
+            self.accelerator._get_apc_manager()
+
+        self.assertEqual(observed["disk_root"], disk_root)
+        self.assertEqual(observed["disk_options"]["namespace"], "fake-vlm")
+        self.assertEqual(observed["disk_options"]["num_workers"], 1)
+        self.assertEqual(
+            observed["disk_options"]["max_bytes"],
+            int(1.5 * (1 << 30)),
+        )
+        self.assertIs(
+            observed["manager_options"]["disk"],
+            observed["disk"],
+        )
+
+    def test_apc_disk_cache_can_be_disabled(self):
+        observed = {}
+
+        class FakeAPCManager:
+            def __init__(self, **kwargs):
+                observed.update(kwargs)
+
+            def clear(self):
+                pass
+
+        class UnexpectedDiskBlockStore:
+            def __init__(self, *_args, **_kwargs):
+                raise AssertionError("disk cache should be disabled")
+
+        with patch.dict(
+            "os.environ",
+            {"MACHBOOST_MLX_APC_DISK": "0"},
+        ), patch(
+            "machboost.adapters.mlx_vlm.importlib.import_module",
+            return_value=SimpleNamespace(
+                APCManager=FakeAPCManager,
+                DiskBlockStore=UnexpectedDiskBlockStore,
+            ),
+        ):
+            self.accelerator._get_apc_manager()
+
+        self.assertNotIn("disk", observed)
+
     def test_close_stops_worker_and_rejects_future_generation(self):
+        closed = []
+
+        class FakeAPCManager:
+            def clear(self):
+                pass
+
+            def close(self):
+                closed.append(True)
+
+        self.accelerator._apc_manager = FakeAPCManager()
         self.accelerator.generate(
             "Describe the image.", images=[str(self.image)], max_tokens=8
         )
 
         self.accelerator.close()
+
+        self.assertEqual(closed, [True])
 
         with self.assertRaisesRegex(RuntimeError, "closed"):
             self.accelerator.generate(
