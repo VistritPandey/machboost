@@ -15,6 +15,23 @@ from machboost.connections import ConnectionProfile
 
 
 class CLITests(unittest.TestCase):
+    def test_mcp_command_keeps_top_level_dispatch_and_stdio_executable(self):
+        args = cli.build_parser().parse_args(
+            [
+                "mcp",
+                "add",
+                "filesystem",
+                "--command",
+                "npx",
+                "--arg",
+                "@modelcontextprotocol/server-filesystem",
+            ]
+        )
+
+        self.assertEqual(args.command, "mcp")
+        self.assertEqual(args.mcp_command, "add")
+        self.assertEqual(args.mcp_executable, "npx")
+
     def test_connect_enables_automatic_routing(self):
         output = io.StringIO()
         store = Mock()
