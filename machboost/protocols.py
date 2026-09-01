@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import re
 import time
@@ -24,20 +25,11 @@ _TOOL_STOP_WORDS = {
     "with",
 }
 _CORE_AGENT_TOOLS = {
-    "askuserquestion",
     "bash",
     "edit",
     "editfile",
-    "glob",
-    "grep",
-    "listfiles",
     "read",
     "readfile",
-    "searchfiles",
-    "task",
-    "todowrite",
-    "webfetch",
-    "websearch",
     "write",
     "writefile",
 }
@@ -215,7 +207,7 @@ def select_anthropic_tools(
     if not isinstance(tools, list):
         raise ValueError("Anthropic tools must be a list")
     candidates = [tool for tool in tools if isinstance(tool, dict)]
-    if limit <= 0 or len(candidates) <= limit:
+    if limit <= 0:
         return candidates
 
     query = _initial_anthropic_user_text(messages)
@@ -225,7 +217,7 @@ def select_anthropic_tools(
     if isinstance(tool_choice, dict) and tool_choice.get("type") == "tool":
         forced_name = str(tool_choice.get("name") or "")
 
-    ranked: list[tuple[int, int, dict[str, Any]]] = []
+    ranked: list[tuple[int, int, int, dict[str, Any]]] = []
     mandatory: set[int] = set()
     for index, tool in enumerate(candidates):
         name = str(tool.get("name") or "")
@@ -250,17 +242,121 @@ def select_anthropic_tools(
         score += 12 * len(query_terms & description_terms)
         if normalized_name and normalized_name in "".join(sorted(query_terms)):
             score += 300
-        ranked.append((score, index, tool))
+        encoded_size = len(json.dumps(tool, separators=(",", ":"), ensure_ascii=True))
+        ranked.append((score, encoded_size, index, tool))
 
     selected_indexes = set(mandatory)
-    minimum = min(limit, 8)
-    for score, index, _ in sorted(ranked, key=lambda row: (-row[0], row[1])):
+    minimum = min(limit, 4)
+    for score, _, index, _ in sorted(
+        ranked,
+        key=lambda row: (-row[0], row[1], row[2]),
+    ):
         if len(selected_indexes) >= max(limit, len(mandatory)):
             break
         if score <= 0 and len(selected_indexes) >= minimum:
             continue
         selected_indexes.add(index)
     return [tool for index, tool in enumerate(candidates) if index in selected_indexes]
+
+
+def anthropic_cache_affinity(
+    payload: dict[str, Any],
+    selected_tools: Sequence[dict[str, Any]],
+) -> str:
+    """Return a stable cache lane for one Claude conversation.
+
+    Claude Code sends small helper requests beside its large coding request. They
+    share credentials and a process, but not a useful prompt prefix. Keeping a
+    separate utility lane prevents title/status calls from replacing the coding
+    conversation's native KV state.
+    """
+    metadata = payload.get("metadata")
+    metadata = metadata if isinstance(metadata, dict) else {}
+    identity: Any = metadata.get("session_id") or metadata.get("conversation_id")
+    raw_user_id = metadata.get("user_id")
+    if not identity and isinstance(raw_user_id, str):
+        try:
+            decoded = json.loads(raw_user_id)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            decoded = None
+        if isinstance(decoded, dict):
+            identity = decoded.get("session_id") or decoded.get("conversation_id")
+    if not identity:
+        identity = {
+            "system": payload.get("system"),
+            "first_user": _initial_anthropic_user_text(payload.get("messages")),
+        }
+    lane = "agent" if selected_tools else "utility"
+    encoded = json.dumps(
+        {
+            "model": str(payload.get("model") or ""),
+            "identity": identity,
+            "lane": lane,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        default=str,
+    ).encode("utf-8")
+    return f"anthropic-{lane}-{hashlib.sha256(encoded).hexdigest()[:24]}"
+
+
+def compact_claude_code_messages(
+    messages: Sequence[dict[str, Any]],
+    *,
+    selected_tool_names: set[str],
+) -> list[dict[str, Any]]:
+    """Remove Claude Code harness text that duplicates the selected tool schemas."""
+    compacted: list[dict[str, Any]] = []
+    for message in messages:
+        if str(message.get("role") or "") != "system":
+            compacted.append(message)
+            continue
+        text = _anthropic_text(message.get("content", "")).strip()
+        if text.startswith(
+            "You are an interactive agent that helps users with software engineering tasks."
+        ):
+            compacted.append(
+                {
+                    **message,
+                    "content": _compact_claude_code_system(text),
+                }
+            )
+            continue
+        if text.startswith("Available agent types for the Agent tool:"):
+            if selected_tool_names & {"Agent", "Skill"}:
+                compacted.append(message)
+            continue
+        compacted.append(message)
+    return compacted
+
+
+def _compact_claude_code_system(text: str) -> str:
+    environment = ""
+    match = re.search(r"(?ms)^# Environment\s*\n(.*?)(?=^#\s|\Z)", text)
+    if match:
+        allowed = (
+            "Primary working directory:",
+            "Is a git repository:",
+            "Platform:",
+            "Shell:",
+            "OS Version:",
+        )
+        environment_lines = [
+            line.rstrip()
+            for line in match.group(1).splitlines()
+            if any(field in line for field in allowed)
+        ]
+        if environment_lines:
+            environment = "\n\nEnvironment:\n" + "\n".join(environment_lines)
+    return (
+        "You are an interactive coding agent inside Claude Code. Use the provided "
+        "tools to inspect the repository before editing, match its existing style, "
+        "run relevant checks, and report results accurately. Respect denied tool "
+        "calls. Confirm destructive or external actions unless the user explicitly "
+        "authorized them. Keep user-facing responses concise."
+        + environment
+    )
 
 
 def _initial_anthropic_user_text(messages: Any) -> str:
