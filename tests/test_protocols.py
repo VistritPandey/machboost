@@ -69,6 +69,31 @@ class AnthropicToolSelectionTests(unittest.TestCase):
 
         self.assertEqual(select_anthropic_tools(tools, [], limit=48), tools)
 
+    def test_follow_up_queries_keep_the_initial_conversation_tool_prefix(self):
+        tools = [tool(f"unrelated_{index}") for index in range(12)]
+        tools.extend(
+            [
+                tool("read_file", "Read repository files"),
+                tool("revenue_report", "Fetch revenue data"),
+            ]
+        )
+        initial = [{"role": "user", "content": "Inspect the repository files"}]
+        follow_up = [
+            *initial,
+            {"role": "assistant", "content": "The repository is available."},
+            {"role": "user", "content": "Now fetch the revenue report"},
+        ]
+
+        initial_names = [
+            item["name"] for item in select_anthropic_tools(tools, initial, limit=4)
+        ]
+        follow_up_names = [
+            item["name"] for item in select_anthropic_tools(tools, follow_up, limit=4)
+        ]
+
+        self.assertEqual(follow_up_names, initial_names)
+        self.assertIn("read_file", initial_names)
+
 
 class AnthropicMessageTests(unittest.TestCase):
     def test_prior_thinking_is_accepted_without_replaying_private_reasoning(self):
