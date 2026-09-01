@@ -8,7 +8,7 @@
     "sha256": "dca7c3bac21f023cf294705b27f4f3e9c70399c40790ebb81e8d0eff15b00770"
   },
   "packages": {
-    "machboost": "0.16.1",
+    "machboost": "0.16.2",
     "sparkle": "2.9.4"
   }
 }
