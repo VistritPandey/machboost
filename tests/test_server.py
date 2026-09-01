@@ -32,6 +32,7 @@ from machboost.server import (
     parse_keep_alive,
     request_affinity_key,
     result_content_and_tool_calls,
+    serve,
 )
 from machboost.team import TeamStore
 from machboost.workspace import WorkspaceStore
@@ -358,6 +359,17 @@ class NativePromptCacheConfigurationTests(unittest.TestCase):
 
 
 class TeamResidencyTests(unittest.TestCase):
+    def test_team_serve_factory_creates_a_forever_runtime(self):
+        with patch("machboost.server.MachBoostHTTPServer") as server_type:
+            serve(team_store=object())
+
+        manager = server_type.call_args.kwargs["manager"]
+        self.assertEqual(manager.default_keep_alive, -1.0)
+        server_type.return_value.serve_forever.assert_called_once_with(
+            poll_interval=0.2
+        )
+        server_type.return_value.server_close.assert_called_once_with()
+
     def test_team_server_keeps_models_resident_by_default(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
