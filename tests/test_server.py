@@ -1946,6 +1946,50 @@ class HTTPServerTests(unittest.TestCase):
         self.assertEqual([call["name"] for call in calls], ["read_file", "search_repo"])
         self.assertEqual(calls[0]["input"]["path"], "a.py")
 
+    def test_anthropic_messages_endpoint_accepts_prior_thinking_blocks(self):
+        status, _, _ = self.request(
+            "/v1/messages",
+            {
+                "model": "mlx-community/example",
+                "messages": [
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "thinking",
+                                "thinking": "I should inspect the repository.",
+                                "signature": "signed-reasoning",
+                            },
+                            {
+                                "type": "tool_use",
+                                "id": "tool_1",
+                                "name": "list_files",
+                                "input": {"path": "."},
+                            },
+                        ],
+                    },
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": "tool_1",
+                                "content": "README.md\nsrc",
+                            },
+                            {"type": "text", "text": "Summarize the structure."},
+                        ],
+                    },
+                ],
+                "max_tokens": 32,
+            },
+        )
+
+        self.assertEqual(status, 200)
+        forwarded = self.loaded[-1][1].chat_calls[0][0]
+        self.assertNotIn("I should inspect the repository.", str(forwarded))
+        self.assertIn("list_files", str(forwarded))
+        self.assertIn("README.md", str(forwarded))
+
     def test_claude_desktop_discovers_routes_counts_tokens_and_routes_messages(self):
         catalog_patcher = patch(
             "machboost.server.catalog_rows",
