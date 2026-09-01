@@ -357,6 +357,32 @@ class NativePromptCacheConfigurationTests(unittest.TestCase):
         )
 
 
+class TeamResidencyTests(unittest.TestCase):
+    def test_team_server_keeps_models_resident_by_default(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            server = MachBoostHTTPServer(
+                ("127.0.0.1", 0),
+                workspace_store=WorkspaceStore(root / "workspaces"),
+                team_store=TeamStore(root / "team.sqlite3"),
+            )
+            try:
+                self.assertEqual(server.manager.default_keep_alive, -1.0)
+            finally:
+                server.server_close()
+
+    def test_local_server_retains_the_idle_timeout(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            server = MachBoostHTTPServer(
+                ("127.0.0.1", 0),
+                workspace_store=WorkspaceStore(Path(temporary) / "workspaces"),
+            )
+            try:
+                self.assertEqual(server.manager.default_keep_alive, 300.0)
+            finally:
+                server.server_close()
+
+
 class ToolCallingAccelerator(FakeAccelerator):
     def generate_chat(
         self,
