@@ -322,6 +322,7 @@ class MLXVLMAccelerator:
         apply_chat_template_fn: Optional[Callable[..., str]],
     ) -> None:
         self.model_name = model_name
+        self.revision: Optional[str] = None
         self.vision_cache = ContentAddressedVisionCache(max_size=vision_cache_size)
         self._prompt_caches: OrderedDict[str, Any] = OrderedDict()
         self._apc_manager: Any = None
@@ -366,6 +367,7 @@ class MLXVLMAccelerator:
             stream_generate_fn=None,
             apply_chat_template_fn=None,
         )
+        instance.revision = revision
         try:
             model, processor = instance._executor.submit(
                 load,
@@ -1036,7 +1038,7 @@ class MLXVLMAccelerator:
                 try:
                     manager_options["disk"] = disk_store(
                         disk_root,
-                        namespace=self.model_name,
+                        namespace=self._apc_disk_namespace(),
                         num_workers=1,
                         max_bytes=int(max_gb * (1 << 30)),
                     )
@@ -1046,6 +1048,22 @@ class MLXVLMAccelerator:
                     pass
             self._apc_manager = apc.APCManager(**manager_options)
         return self._apc_manager
+
+    def _apc_disk_namespace(self) -> str:
+        try:
+            hub = importlib.import_module("huggingface_hub")
+            cached_config = hub.try_to_load_from_cache(
+                self.model_name,
+                "config.json",
+                revision=self.revision or "main",
+            )
+            config_path = Path(cached_config)
+            snapshot = config_path.parent
+            if snapshot.parent.name == "snapshots" and snapshot.name:
+                return f"{snapshot.name[:16]}-{self.model_name}"
+        except (AttributeError, ImportError, TypeError, ValueError):
+            pass
+        return self.model_name
 
     def _prompt_cache_for(self, images: Sequence[str]) -> Any:
         key = f"vision:{self.vision_cache.key_for(list(images))}"
