@@ -5619,6 +5619,9 @@ def serve(
 ) -> None:
     if manager is None:
         manager = RuntimeManager(
+            default_keep_alive=(
+                -1.0 if team_store is not None else DEFAULT_KEEP_ALIVE
+            ),
             replicas=replicas,
             max_queue=max_queue,
             queue_timeout=queue_timeout,
