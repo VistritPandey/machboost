@@ -14,6 +14,8 @@ MachBoost is not a universal `2x-8x` switch. A speedup measured on a context-bac
 
 Context drafting helps only when the model's next tokens are recoverable from caller-supplied local text and the target model accepts those draft tokens. Repository workspaces use a separate mechanism: a stable file/symbol map and query-specific code retrieval stay within a bounded prompt, while MLX can reuse the exact stable prefix on later workspace requests. The question itself can be new, but the first request still pays normal indexing and prefill costs. Without a supported verified-decoding backend, a novel message outside a workspace falls back to native generation, where expected algorithmic speedup is about `1.0x` and the server layer can add latency.
 
+Native MLX-VLM also keeps a model-revision-scoped prefix cache on local disk, bounded to 8 GiB by default. A previously seen system, tool, or repository prefix can therefore survive a daemon or app restart; generated answers are not cached. In a controlled Muse Glimmer 30B 4-bit restart test, a 3,448-token coding prompt measured `30.04s` TTFT cold and `1.79s` after restoring 3,432 prefix tokens from disk. Including a fresh model load in both processes, wall time fell from `34.66s` to `6.03s`. This is reuse of an identical stable prefix, not a speedup for never-seen prompt tokens. Set `MACHBOOST_MLX_APC_DISK=0` to disable persistence, or tune its location and bound with `MACHBOOST_MLX_APC_DISK_PATH` and `MACHBOOST_MLX_APC_DISK_GB`.
+
 DFlash is the first MachBoost path aimed directly at unique output decoding. It is explicit opt-in, greedy-only, text-only, and limited to published model/draft pairs. On this Apple M5 Pro, the same Qwen3.5 4B BF16 target reached a `1.65x` median decode-throughput speedup across three fresh 512-token prompt families; per-prompt medians ranged from `1.31x` for code to `2.43x` for reasoning, and all three 128-token validation prefixes matched native greedy output. The same-weight 9B BF16 row reached `1.61x`, with one prompt at `2.42x`, but only 2/3 validation prefixes matched. Both used the shippable `dflash-mlx==0.1.8` wheel. A practical Qwen3.5 9B 4-bit control reached `1.32x` with adaptive verification and also diverged; fixed 16-token verification regressed to `0.84x` overall. These are decode results, not universal end-to-end, quality-equivalence, or short-answer claims.
 
 Muse Glimmer uses native `mlx-vlm` 0.6.13 or newer. `muse-glimmer:30b` resolves to `mlx-community/Muse-Glimmer-30B-4bit`, and explicit 4-bit, 5-bit, 6-bit, 8-bit, BF16, MXFP4, MXFP8, and NVFP4 aliases are available. The compatibility name `muse-glimmer:30b-mlx` still reaches the older Ollama MLX artifact, but only when explicitly requested. The archived Ollama DFlash diagnostic is retained as historical evidence and is not a claim about the native MLX-VLM path.
@@ -357,7 +359,9 @@ actually served the request. In Developer mode, MachBoost primes the stable
 system/tool prefix before the first message and reports load, queue, prefill,
 and cached-prefix time separately. This can substantially reduce TTFT for a
 reused coding prefix, but it does not make a novel prompt or output decoding
-free.
+free. The Anthropic gateway keeps core coding tools and query-relevant MCP tools
+within a bounded schema budget instead of prefilling every connected tool. Set
+`MACHBOOST_ANTHROPIC_TOOL_LIMIT` only when a deployment needs a different cap.
 
 Coding agents can use their native tool protocol. MachBoost returns function
 calls while the client keeps responsibility for file access, shell commands,
