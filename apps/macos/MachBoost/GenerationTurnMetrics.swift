@@ -18,8 +18,9 @@ struct GenerationTurnMetrics: Equatable {
     private(set) var promptEvalSeconds: Double?
     private(set) var promptTokens: Int?
     private(set) var cachedPromptTokens: Int?
+    private var recordedVisibleRound = false
 
-    mutating func absorb(_ event: ChatEvent) {
+    mutating func absorb(_ event: ChatEvent, producedVisibleOutput: Bool = true) {
         guard event.done else { return }
         rounds += 1
         wasCancelled = wasCancelled || event.doneReason == "cancelled"
@@ -37,7 +38,8 @@ struct GenerationTurnMetrics: Equatable {
         if let duration = event.totalDuration, duration > 0 {
             totalDurationSeconds += Double(duration) / 1_000_000_000
         }
-        if rounds == 1 {
+        if producedVisibleOutput, !recordedVisibleRound {
+            recordedVisibleRound = true
             timeToFirstTokenSeconds = event.machboost?.timeToFirstTokenSeconds
             modelLoadSeconds = Double(event.loadDuration ?? 0) / 1_000_000_000
             queueWaitSeconds = event.machboost?.scheduler?.queueWaitSeconds
