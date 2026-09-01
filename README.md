@@ -136,6 +136,16 @@ confirmation. Partially downloaded repositories are not shown as runnable: the
 catalog verifies that every indexed weight shard exists before marking a model
 cached.
 
+The app's **Extensions** view manages MCP connectors and reusable instructions.
+Connectors may use a local stdio command or a remote Streamable HTTP endpoint.
+MachBoost keeps credentials local and redacts their values from its API. Chats
+see only two stable gateway tools for searching and calling connected tools, so
+adding connectors does not inject every external schema into every prompt.
+External tool calls require one-time approval in chat. Enabled reusable
+instructions follow app requests to local or shared inference hosts. Connected
+tools are enabled per chat with the **Tools** control, so ordinary chat keeps
+its smaller, cache-friendly prompt.
+
 An unsigned Apple Silicon community preview is available from
 [GitHub Releases](../../releases/latest).
 Drag the app from the DMG into Applications and attempt to open it once. Because
@@ -163,6 +173,26 @@ machboost run qwen2.5:3b
 machboost warm qwen2.5:3b
 machboost ps
 ```
+
+Connect a local MCP server or save reusable instructions from the CLI:
+
+```sh
+machboost mcp add filesystem \
+  --command npx \
+  --arg -y \
+  --arg @modelcontextprotocol/server-filesystem \
+  --arg "$HOME/Projects"
+machboost mcp list
+machboost mcp test SERVER_ID
+
+machboost skill add concise \
+  --instructions "Answer directly and include exact file paths when relevant."
+machboost skill list
+```
+
+MachBoost bundles the MCP client runtime. A configured connector runs only when
+a user or approved model tool call invokes it; merely adding one does not send
+chat content to that server.
 
 Inside chat, `Ctrl-C` stops only the current reply and `Ctrl-D` unloads the current model and exits. `/bye` exits while preserving the five-minute idle window. Use `--keep-alive forever` only when indefinite residency is intentional.
 
