@@ -921,6 +921,24 @@ class MLXVLMAcceleratorTests(unittest.TestCase):
                 pass
 
         disk_root = self.root / "persistent-apc"
+        snapshot_config = (
+            self.root
+            / "models--mlx-community--fake-vlm"
+            / "snapshots"
+            / "0123456789abcdef0123456789abcdef"
+            / "config.json"
+        )
+
+        def import_module(name):
+            if name == "huggingface_hub":
+                return SimpleNamespace(
+                    try_to_load_from_cache=lambda *_args, **_kwargs: snapshot_config
+                )
+            return SimpleNamespace(
+                APCManager=FakeAPCManager,
+                DiskBlockStore=FakeDiskBlockStore,
+            )
+
         with patch.dict(
             "os.environ",
             {
@@ -930,15 +948,15 @@ class MLXVLMAcceleratorTests(unittest.TestCase):
             },
         ), patch(
             "machboost.adapters.mlx_vlm.importlib.import_module",
-            return_value=SimpleNamespace(
-                APCManager=FakeAPCManager,
-                DiskBlockStore=FakeDiskBlockStore,
-            ),
+            side_effect=import_module,
         ):
             self.accelerator._get_apc_manager()
 
         self.assertEqual(observed["disk_root"], disk_root)
-        self.assertEqual(observed["disk_options"]["namespace"], "fake-vlm")
+        self.assertEqual(
+            observed["disk_options"]["namespace"],
+            "0123456789abcdef-fake-vlm",
+        )
         self.assertEqual(observed["disk_options"]["num_workers"], 1)
         self.assertEqual(
             observed["disk_options"]["max_bytes"],
