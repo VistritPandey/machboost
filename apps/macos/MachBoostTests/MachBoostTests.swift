@@ -136,6 +136,27 @@ final class MachBoostTests: XCTestCase {
         )
     }
 
+    func testHostRoutingPreservesAuthoritativeFullContentCorrection() {
+        let event = ChatEvent(
+            requestID: "chat-prefix-repair",
+            message: .init(role: "assistant", content: ""),
+            done: false,
+            doneReason: nil,
+            totalDuration: nil,
+            evalDuration: nil,
+            evalCount: nil,
+            machboost: .init(
+                backend: nil,
+                stats: nil,
+                timeToFirstTokenSeconds: nil,
+                fullContent: "You're welcome!"
+            ),
+            error: nil
+        )
+
+        XCTAssertTrue(AppState.hasVisibleOutput(event))
+    }
+
     func testTurnMetricsAggregateEveryToolRound() {
         var metrics = GenerationTurnMetrics()
         metrics.absorb(
@@ -179,6 +200,52 @@ final class MachBoostTests: XCTestCase {
         XCTAssertEqual(message.durationSeconds ?? 0, 3, accuracy: 0.001)
         XCTAssertEqual(message.timeToFirstTokenSeconds, 0.25)
         XCTAssertTrue(message.wasCancelled)
+    }
+
+    func testTurnMetricsUsesTheFirstVisibleRoundForTTFT() {
+        var metrics = GenerationTurnMetrics()
+        metrics.absorb(
+            ChatEvent(
+                requestID: "hidden",
+                message: nil,
+                done: true,
+                doneReason: "stop",
+                totalDuration: 12_000_000_000,
+                evalDuration: 250_000_000,
+                evalCount: 5,
+                machboost: .init(
+                    backend: "mlx-vlm",
+                    stats: nil,
+                    timeToFirstTokenSeconds: 11.8
+                ),
+                error: nil
+            ),
+            producedVisibleOutput: false
+        )
+        metrics.absorb(
+            ChatEvent(
+                requestID: "visible",
+                message: nil,
+                done: true,
+                doneReason: "stop",
+                totalDuration: 1_000_000_000,
+                evalDuration: 500_000_000,
+                evalCount: 10,
+                machboost: .init(
+                    backend: "mlx-vlm",
+                    stats: nil,
+                    timeToFirstTokenSeconds: 0.62
+                ),
+                error: nil
+            ),
+            producedVisibleOutput: true
+        )
+        let message = ChatMessage(role: .assistant, content: "Done")
+
+        metrics.apply(to: message)
+
+        XCTAssertEqual(message.timeToFirstTokenSeconds, 0.62)
+        XCTAssertEqual(message.generatedTokens, 15)
     }
 
     func testTurnMetricsPersistPaidProviderMetadata() throws {
@@ -1860,6 +1927,18 @@ final class MachBoostTests: XCTestCase {
             await manager.shutdown(endpoint: configuration.endpoint, apiToken: nil)
             throw error
         }
+    }
+
+    func testExtensionsSchemaDecodesRedactedConnectorsAndSkills() throws {
+        let data = Data(
+            #"{"schema":"machboost.extensions.v1","mcp_servers":[{"id":"mcp_1","name":"Tracker","transport":"http","url":"https://example.test/mcp","command":null,"args":[],"enabled":true,"tool_count":4,"last_status":"ready","last_error":null,"env_keys":[],"header_names":["Authorization"],"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}],"skills":[{"id":"skill_1","name":"Concise","instructions":"Use short answers.","enabled":true,"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}],"gateway_tools":[]}"#.utf8
+        )
+
+        let decoded = try JSONDecoder().decode(ExtensionsResponse.self, from: data)
+
+        XCTAssertEqual(decoded.mcpServers.first?.name, "Tracker")
+        XCTAssertEqual(decoded.mcpServers.first?.headerNames, ["Authorization"])
+        XCTAssertEqual(decoded.skills.first?.instructions, "Use short answers.")
     }
 
     private func mockSession(
