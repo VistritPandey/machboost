@@ -1164,6 +1164,50 @@ class HTTPServerTests(unittest.TestCase):
         self.assertEqual(health["status"], "ok")
         self.assertEqual(health["serving"]["text_replicas"], 1)
 
+    def test_extensions_crud_and_enabled_skill_injection(self):
+        status, _, body = self.request(
+            "/api/mcp/servers",
+            {
+                "name": "Local files",
+                "transport": "stdio",
+                "command": "example-mcp-server",
+                "args": ["--safe"],
+            },
+        )
+        self.assertEqual(status, 201)
+        server = json.loads(body)["server"]
+        self.assertEqual(server["transport"], "stdio")
+        self.assertNotIn("env", server)
+
+        status, _, body = self.request(
+            "/api/skills",
+            {
+                "name": "House style",
+                "instructions": "End every answer with TEST-SKILL.",
+                "enabled": True,
+            },
+        )
+        self.assertEqual(status, 201)
+        skill = json.loads(body)["skill"]
+
+        _, _, body = self.request("/api/extensions")
+        extensions = json.loads(body)
+        self.assertEqual(extensions["mcp_servers"][0]["id"], server["id"])
+        self.assertEqual(extensions["skills"][0]["id"], skill["id"])
+        self.assertEqual(len(extensions["gateway_tools"]), 2)
+
+        self.request(
+            "/api/chat",
+            {
+                "model": "mlx-community/example",
+                "messages": [{"role": "user", "content": "hello"}],
+                "stream": False,
+            },
+        )
+        messages = self.loaded[0][1].chat_calls[0][0]
+        self.assertEqual(messages[0]["role"], "system")
+        self.assertIn("TEST-SKILL", messages[0]["content"])
+
         self.request(
             "/api/chat",
             {
