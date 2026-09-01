@@ -2937,6 +2937,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                 return
 
         stream_started = False
+        streamed_content = ""
 
         def on_admitted() -> None:
             nonlocal stream_started
@@ -2944,6 +2945,8 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
             stream_started = True
 
         def emit(text: str) -> None:
+            nonlocal streamed_content
+            streamed_content += text
             self.write_json_line(
                 {
                     "request_id": request_id,
@@ -3046,6 +3049,22 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                     "model": model,
                     "created_at": utc_timestamp(),
                     "message": message,
+                    "machboost": {"full_content": content},
+                    "done": False,
+                }
+            )
+        elif content != streamed_content:
+            remaining_content = (
+                content[len(streamed_content) :]
+                if content.startswith(streamed_content)
+                else ""
+            )
+            self.write_json_line(
+                {
+                    "request_id": request_id,
+                    "model": model,
+                    "created_at": utc_timestamp(),
+                    "message": {"role": "assistant", "content": remaining_content},
                     "machboost": {"full_content": content},
                     "done": False,
                 }
