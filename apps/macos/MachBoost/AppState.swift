@@ -1,4 +1,5 @@
 import Foundation
+import MachBoostDaemonClient
 import Observation
 
 private struct InferenceCandidate: Sendable {
@@ -62,6 +63,8 @@ final class AppState {
     private(set) var memories: [MemorySummary] = []
     private(set) var cacheMetrics: CacheMetrics?
     private(set) var providers: [ProviderSummary] = []
+    private(set) var mcpServers: [MCPServerSummary] = []
+    private(set) var skills: [SkillSummary] = []
     private(set) var lastCreatedTeamToken: String?
     private(set) var downloads: [String: PullEvent] = [:]
     private(set) var loadingModels: Set<String> = []
@@ -457,10 +460,13 @@ final class AppState {
             async let memories = api.memories(workspaceID: nil)
             async let metrics = api.cacheMetrics()
             async let providers = api.providers()
-            let values = try await (memories, metrics, providers)
+            async let extensions = api.extensions()
+            let values = try await (memories, metrics, providers, extensions)
             self.memories = values.0
             cacheMetrics = values.1
             self.providers = values.2
+            mcpServers = values.3.mcpServers
+            skills = values.3.skills
             if !usesUITestAPI {
                 for provider in values.2 where !provider.hasSecret {
                     guard let secret = await KeychainStore.providerSecretAsync(id: provider.id)
@@ -472,9 +478,109 @@ final class AppState {
             memories = []
             cacheMetrics = nil
             providers = []
+            mcpServers = []
+            skills = []
         } catch {
             presentedError = error.localizedDescription
         }
+    }
+
+    func configureMCPServer(
+        id: String?,
+        name: String,
+        transport: String,
+        url: String?,
+        command: String?,
+        args: [String],
+        environment: [String: String],
+        headers: [String: String],
+        enabled: Bool
+    ) async -> Bool {
+        do {
+            _ = try await api.configureMCPServer(
+                id: id,
+                name: name,
+                transport: transport,
+                url: url,
+                command: command,
+                args: args,
+                environment: environment,
+                headers: headers,
+                enabled: enabled
+            )
+            await refreshMemoryAndProviders()
+            return true
+        } catch {
+            presentedError = error.localizedDescription
+            return false
+        }
+    }
+
+    func deleteMCPServer(id: String) async {
+        do {
+            try await api.deleteMCPServer(id: id)
+            await refreshMemoryAndProviders()
+        } catch {
+            presentedError = error.localizedDescription
+        }
+    }
+
+    func testMCPServer(id: String) async -> [MCPToolSummary]? {
+        do {
+            let tools = try await api.testMCPServer(id: id)
+            await refreshMemoryAndProviders()
+            return tools
+        } catch {
+            presentedError = error.localizedDescription
+            await refreshMemoryAndProviders()
+            return nil
+        }
+    }
+
+    func configureSkill(
+        id: String?,
+        name: String,
+        instructions: String,
+        enabled: Bool
+    ) async -> Bool {
+        do {
+            _ = try await api.configureSkill(
+                id: id,
+                name: name,
+                instructions: instructions,
+                enabled: enabled
+            )
+            await refreshMemoryAndProviders()
+            return true
+        } catch {
+            presentedError = error.localizedDescription
+            return false
+        }
+    }
+
+    func deleteSkill(id: String) async {
+        do {
+            try await api.deleteSkill(id: id)
+            await refreshMemoryAndProviders()
+        } catch {
+            presentedError = error.localizedDescription
+        }
+    }
+
+    func searchMCPTools(query: String, limit: Int = 8) async throws -> [MCPToolSummary] {
+        try await api.searchMCPTools(query: query, limit: limit)
+    }
+
+    func callMCPTool(
+        serverID: String,
+        name: String,
+        arguments: JSONValue
+    ) async throws -> MCPToolResult {
+        try await api.callMCPTool(
+            serverID: serverID,
+            name: name,
+            arguments: arguments
+        )
     }
 
     func deleteMemory(id: String) async {
@@ -1273,11 +1379,12 @@ final class AppState {
         hostCooldownUntil[candidate.hostID] = Date().addingTimeInterval(cooldown)
     }
 
-    private static func hasVisibleOutput(_ event: ChatEvent) -> Bool {
-        guard let message = event.message else { return false }
-        return !message.content.isEmpty
-            || !(message.thinking ?? "").isEmpty
-            || !(message.toolCalls ?? []).isEmpty
+    nonisolated static func hasVisibleOutput(_ event: ChatEvent) -> Bool {
+        let message = event.message
+        return !(message?.content.isEmpty ?? true)
+            || !(message?.thinking ?? "").isEmpty
+            || !(message?.toolCalls ?? []).isEmpty
+            || event.machboost?.fullContent != nil
     }
 
     private func smoothedRoundTrip(previous: Double?, observed: Double) -> Double {
