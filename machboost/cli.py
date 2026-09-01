@@ -585,6 +585,117 @@ def run_disconnect(args: argparse.Namespace, *, output_stream=None, error_stream
     return 0
 
 
+def run_mcp(args: argparse.Namespace, *, output_stream=None, error_stream=None) -> int:
+    output_stream = output_stream or sys.stdout
+    error_stream = error_stream or sys.stderr
+    try:
+        client, _ = ensure_server(args.endpoint, timeout=args.timeout)
+        if args.mcp_command == "list":
+            rows = list(client.extensions().get("mcp_servers") or ())
+            if args.json:
+                print(json.dumps(rows, indent=2), file=output_stream)
+            elif not rows:
+                print("no MCP connectors configured", file=output_stream)
+            else:
+                print("STATUS  TOOLS  NAME                 CONNECTION", file=output_stream)
+                for row in rows:
+                    status = row.get("last_status") or ("enabled" if row.get("enabled") else "disabled")
+                    connection = row.get("url") or " ".join(
+                        [str(row.get("command") or ""), *map(str, row.get("args") or ())]
+                    ).strip()
+                    print(
+                        f"{status:<7} {int(row.get('tool_count') or 0):<6} "
+                        f"{str(row.get('name') or ''):<20} {connection}",
+                        file=output_stream,
+                    )
+            return 0
+        if args.mcp_command == "add":
+            transport = "http" if args.url else "stdio"
+            server = client.configure_mcp_server(
+                args.name,
+                transport=transport,
+                url=args.url,
+                command=args.mcp_executable,
+                args=tuple(args.arg),
+                env=_key_value_pairs(args.env),
+                headers=_key_value_pairs(args.header),
+            )
+            print(f"saved MCP connector {server.get('name')} ({server.get('id')})", file=output_stream)
+            return 0
+        if args.mcp_command == "remove":
+            client.delete_mcp_server(args.server_id)
+            print(f"removed MCP connector {args.server_id}", file=output_stream)
+            return 0
+        if args.mcp_command == "test":
+            tools = client.test_mcp_server(args.server_id)
+            if args.json:
+                print(json.dumps(tools, indent=2), file=output_stream)
+            else:
+                print(f"connected; {len(tools)} tool(s)", file=output_stream)
+                for tool in tools:
+                    print(f"  {tool.get('name')}: {tool.get('description') or ''}", file=output_stream)
+            return 0
+        if args.mcp_command == "search":
+            tools = client.search_mcp_tools(args.query, limit=args.limit)
+            print(json.dumps(tools, indent=2), file=output_stream)
+            return 0
+        if args.mcp_command == "call":
+            arguments = json.loads(args.arguments)
+            if not isinstance(arguments, dict):
+                raise ValueError("--arguments must be a JSON object")
+            result = client.call_mcp_tool(args.server_id, args.tool, arguments)
+            if args.json:
+                print(json.dumps(result, indent=2), file=output_stream)
+            else:
+                print(result.get("text") or "tool completed with no text", file=output_stream)
+            return 0
+    except (json.JSONDecodeError, MachBoostAPIError, RuntimeError, ValueError) as exc:
+        print(f"machboost mcp error: {exc}", file=error_stream)
+        return 2
+    return 0
+
+
+def run_skill(args: argparse.Namespace, *, output_stream=None, error_stream=None) -> int:
+    output_stream = output_stream or sys.stdout
+    error_stream = error_stream or sys.stderr
+    try:
+        client, _ = ensure_server(args.endpoint, timeout=args.timeout)
+        if args.skill_command == "list":
+            rows = list(client.extensions().get("skills") or ())
+            if args.json:
+                print(json.dumps(rows, indent=2), file=output_stream)
+            elif not rows:
+                print("no reusable instructions configured", file=output_stream)
+            else:
+                for row in rows:
+                    state = "on" if row.get("enabled") else "off"
+                    print(f"{state:<3} {row.get('id')}  {row.get('name')}", file=output_stream)
+            return 0
+        if args.skill_command == "add":
+            skill = client.configure_skill(args.name, args.instructions)
+            print(f"saved instructions {skill.get('name')} ({skill.get('id')})", file=output_stream)
+            return 0
+        if args.skill_command == "remove":
+            client.delete_skill(args.skill_id)
+            print(f"removed instructions {args.skill_id}", file=output_stream)
+            return 0
+    except (MachBoostAPIError, RuntimeError, ValueError) as exc:
+        print(f"machboost skill error: {exc}", file=error_stream)
+        return 2
+    return 0
+
+
+def _key_value_pairs(values: Sequence[str]) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for value in values:
+        key, separator, item = value.partition("=")
+        key = key.strip()
+        if not separator or not key:
+            raise ValueError(f"expected NAME=VALUE, got {value!r}")
+        result[key] = item
+    return result
+
+
 def run_launch(args: argparse.Namespace, *, output_stream=None, error_stream=None) -> int:
     output_stream = output_stream or sys.stdout
     error_stream = error_stream or sys.stderr
@@ -2740,6 +2851,55 @@ def build_parser() -> argparse.ArgumentParser:
     launch.add_argument("--timeout", type=float, default=30.0)
     launch.add_argument("--json", action="store_true")
 
+    mcp = subcommands.add_parser("mcp", help="Manage Model Context Protocol connectors.")
+    mcp_subcommands = mcp.add_subparsers(dest="mcp_command", required=True)
+    mcp_list = mcp_subcommands.add_parser("list", help="List configured MCP connectors.")
+    mcp_list.add_argument("--json", action="store_true")
+    add_server_connection_arguments(mcp_list)
+    mcp_add = mcp_subcommands.add_parser("add", help="Add an MCP connector.")
+    mcp_add.add_argument("name")
+    mcp_source = mcp_add.add_mutually_exclusive_group(required=True)
+    mcp_source.add_argument("--url", help="Streamable HTTP MCP endpoint.")
+    mcp_source.add_argument(
+        "--command",
+        dest="mcp_executable",
+        help="Local stdio MCP command.",
+    )
+    mcp_add.add_argument("--arg", action="append", default=[], help="Command argument; repeat as needed.")
+    mcp_add.add_argument("--env", action="append", default=[], help="Environment NAME=VALUE; repeat as needed.")
+    mcp_add.add_argument("--header", action="append", default=[], help="HTTP header NAME=VALUE; repeat as needed.")
+    add_server_connection_arguments(mcp_add)
+    mcp_remove = mcp_subcommands.add_parser("remove", help="Remove an MCP connector.")
+    mcp_remove.add_argument("server_id")
+    add_server_connection_arguments(mcp_remove)
+    mcp_test = mcp_subcommands.add_parser("test", help="Connect and list an MCP server's tools.")
+    mcp_test.add_argument("server_id")
+    mcp_test.add_argument("--json", action="store_true")
+    add_server_connection_arguments(mcp_test)
+    mcp_search = mcp_subcommands.add_parser("search", help="Search tools from enabled connectors.")
+    mcp_search.add_argument("query")
+    mcp_search.add_argument("--limit", type=int, default=8)
+    add_server_connection_arguments(mcp_search)
+    mcp_call = mcp_subcommands.add_parser("call", help="Call one MCP tool.")
+    mcp_call.add_argument("server_id")
+    mcp_call.add_argument("tool")
+    mcp_call.add_argument("--arguments", default="{}", help="Tool arguments as a JSON object.")
+    mcp_call.add_argument("--json", action="store_true")
+    add_server_connection_arguments(mcp_call)
+
+    skill = subcommands.add_parser("skill", help="Manage reusable chat instructions.")
+    skill_subcommands = skill.add_subparsers(dest="skill_command", required=True)
+    skill_list = skill_subcommands.add_parser("list", help="List reusable instructions.")
+    skill_list.add_argument("--json", action="store_true")
+    add_server_connection_arguments(skill_list)
+    skill_add = skill_subcommands.add_parser("add", help="Add reusable instructions.")
+    skill_add.add_argument("name")
+    skill_add.add_argument("--instructions", required=True)
+    add_server_connection_arguments(skill_add)
+    skill_remove = skill_subcommands.add_parser("remove", help="Remove reusable instructions.")
+    skill_remove.add_argument("skill_id")
+    add_server_connection_arguments(skill_remove)
+
     subcommands.add_parser("version", help="Print the installed MachBoost version.")
     return parser
 
@@ -2975,6 +3135,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return run_disconnect(args)
     if args.command == "launch":
         return run_launch(args)
+    if args.command == "mcp":
+        return run_mcp(args)
+    if args.command == "skill":
+        return run_skill(args)
     if args.command == "run":
         return run_native_chat(args) if args.direct else run_resident_chat(args)
     if args.command == "chat":
