@@ -96,6 +96,101 @@ class MachBoostClient:
     def metrics(self) -> dict[str, Any]:
         return self.get("/api/metrics")
 
+    def extensions(self) -> dict[str, Any]:
+        return self.get("/api/extensions")
+
+    def configure_mcp_server(
+        self,
+        name: str,
+        *,
+        server_id: Optional[str] = None,
+        transport: str = "http",
+        url: Optional[str] = None,
+        command: Optional[str] = None,
+        args: tuple[str, ...] = (),
+        env: Optional[dict[str, str]] = None,
+        headers: Optional[dict[str, str]] = None,
+        enabled: bool = True,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "name": name,
+            "transport": transport,
+            "args": list(args),
+            "env": dict(env or {}),
+            "headers": dict(headers or {}),
+            "enabled": bool(enabled),
+        }
+        if server_id:
+            payload["id"] = server_id
+        if url:
+            payload["url"] = url
+        if command:
+            payload["command"] = command
+        return dict(self.post("/api/mcp/servers", payload).get("server") or {})
+
+    def delete_mcp_server(self, server_id: str) -> bool:
+        return bool(
+            self.post("/api/mcp/servers/delete", {"server_id": server_id}).get(
+                "removed"
+            )
+        )
+
+    def test_mcp_server(self, server_id: str) -> list[dict[str, Any]]:
+        return list(
+            self.post("/api/mcp/servers/test", {"server_id": server_id}).get(
+                "tools"
+            )
+            or ()
+        )
+
+    def search_mcp_tools(self, query: str, *, limit: int = 8) -> list[dict[str, Any]]:
+        return list(
+            self.post("/api/mcp/search", {"query": query, "limit": int(limit)}).get(
+                "tools"
+            )
+            or ()
+        )
+
+    def call_mcp_tool(
+        self,
+        server_id: str,
+        name: str,
+        arguments: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
+        return dict(
+            self.post(
+                "/api/mcp/call",
+                {
+                    "server_id": server_id,
+                    "name": name,
+                    "arguments": dict(arguments or {}),
+                },
+            ).get("result")
+            or {}
+        )
+
+    def configure_skill(
+        self,
+        name: str,
+        instructions: str,
+        *,
+        skill_id: Optional[str] = None,
+        enabled: bool = True,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "name": name,
+            "instructions": instructions,
+            "enabled": bool(enabled),
+        }
+        if skill_id:
+            payload["id"] = skill_id
+        return dict(self.post("/api/skills", payload).get("skill") or {})
+
+    def delete_skill(self, skill_id: str) -> bool:
+        return bool(
+            self.post("/api/skills/delete", {"skill_id": skill_id}).get("removed")
+        )
+
     def team_status(self) -> dict[str, Any]:
         return self.get("/api/team/status")
 
