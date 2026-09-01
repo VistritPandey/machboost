@@ -26,6 +26,7 @@ from .claude_desktop import (
     estimate_anthropic_input_tokens,
     resolve_claude_desktop_model,
 )
+from .extensions import ExtensionStore, MCPConnectorManager, MCP_GATEWAY_TOOLS
 from .memory import CacheNamespace, MemorySearch, TeamMemoryStore, exchange_memory
 from .model_store import ModelStore, StoredModel, apply_stored_model
 from .models import (
@@ -79,6 +80,8 @@ TEAM_INFERENCE_PATHS = {
     "/api/generate",
     "/api/embed",
     "/api/embeddings",
+    "/api/mcp/search",
+    "/api/mcp/call",
     "/v1/chat/completions",
     "/v1/completions",
     "/v1/embeddings",
@@ -1496,6 +1499,7 @@ class MachBoostHTTPServer(ThreadingHTTPServer):
         memory_store: Optional[TeamMemoryStore] = None,
         provider_store: Optional[ProviderStore] = None,
         model_store: Optional[ModelStore] = None,
+        extension_store: Optional[ExtensionStore] = None,
     ) -> None:
         self.manager = manager or RuntimeManager()
         self.workspace_store = workspace_store or WorkspaceStore()
@@ -1511,6 +1515,11 @@ class MachBoostHTTPServer(ThreadingHTTPServer):
         )
         model_database = shared_database or (self.workspace_store.home.parent / "models.sqlite3")
         self.model_store = model_store or ModelStore(model_database)
+        extension_database = shared_database or (
+            self.workspace_store.home.parent / "extensions.sqlite3"
+        )
+        self.extension_store = extension_store or ExtensionStore(extension_database)
+        self.mcp_connectors = MCPConnectorManager(self.extension_store)
         self.team_admission = TeamAdmissionController()
         if self.require_auth and not self.api_token:
             raise ValueError("secured serving requires MACHBOOST_API_TOKEN")
@@ -1535,6 +1544,7 @@ class MachBoostHTTPServer(ThreadingHTTPServer):
             self.memory_store.close()
         if self.provider_store is not None:
             self.provider_store.close()
+        self.extension_store.close()
         self.model_store.close()
         if self.team_store is not None:
             self.team_store.close()
@@ -1568,6 +1578,14 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
     @property
     def models(self) -> ModelStore:
         return self.server.model_store  # type: ignore[attr-defined]
+
+    @property
+    def extensions(self) -> ExtensionStore:
+        return self.server.extension_store  # type: ignore[attr-defined]
+
+    @property
+    def mcp(self) -> MCPConnectorManager:
+        return self.server.mcp_connectors  # type: ignore[attr-defined]
 
     @property
     def principal(self) -> TeamPrincipal:
@@ -1771,6 +1789,30 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
             stored,
         )
 
+    def apply_skill_instructions(
+        self,
+        payload: dict[str, Any],
+        messages: Sequence[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        extension = payload.get("machboost")
+        extension = extension if isinstance(extension, dict) else {}
+        requested = extension.get("skills")
+        if requested is False or requested == "off":
+            return [dict(message) for message in messages]
+        if requested is None or requested == "enabled":
+            skill_ids = None
+        elif isinstance(requested, str):
+            skill_ids = [requested]
+        elif isinstance(requested, Sequence):
+            skill_ids = [str(value) for value in requested]
+        else:
+            raise ValueError("machboost.skills must be enabled, off, an id, or an array")
+        instructions = self.extensions.skill_prompt(skill_ids)
+        result = [dict(message) for message in messages]
+        if instructions:
+            result.insert(0, {"role": "system", "content": instructions})
+        return result
+
     def claude_gateway_model_names(self) -> list[str]:
         rows = ollama_model_rows(
             catalog_rows(),
@@ -1911,6 +1953,8 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                         "vision",
                         "reasoning",
                         "tool_calls",
+                        "mcp_connectors",
+                        "reusable_instructions",
                         "cancellation",
                         "openai_compatibility",
                         "anthropic_compatibility",
@@ -2038,6 +2082,20 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
             if not self.require_scope("models:read"):
                 return
             self.send_json(integration_catalog(self.headers.get("Host", "127.0.0.1:11435")))
+            return
+        if path == "/api/extensions":
+            if not self.require_scope("models:read"):
+                return
+            self.send_json(
+                {
+                    "schema": "machboost.extensions.v1",
+                    "mcp_servers": [
+                        server.to_dict() for server in self.extensions.list_servers()
+                    ],
+                    "skills": [skill.to_dict() for skill in self.extensions.list_skills()],
+                    "gateway_tools": list(MCP_GATEWAY_TOOLS),
+                }
+            )
             return
         if path == "/api/memory/status":
             if not self.require_scope("workspaces:read"):
@@ -2281,6 +2339,87 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                 provider_id = required_string(payload, "provider_id")
                 removed = self.providers.delete(provider_id)
                 self.send_json({"provider_id": provider_id, "removed": removed}, status=200 if removed else 404)
+                return
+            if path == "/api/mcp/servers":
+                if not self.require_scope("team:admin"):
+                    return
+                server = self.extensions.configure_server(
+                    server_id=str(payload.get("id") or "").strip() or None,
+                    name=required_string(payload, "name"),
+                    transport=required_string(payload, "transport"),
+                    url=str(payload.get("url") or "").strip() or None,
+                    command=str(payload.get("command") or "").strip() or None,
+                    args=payload.get("args"),
+                    env=payload.get("env"),
+                    headers=payload.get("headers"),
+                    enabled=bool(payload.get("enabled", True)),
+                )
+                self.send_json(
+                    {"schema": "machboost.mcp-server.v1", "server": server.to_dict()},
+                    status=201,
+                )
+                return
+            if path == "/api/mcp/servers/delete":
+                if not self.require_scope("team:admin"):
+                    return
+                server_id = required_string(payload, "server_id")
+                removed = self.extensions.delete_server(server_id)
+                self.send_json(
+                    {"server_id": server_id, "removed": removed},
+                    status=200 if removed else 404,
+                )
+                return
+            if path == "/api/mcp/servers/test":
+                if not self.require_scope("team:admin"):
+                    return
+                tools = self.mcp.list_tools(required_string(payload, "server_id"))
+                self.send_json({"schema": "machboost.mcp-tools.v1", "tools": tools})
+                return
+            if path == "/api/mcp/search":
+                if not self.require_scope("inference"):
+                    return
+                tools = self.mcp.search_tools(
+                    required_string(payload, "query"),
+                    limit=int(payload.get("limit") or 8),
+                )
+                self.send_json({"schema": "machboost.mcp-tools.v1", "tools": tools})
+                return
+            if path == "/api/mcp/call":
+                if not self.require_scope("inference"):
+                    return
+                arguments = payload.get("arguments") or {}
+                if not isinstance(arguments, dict):
+                    raise ValueError("MCP tool arguments must be an object")
+                result = self.mcp.call_tool(
+                    required_string(payload, "server_id"),
+                    required_string(payload, "name"),
+                    arguments,
+                )
+                self.send_json({"schema": "machboost.mcp-result.v1", "result": result})
+                return
+            if path == "/api/skills":
+                if not self.require_scope("team:admin"):
+                    return
+                skill = self.extensions.configure_skill(
+                    skill_id=str(payload.get("id") or "").strip() or None,
+                    name=required_string(payload, "name"),
+                    instructions=required_string(payload, "instructions"),
+                    enabled=bool(payload.get("enabled", True)),
+                )
+                self.send_json(
+                    {"schema": "machboost.skill.v1", "skill": skill.to_dict()},
+                    status=201,
+                )
+                return
+            if path == "/api/skills/delete":
+                if not self.require_scope("team:admin"):
+                    return
+                skill_id = required_string(payload, "skill_id")
+                removed = self.extensions.delete_skill(skill_id)
+                self.send_json(
+                    {"skill_id": skill_id, "removed": removed},
+                    status=200 if removed else 404,
+                )
                 return
             if path == "/api/team/keys":
                 if not self.require_team_admin():
@@ -2578,7 +2717,10 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
 
     def handle_ollama_chat(self, payload: dict[str, Any]) -> None:
         model = required_string(payload, "model")
-        messages = normalize_messages(payload.get("messages") or ())
+        messages = self.apply_skill_instructions(
+            payload,
+            normalize_messages(payload.get("messages") or ()),
+        )
         user_query = latest_user_text(messages)
         options = normalize_ollama_options(payload)
         runtime_model, options, _ = self.resolve_local_model(model, options)
@@ -3223,7 +3365,10 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
             translated["tool_choice"] = compatibility_tool_choice(payload.get("tool_choice"))
         prepared = self.prepare_compat_chat(
             payload,
-            normalize_messages(responses_messages(payload)),
+            self.apply_skill_instructions(
+                payload,
+                normalize_messages(responses_messages(payload)),
+            ),
             openai_options(translated),
         )
         request_id = request_identifier(payload, "resp")
@@ -3435,7 +3580,10 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
             translated["reasoning_effort"] = "high"
         prepared = self.prepare_compat_chat(
             payload,
-            normalize_messages(anthropic_messages(payload)),
+            self.apply_skill_instructions(
+                payload,
+                normalize_messages(anthropic_messages(payload)),
+            ),
             openai_options(translated),
         )
         request_id = request_identifier(payload, "msg")
@@ -3614,7 +3762,10 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
 
     def handle_openai_chat(self, payload: dict[str, Any]) -> None:
         model = required_string(payload, "model")
-        messages = normalize_messages(payload.get("messages") or ())
+        messages = self.apply_skill_instructions(
+            payload,
+            normalize_messages(payload.get("messages") or ()),
+        )
         user_query = latest_user_text(messages)
         options = openai_options(payload)
         runtime_model, options, _ = self.resolve_local_model(model, options)
