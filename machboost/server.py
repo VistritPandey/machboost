@@ -1501,7 +1501,9 @@ class MachBoostHTTPServer(ThreadingHTTPServer):
         model_store: Optional[ModelStore] = None,
         extension_store: Optional[ExtensionStore] = None,
     ) -> None:
-        self.manager = manager or RuntimeManager()
+        self.manager = manager or RuntimeManager(
+            default_keep_alive=-1.0 if team_store is not None else DEFAULT_KEEP_ALIVE
+        )
         self.workspace_store = workspace_store or WorkspaceStore()
         self.api_token = api_token or os.environ.get("MACHBOOST_API_TOKEN")
         self.require_auth = bool(require_auth)
