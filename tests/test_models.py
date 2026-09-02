@@ -19,10 +19,53 @@ from machboost.models import (
     ollama_executable,
     preflight_model,
     resolve_model,
+    search_huggingface_models,
 )
 
 
 class ModelCatalogTests(unittest.TestCase):
+    def test_live_huggingface_search_returns_unverified_mlx_models(self):
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_):
+                return None
+
+            def read(self):
+                return json.dumps(
+                    [
+                        {
+                            "id": "mlx-community/Gemma-3-4B-it-4bit",
+                            "pipeline_tag": "image-text-to-text",
+                            "tags": ["mlx", "vision", "tool-use"],
+                            "downloads": 1234,
+                        }
+                    ]
+                ).encode("utf-8")
+
+        with (
+            patch("machboost.models.urlopen", return_value=Response()) as fetch,
+            patch("machboost.models.cached_repo_path", return_value=None),
+        ):
+            rows = search_huggingface_models("gemma", limit=8)
+
+        request = fetch.call_args.args[0]
+        self.assertIn("search=gemma", request.full_url)
+        self.assertIn("filter=mlx", request.full_url)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["name"], "mlx-community/Gemma-3-4B-it-4bit")
+        self.assertEqual(rows[0]["backend"], "mlx-vlm")
+        self.assertIn("vision", rows[0]["capabilities"])
+        self.assertIn("tools", rows[0]["capabilities"])
+        self.assertEqual(rows[0]["support"], "unverified")
+        self.assertFalse(rows[0]["tested"])
+
+    def test_live_huggingface_search_ignores_short_queries(self):
+        with patch("machboost.models.urlopen") as fetch:
+            self.assertEqual(search_huggingface_models("g"), [])
+        fetch.assert_not_called()
+
     def test_ollama_executable_honors_native_app_override(self):
         with tempfile.TemporaryDirectory() as directory:
             executable = Path(directory, "ollama")
