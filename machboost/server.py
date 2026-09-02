@@ -5618,13 +5618,14 @@ def extract_tool_calls(text: str) -> tuple[str, list[dict[str, Any]]]:
         flags=re.I,
     )
     content = re.sub(
-        r"<\|(?:start|message|end|call|channel|eom|eot)\|>",
+        r"^\s*(?:assistant\s+)?to\s*=\s*[A-Za-z_][\w.-]*"
+        r"(?:<\|message\|>)?\s*",
         "",
         content,
         flags=re.I,
     )
     content = re.sub(
-        r"^\s*(?:assistant\s+)?to\s*=\s*[A-Za-z_][\w.-]*\s*",
+        r"<\|(?:start|message|end|call|channel|eom|eot)\|>",
         "",
         content,
         flags=re.I,
