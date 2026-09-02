@@ -401,6 +401,7 @@ class MLXVLMAcceleratorTests(unittest.TestCase):
         )
 
         self.assertEqual(self.stream.calls[0]["kwargs"]["thinking_budget"], 64)
+        self.assertTrue(self.stream.calls[0]["kwargs"]["enable_thinking"])
         self.assertEqual(self.stream.calls[0]["kwargs"]["thinking_start_token"], "to=self")
         self.assertEqual(self.stream.calls[0]["kwargs"]["thinking_end_token"], "<|eom|>")
 
@@ -462,6 +463,32 @@ class MLXVLMAcceleratorTests(unittest.TestCase):
         self.assertEqual("".join(thinking), "Inspecting inputs")
         self.assertEqual(stats.thinking, "Inspecting inputs")
         self.assertEqual(text, "Done")
+        self.assertEqual("".join(content), text)
+
+    def test_short_content_marker_does_not_leak_into_visible_answer(self):
+        self.accelerator.model.config = {
+            "model_type": "muse_glimmer",
+            "thinking_start_token": "to=self<|message|>",
+            "thinking_end_token": "<|eom|>",
+        }
+
+        def response_stream(model, processor, prompt, **kwargs):
+            yield FakeGenerationRow(
+                "<|start|>assistant to=self<|message|>Brief<|eom|>to=user<|mes"
+            )
+            yield FakeGenerationRow("sage|>I'm doing great!")
+
+        self.accelerator._stream_generate = response_stream
+        content = []
+
+        text, _ = self.accelerator.generate_chat(
+            [{"role": "user", "content": "You good?"}],
+            max_tokens=16,
+            on_text=content.append,
+            enable_thinking=False,
+        )
+
+        self.assertEqual(text, "I'm doing great!")
         self.assertEqual("".join(content), text)
 
     def test_removes_initial_user_prompt_echo_from_reasoning(self):
