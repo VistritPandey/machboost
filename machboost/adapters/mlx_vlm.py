@@ -71,6 +71,8 @@ class ThinkingStreamSplitter:
     CONTENT_MARKERS = (
         "<|start|>assistant to=user<|message|>",
         "<|start|>assistant<|message|>",
+        "assistant to=user<|message|>",
+        "to=user<|message|>",
         "<|START_TEXT|>",
         "<|END_TEXT|>",
         "<|eot|>",
@@ -688,6 +690,7 @@ class MLXVLMAccelerator:
             stream_options: dict[str, Any] = {
                 "max_tokens": max_tokens,
                 "temperature": temperature,
+                "enable_thinking": enable_thinking,
             }
             if thinking_budget is not None:
                 stream_options["thinking_budget"] = thinking_budget
