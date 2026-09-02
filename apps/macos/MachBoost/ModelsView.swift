@@ -49,6 +49,9 @@ struct ModelsView: View {
     @State private var advancedRepository = ""
     @State private var pendingDownload: CatalogModel?
     @State private var pendingRepository: String?
+    @State private var hubModels: [CatalogModel] = []
+    @State private var isSearchingHub = false
+    @State private var hubSearchTask: Task<Void, Never>?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -80,6 +83,19 @@ struct ModelsView: View {
                         modelSection(title: "Recommended", models: recommendedModels)
                     }
                     modelSection(title: "Catalog", models: remainingModels)
+                    if isSearchingHub {
+                        HStack(spacing: 8) {
+                            ProgressView()
+                                .controlSize(.small)
+                            Text("Searching Hugging Face")
+                                .foregroundStyle(.secondary)
+                        }
+                    } else if !filteredHubModels.isEmpty {
+                        modelSection(title: "Hugging Face", models: filteredHubModels)
+                        Text("Live MLX results. MachBoost checks runtime compatibility before downloading weights.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                     advancedSection
                 }
                 .padding(20)
@@ -112,6 +128,12 @@ struct ModelsView: View {
             } else if let repository = pendingRepository {
                 Text("MachBoost will verify \(repository) against the bundled MLX runtime before downloading its weights.")
             }
+        }
+        .onChange(of: search) { _, value in
+            scheduleHubSearch(value)
+        }
+        .onDisappear {
+            hubSearchTask?.cancel()
         }
     }
 
@@ -184,6 +206,33 @@ struct ModelsView: View {
         filteredModels.filter { !$0.recommended }
     }
 
+    private var filteredHubModels: [CatalogModel] {
+        let localNames = Set(appState.catalog.flatMap { [$0.name, $0.repository].compactMap { $0 } })
+        return hubModels.filter {
+            !localNames.contains($0.name)
+                && !($0.repository.map(localNames.contains) ?? false)
+        }
+    }
+
+    private func scheduleHubSearch(_ value: String) {
+        hubSearchTask?.cancel()
+        let query = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard query.count >= 2 else {
+            hubModels = []
+            isSearchingHub = false
+            return
+        }
+        isSearchingHub = true
+        hubSearchTask = Task {
+            try? await Task.sleep(for: .milliseconds(300))
+            guard !Task.isCancelled else { return }
+            let models = await appState.searchHubModels(query: query)
+            guard !Task.isCancelled else { return }
+            hubModels = models
+            isSearchingHub = false
+        }
+    }
+
     private func downloadMessage(for model: CatalogModel) -> String {
         let source = model.backend == "ollama-mlx" ? "Ollama" : "Hugging Face"
         var pieces = ["Download \(model.displayName) through \(source)?"]
@@ -227,9 +276,12 @@ private struct ModelRow: View {
                     if loaded {
                         Label("Loaded", systemImage: "memorychip.fill")
                             .foregroundStyle(.green)
-                    } else if model.support != "ready" {
+                    } else if model.support == "unsupported" || model.support == "missing_runtime" {
                         Label("Unsupported", systemImage: "exclamationmark.triangle.fill")
                             .foregroundStyle(.orange)
+                    } else if !model.tested {
+                        Label("Verify before download", systemImage: "checkmark.shield")
+                            .foregroundStyle(.secondary)
                     } else if model.cached {
                         Label("Downloaded", systemImage: "checkmark.circle.fill")
                             .foregroundStyle(.secondary)
@@ -292,7 +344,11 @@ private struct ModelRow: View {
                 }
                 .accessibilityLabel("Unload \(model.displayName)")
                 .help("Unload model")
-            } else if !model.cached, model.support == "ready" {
+            } else if
+                !model.cached,
+                model.support != "unsupported",
+                model.support != "missing_runtime"
+            {
                 Button(action: onDownload) {
                     Image(systemName: "arrow.down.circle")
                 }
