@@ -117,6 +117,7 @@ public protocol MachBoostAPIProtocol: AnyObject, Sendable {
         warmup: Bool
     ) async throws -> ModelLoadResponse
     func stop(model: String?) async throws
+    func deleteModel(model: String) async throws -> ModelDeleteResponse
     func cancel(requestID: String) async throws -> Bool
     func streamChat(_ request: ChatRequest) -> AsyncThrowingStream<ChatEvent, Error>
     func streamPull(model: String, requestID: String) -> AsyncThrowingStream<PullEvent, Error>
@@ -129,6 +130,13 @@ public extension MachBoostAPIProtocol {
 
     func stop() async throws {
         try await stop(model: nil)
+    }
+
+    func deleteModel(model: String) async throws -> ModelDeleteResponse {
+        throw MachBoostAPIError.server(
+            status: 501,
+            message: "This client does not support deleting downloaded models."
+        )
     }
 
     func workspaces() async throws -> [WorkspaceSummary] {
@@ -779,6 +787,13 @@ public final class MachBoostAPI: MachBoostAPIProtocol, @unchecked Sendable {
     public func stop(model: String? = nil) async throws {
         let payload: [String: Any] = model.map { ["model": $0] } ?? [:]
         let _: EmptyResponse = try await post("/api/stop", jsonObject: payload)
+    }
+
+    public func deleteModel(model: String) async throws -> ModelDeleteResponse {
+        try await post(
+            "/api/delete",
+            jsonObject: ["model": model, "purge": true]
+        )
     }
 
     public func shutdown() async throws {
