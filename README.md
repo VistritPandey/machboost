@@ -127,6 +127,10 @@ or **Server → Developer**. The Server view also makes the network boundary
 visible: `127.0.0.1` is local to the host Mac, while authenticated LAN mode
 shows the active LAN IPv4 address and copyable OpenAI Responses, Anthropic
 Messages, Chat Completions, and Ollama client settings for other computers.
+Active downloads remain visible at the top of **Models** with aggregate bytes,
+completed files, transfer rate, ETA, and the currently active Hugging Face/Xet
+shards. A downloaded model can be unloaded and permanently removed from its
+managed cache with the row's trash button.
 
 Release builds bundle pinned arm64 CPython 3.13, MLX, `mlx-lm`, `mlx-vlm`, and
 MachBoost dependencies. They do not depend on Homebrew, system Python, or an
@@ -1033,10 +1037,11 @@ machboost ps
 machboost show qwen2.5:3b
 machboost stop qwen2.5:3b
 machboost rm company-coder:staging
+machboost rm mlx-community/unused-model --weights
 machboost shutdown
 ```
 
-`machboost list` shows cached Hugging Face and MLX models, backend readiness, and available short aliases. `machboost run MODEL` uses the selected local, fixed, or automatic host mode, loads the model before accepting input, builds a draft corpus from any `--context` files or directories, and opens a streaming interactive chat. New shared connections enable the automatic pool; use `machboost use studio` to pin one host or `machboost use local` to opt out. Use `/?` for commands, `/status` for the active host and route, `/route` for a fresh latency/load ranking, `/stats on|off` for response metrics, `/clear` to reset history, `/bye` to exit while keeping the idle window, `Ctrl-C` to stop a reply, and `Ctrl-D` or `/unload` to unload and exit.
+`machboost list` shows cached Hugging Face and MLX models, backend readiness, and available short aliases. `machboost run MODEL` uses the selected local, fixed, or automatic host mode, loads the model before accepting input, builds a draft corpus from any `--context` files or directories, and opens a streaming interactive chat. New shared connections enable the automatic pool; use `machboost use studio` to pin one host or `machboost use local` to opt out. Use `/?` for commands, `/status` for the active host and route, `/route` for a fresh latency/load ranking, `/stats on|off` for response metrics, `/clear` to reset history, `/bye` to exit while keeping the idle window, `Ctrl-C` to stop a reply, and `Ctrl-D` or `/unload` to unload and exit. Plain `machboost rm` removes a local alias only; add `--weights` to unload the selected model and permanently delete its managed cache.
 
 Run the server in the foreground when integrating it with another application or process manager:
 
@@ -1067,7 +1072,7 @@ embeddings, images, tools, streaming, cancellation, and keep-alive behavior.
 |---|---|
 | `/api/chat`, `/api/generate` | streaming/non-streaming, system/templates, thinking toggle, tools, images on compatible VLMs |
 | `/api/tags`, `/api/ps`, `/api/show` | catalog, aliases, loaded instances, preflight |
-| `/api/pull`, `/api/create`, `/api/copy`, `/api/delete` | HF/MLX downloads and persistent local aliases; deleting an alias does not delete cached weights |
+| `/api/pull`, `/api/create`, `/api/copy`, `/api/delete` | HF/MLX downloads with aggregate shard progress, persistent local aliases, and opt-in managed weight deletion with `purge: true` |
 | `/api/embed`, `/api/embeddings` | mean-pooled normalized embeddings from the resident model input layer |
 | Ollama options | `num_ctx`, `num_predict`, `num_keep`, truncation policy, seed, temperature, top-k/top-p/min-p, repetition/presence/frequency penalties, stop strings, format/schema |
 | Not equivalent | GGUF Modelfile builds, Ollama registry push, Ollama's internal model format, and every undocumented client assumption |
