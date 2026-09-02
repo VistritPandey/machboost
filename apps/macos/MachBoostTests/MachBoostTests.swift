@@ -1127,6 +1127,47 @@ final class MachBoostTests: XCTestCase {
         XCTAssertTrue(models.isEmpty)
     }
 
+    func testPullProgressDecodesAggregateShardMetrics() throws {
+        let event = try JSONDecoder().decode(
+            PullEvent.self,
+            from: Data(
+                #"{"request_id":"pull-1","status":"downloading","file":"2 shards downloading","completed":12000000000,"total":16000000000,"unit":"bytes","files_completed":10,"files_total":12,"active_files":["model-2.safetensors","model-3.safetensors"],"speed_bytes_per_second":125000000,"eta_seconds":32,"done":false}"#.utf8
+            )
+        )
+
+        XCTAssertEqual(event.filesCompleted, 10)
+        XCTAssertEqual(event.filesTotal, 12)
+        XCTAssertEqual(event.activeFiles?.count, 2)
+        XCTAssertEqual(event.speedBytesPerSecond, 125_000_000)
+        XCTAssertEqual(event.etaSeconds, 32)
+    }
+
+    func testDeleteModelPurgesManagedWeights() async throws {
+        let session = mockSession { request in
+            XCTAssertEqual(request.url?.path, "/api/delete")
+            let body = try XCTUnwrap(request.httpBody)
+            let payload = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: body) as? [String: Any]
+            )
+            XCTAssertEqual(payload["model"] as? String, "mlx-community/example")
+            XCTAssertEqual(payload["purge"] as? Bool, true)
+            return self.response(
+                for: request,
+                body: #"{"status":"success","removed":true,"bytes_removed":8000000000,"unloaded":1,"repositories":["mlx-community/example"]}"#
+            )
+        }
+        let api = MachBoostAPI(
+            endpoint: URL(string: "http://127.0.0.1:11435")!,
+            session: session
+        )
+
+        let response = try await api.deleteModel(model: "mlx-community/example")
+
+        XCTAssertTrue(response.removed)
+        XCTAssertEqual(response.bytesRemoved, 8_000_000_000)
+        XCTAssertEqual(response.unloaded, 1)
+    }
+
     func testTeamStatusDecodesPrivacyAndRetentionPolicy() throws {
         let data = Data(
             """
