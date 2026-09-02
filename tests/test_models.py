@@ -14,10 +14,12 @@ from machboost.models import (
     backend_available,
     cached_repo_path,
     catalog_rows,
+    delete_cached_repositories,
     model_targets,
     model_repositories,
     ollama_executable,
     preflight_model,
+    repository_download_state,
     resolve_model,
     search_huggingface_models,
 )
@@ -402,6 +404,77 @@ class ModelCatalogTests(unittest.TestCase):
                 result = cached_repo_path("organization/model")
 
         self.assertIsNone(result)
+
+    def test_repository_download_state_aggregates_complete_and_partial_shards(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cache = Path(directory)
+            repository = "organization/model"
+            repository_dir = cache / "models--organization--model"
+            snapshot = repository_dir / "snapshots" / "revision"
+            blobs = repository_dir / "blobs"
+            trees = repository_dir / "trees"
+            snapshot.mkdir(parents=True)
+            blobs.mkdir()
+            trees.mkdir()
+            (blobs / "first-sha").write_bytes(b"a" * 8)
+            (blobs / "second-sha.download.incomplete").write_bytes(b"b" * 3)
+            (snapshot / "first.safetensors").symlink_to(blobs / "first-sha")
+            (trees / "revision.json").write_text(
+                json.dumps(
+                    {
+                        "files": {
+                            "first.safetensors": {"size": 8, "lfs_sha256": "first-sha"},
+                            "second.safetensors": {"size": 12, "lfs_sha256": "second-sha"},
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            rows = [
+                types.SimpleNamespace(
+                    commit_hash="revision",
+                    filename="first.safetensors",
+                    file_size=8,
+                    local_path=str(snapshot / "first.safetensors"),
+                ),
+                types.SimpleNamespace(
+                    commit_hash="revision",
+                    filename="second.safetensors",
+                    file_size=12,
+                    local_path=str(snapshot / "second.safetensors"),
+                ),
+            ]
+
+            state = repository_download_state(repository, rows, cache_dirs=[cache])
+
+        self.assertEqual(state["completed"], 11)
+        self.assertEqual(state["total"], 20)
+        self.assertEqual(state["files_completed"], 1)
+        self.assertEqual(state["files_total"], 2)
+        self.assertEqual(state["active_files"], ["second.safetensors"])
+
+    def test_delete_cached_repositories_only_removes_selected_hub_model(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cache = Path(directory)
+            selected = cache / "models--organization--selected"
+            neighbor = cache / "models--organization--neighbor"
+            lock = cache / ".locks" / selected.name
+            (selected / "blobs").mkdir(parents=True)
+            (neighbor / "blobs").mkdir(parents=True)
+            lock.mkdir(parents=True)
+            (selected / "blobs" / "weights").write_bytes(b"weights")
+            (neighbor / "blobs" / "weights").write_bytes(b"keep")
+
+            result = delete_cached_repositories(
+                "organization/selected",
+                cache_dirs=[cache],
+            )
+
+            self.assertTrue(result["removed"])
+            self.assertEqual(result["bytes_removed"], len(b"weights"))
+            self.assertFalse(selected.exists())
+            self.assertFalse(lock.exists())
+            self.assertTrue(neighbor.exists())
 
     def test_alias_targets_include_both_native_backends(self):
         self.assertEqual(
