@@ -227,7 +227,7 @@ class OllamaAdapterTest(unittest.TestCase):
                         "type": "function",
                         "function": {
                             "name": "count_files",
-                            "arguments": '{"path":"Blinkfire"}',
+                            "arguments": '{"path":"ExampleRepo"}',
                         },
                     }
                 ],
@@ -243,7 +243,7 @@ class OllamaAdapterTest(unittest.TestCase):
 
         payload = json.loads(opener.requests[0].data.decode("utf-8"))
         arguments = payload["messages"][1]["tool_calls"][0]["function"]["arguments"]
-        self.assertEqual(arguments, {"path": "Blinkfire"})
+        self.assertEqual(arguments, {"path": "ExampleRepo"})
         self.assertIsInstance(messages[1]["tool_calls"][0]["function"]["arguments"], str)
 
     def test_chat_replaces_malformed_tool_arguments_with_empty_object(self):
@@ -262,7 +262,7 @@ class OllamaAdapterTest(unittest.TestCase):
                             {
                                 "function": {
                                     "name": "count_files",
-                                    "arguments": '{"path":"Blinkfire"',
+                                    "arguments": '{"path":"ExampleRepo"',
                                 }
                             }
                         ],
