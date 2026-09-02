@@ -2181,21 +2181,27 @@ More generic harness instructions.
             "tools": [
                 {
                     "name": name,
-                    "description": "large" * (2_000 if name == "Monitor" else 1),
-                    "input_schema": {"type": "object"},
+                    "description": (
+                        "Use this tool. "
+                        + "large" * (2_000 if name == "Monitor" else 200)
+                    ),
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {
+                            "path": {
+                                "type": "string",
+                                "description": "schema prose" * 200,
+                            }
+                        },
+                        "required": ["path"],
+                    },
                 }
                 for name in ("Bash", "Read", "Edit", "Write", "Monitor")
             ],
         }
 
         with patch("machboost.models.native_mlx_vlm_available", return_value=True):
-            self.request(
-                "/v1/messages",
-                payload,
-                headers={
-                    "User-Agent": "claude-cli/2.1.255 (external, claude-desktop-3p)"
-                },
-            )
+            self.request("/v1/messages", payload)
 
         accelerator = self.loaded[0][1]
         forwarded = accelerator.chat_calls[0][0]
@@ -2208,6 +2214,10 @@ More generic harness instructions.
             [item["function"]["name"] for item in forwarded_tools],
             ["Bash", "Read", "Edit", "Write"],
         )
+        self.assertEqual(forwarded_tools[0]["function"]["description"], "Use this tool.")
+        parameters = forwarded_tools[0]["function"]["parameters"]
+        self.assertEqual(parameters["required"], ["path"])
+        self.assertNotIn("description", parameters["properties"]["path"])
 
     def test_claude_desktop_discovers_routes_counts_tokens_and_routes_messages(self):
         catalog_patcher = patch(
