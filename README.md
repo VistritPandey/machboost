@@ -355,13 +355,14 @@ machboost launch claude-desktop --restore
 ```
 
 The Claude gateway keeps title-generation helpers off the model queue, trims
-repeated client harness text, compacts large tool schemas, and preserves the
-reusable prompt prefix across tool rounds. On the development Apple Silicon
-machine, one captured Claude Code request using Muse Glimmer 30B measured about
-`10.6s` to first token from a cold prompt and `1.0-1.5s` after the same coding
-prefix was warm, down from `235.6s` before these gateway fixes. Those numbers
-describe that captured workload and machine; they are not a claim that every
-new prompt or model receives the same speedup.
+repeated client harness text, compacts tool contracts, and preserves the reusable
+prompt prefix across tool rounds. On the development Apple Silicon machine, one
+captured Claude Code request with resident Muse Glimmer 30B measured `9.42s` to
+the first model token for a fresh session and `1.35s` after its coding prefix was
+warm, down from `235.6s` before these gateway fixes. Because the model reasoned
+before answering, visible text arrived at `12.01s` and `3.95s` respectively.
+Those numbers describe that captured workload and machine; they are not a claim
+that every new prompt or model receives the same speedup.
 
 MachBoost preserves the previously active Claude inference profile during this
 round trip, including an existing Ollama gateway configuration.
