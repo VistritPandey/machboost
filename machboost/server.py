@@ -54,6 +54,8 @@ from .protocols import (
     anthropic_tools,
     claude_code_session_title,
     compact_claude_code_messages,
+    compact_claude_code_tools,
+    is_claude_code_request,
     response_body,
     response_message_item,
     responses_messages,
@@ -3683,6 +3685,12 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
             tool_choice=payload.get("tool_choice"),
             limit=anthropic_tool_limit(),
         )
+        claude_code = is_claude_code_request(
+            payload,
+            self.headers.get("User-Agent", ""),
+        )
+        if claude_code:
+            selected_tools = compact_claude_code_tools(selected_tools)
         tools = anthropic_tools(selected_tools)
         if tools:
             translated["tools"] = tools
@@ -3699,7 +3707,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
         if isinstance(thinking, dict) and thinking.get("type") == "enabled":
             translated["reasoning_effort"] = "high"
         messages = anthropic_messages(payload)
-        if "claude-cli/" in self.headers.get("User-Agent", "").lower():
+        if claude_code:
             messages = compact_claude_code_messages(
                 messages,
                 selected_tool_names={
