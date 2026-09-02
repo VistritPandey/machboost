@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import gc
 import hmac
+import inspect
 import json
 import math
 import os
@@ -31,10 +32,12 @@ from .memory import CacheNamespace, MemorySearch, TeamMemoryStore, exchange_memo
 from .model_store import ModelStore, StoredModel, apply_stored_model
 from .models import (
     catalog_rows,
+    delete_cached_repositories,
     model_repositories,
     model_targets,
     ollama_model_manifest,
     preflight_model,
+    repository_download_state,
     resolve_model,
     search_huggingface_models,
 )
@@ -1079,34 +1082,37 @@ class RuntimeManager:
                     }
                 )
 
-            def component_progress(
-                event: dict[str, Any],
-                *,
-                repository: str = repository,
-                component: str = component,
-            ) -> None:
-                if progress is not None:
-                    progress(
-                        {
-                            **event,
-                            "repository": repository,
-                            "component": component,
-                        }
-                    )
-
-            tqdm_class = download_progress_class(
-                component_progress if progress is not None else None,
-                cancel_event,
+            selected_revision = revision if index == 0 else None
+            dry_run_files: list[Any] = []
+            if progress is not None and _supports_keyword(snapshot_download, "dry_run"):
+                dry_run_result = snapshot_download(
+                    repo_id=repository,
+                    revision=selected_revision,
+                    dry_run=True,
+                    tqdm_class=download_progress_class(lambda _: None, None),
+                )
+                if isinstance(dry_run_result, list):
+                    dry_run_files = dry_run_result
+            monitor = RepositoryDownloadMonitor(
+                repository,
+                component,
+                dry_run_files,
+                progress=progress,
+                cancel_event=cancel_event,
             )
-            downloaded_paths.append(
-                str(
-                    snapshot_download(
-                        repo_id=repository,
-                        revision=revision if index == 0 else None,
-                        tqdm_class=tqdm_class,
+            monitor.start()
+            try:
+                downloaded_paths.append(
+                    str(
+                        snapshot_download(
+                            repo_id=repository,
+                            revision=selected_revision,
+                            tqdm_class=download_progress_class(None, cancel_event),
+                        )
                     )
                 )
-            )
+            finally:
+                monitor.stop()
             check_cancelled(cancel_event)
         return {
             "status": "success",
@@ -1130,6 +1136,42 @@ class RuntimeManager:
             with entry.lock:
                 release_entry_accelerators(entry)
         return len(entries)
+
+    def delete_model_weights(self, model: str) -> dict[str, Any]:
+        targets = set(model_repositories(model))
+        active_pulls = []
+        for operation in self.operations.snapshot().get("active", []):
+            if operation.get("kind") != "pull":
+                continue
+            active_model = str(operation.get("model") or "")
+            try:
+                active_targets = set(model_repositories(active_model))
+            except ValueError:
+                active_targets = {active_model}
+            if targets & active_targets:
+                active_pulls.append(operation)
+        if active_pulls:
+            raise ValueError("cancel the active model download before deleting its files")
+        resolution = resolve_model(model)
+        unloaded = self.stop(model)
+        if resolution.backend == "ollama-mlx":
+            from .adapters.ollama import OllamaHTTPAdapter
+            from .adapters.ollama_mlx import ensure_ollama_service
+
+            adapter = OllamaHTTPAdapter(resolution.model, timeout=60.0)
+            ensure_ollama_service(adapter)
+            removed = adapter.delete()
+            return {
+                "removed": removed,
+                "model": model,
+                "repositories": [resolution.model],
+                "paths": [],
+                "bytes_removed": 0,
+                "unloaded": unloaded,
+            }
+        result = delete_cached_repositories(model)
+        result["unloaded"] = unloaded
+        return result
 
     def evict_expired(self) -> int:
         now = self.clock()
@@ -1348,7 +1390,7 @@ def download_progress_class(
             self._machboost_completed = int(kwargs.get("initial") or 0)
             self._machboost_total = kwargs.get("total")
             self._machboost_unit = kwargs.get("unit") or "B"
-            if progress is not None:
+            if progress is not None or cancel_event is not None:
                 kwargs["disable"] = True
             super().__init__(*args, **kwargs)
             self._sync_progress_state()
@@ -1391,6 +1433,101 @@ def download_progress_class(
             )
 
     return MachBoostDownloadProgress
+
+
+class RepositoryDownloadMonitor:
+    def __init__(
+        self,
+        repository: str,
+        component: str,
+        files: Sequence[Any],
+        *,
+        progress: Optional[Callable[[dict[str, Any]], None]],
+        cancel_event: Optional[threading.Event],
+        interval: float = 0.5,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self.repository = repository
+        self.component = component
+        self.files = tuple(files)
+        self.progress = progress
+        self.cancel_event = cancel_event
+        self.interval = interval
+        self.clock = clock
+        self._stop = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+        self._started_at = 0.0
+        self._initial_completed = 0
+
+    def start(self) -> None:
+        if self.progress is None or not self.files:
+            return
+        self._started_at = self.clock()
+        initial = repository_download_state(self.repository, self.files)
+        self._initial_completed = int(initial.get("completed") or 0)
+        self._report(initial)
+        self._thread = threading.Thread(
+            target=self._run,
+            name=f"machboost-pull-progress-{self.repository.replace('/', '-')}",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def stop(self) -> None:
+        if self._thread is None:
+            return
+        self._stop.set()
+        self._thread.join(timeout=max(1.0, self.interval * 3))
+        self._report(repository_download_state(self.repository, self.files))
+
+    def _run(self) -> None:
+        while not self._stop.wait(self.interval):
+            self._report(repository_download_state(self.repository, self.files))
+
+    def _report(self, state: dict[str, Any]) -> None:
+        if self.progress is None:
+            return
+        completed = int(state.get("completed") or 0)
+        total = int(state.get("total") or 0)
+        elapsed = max(0.0, self.clock() - self._started_at)
+        transferred = max(0, completed - self._initial_completed)
+        speed = transferred / elapsed if elapsed > 0 and transferred > 0 else None
+        remaining = max(0, total - completed)
+        eta = remaining / speed if speed and speed > 0 else None
+        active_files = [str(item) for item in state.get("active_files") or []]
+        if len(active_files) == 1:
+            file_label = active_files[0]
+        elif active_files:
+            file_label = f"{len(active_files)} shards downloading"
+        else:
+            file_label = "Preparing model files"
+        self.progress(
+            {
+                "status": "cancelling" if self.cancel_event is not None and self.cancel_event.is_set() else "downloading",
+                "repository": self.repository,
+                "component": self.component,
+                "file": file_label,
+                "completed": completed,
+                "total": total,
+                "unit": "bytes",
+                "files_completed": int(state.get("files_completed") or 0),
+                "files_total": int(state.get("files_total") or 0),
+                "active_files": active_files,
+                "speed_bytes_per_second": speed,
+                "eta_seconds": eta,
+            }
+        )
+
+
+def _supports_keyword(callback: Callable[..., Any], keyword: str) -> bool:
+    try:
+        parameters = inspect.signature(callback).parameters
+    except (TypeError, ValueError):
+        return False
+    return keyword in parameters or any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters.values()
+    )
 
 
 def percentile(values: Sequence[float], ratio: float) -> float:
@@ -2255,11 +2392,30 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                 if not self.require_scope("models:write"):
                     return
                 model_name = required_string(payload, "model", aliases=("name",))
-                source, _ = self.models.resolve(model_name)
+                source, stored_model = self.models.resolve(model_name)
                 self.runtime.stop(resolve_model(source).model)
-                removed = self.models.delete(model_name)
+                removed_alias = self.models.delete(model_name)
+                if bool(payload.get("purge") or payload.get("weights")):
+                    result = self.runtime.delete_model_weights(source)
+                    removed = bool(result.get("removed")) or removed_alias
+                    result.update(
+                        {
+                            "status": "success" if removed else "not_found",
+                            "removed": removed,
+                            "alias_removed": removed_alias,
+                        }
+                    )
+                    self.send_json(result, status=200 if removed else 404)
+                    return
+                removed = removed_alias
                 self.send_json(
-                    {"status": "success" if removed else "not_found", "removed": removed},
+                    {
+                        "status": "success" if removed else "not_found",
+                        "removed": removed,
+                        "alias_removed": removed,
+                        "weights_removed": False,
+                        "source": source if stored_model is not None else None,
+                    },
                     status=200 if removed else 404,
                 )
                 return
