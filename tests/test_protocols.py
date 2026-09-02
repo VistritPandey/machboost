@@ -5,6 +5,7 @@ import unittest
 from machboost.protocols import (
     anthropic_cache_affinity,
     anthropic_messages,
+    claude_code_session_title,
     compact_claude_code_messages,
     select_anthropic_tools,
 )
@@ -171,6 +172,35 @@ class AnthropicCacheAffinityTests(unittest.TestCase):
 
 
 class ClaudeCodeCompactionTests(unittest.TestCase):
+    def test_extracts_session_title_without_running_the_model(self):
+        payload = {
+            "system": (
+                "You are naming a coding session. "
+                'Return JSON with a single "title" field.'
+            ),
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "<session>Fix the doubled model search input</session>",
+                }
+            ],
+        }
+
+        self.assertEqual(
+            claude_code_session_title(payload),
+            "Fix doubled model search",
+        )
+
+    def test_ignores_normal_anthropic_requests(self):
+        self.assertIsNone(
+            claude_code_session_title(
+                {
+                    "system": "You are a coding assistant.",
+                    "messages": [{"role": "user", "content": "Fix search"}],
+                }
+            )
+        )
+
     def test_compacts_harness_boilerplate_and_drops_unavailable_agent_catalog(self):
         messages = [
             {
