@@ -513,6 +513,18 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertEqual(mlx_resolution.backend, "mlx-vlm")
         self.assertEqual(hf_resolution.backend, "hf-vlm")
 
+    def test_explicit_mlx_backend_is_normalized_for_full_muse_repo(self):
+        resolution = resolve_model(
+            "mlx-community/Muse-Glimmer-30B-4bit",
+            backend="mlx",
+        )
+
+        self.assertEqual(resolution.backend, "mlx-vlm")
+        self.assertEqual(
+            resolution.model,
+            "mlx-community/Muse-Glimmer-30B-4bit",
+        )
+
     def test_vision_alias_targets_include_mlx_and_hf_variants(self):
         self.assertEqual(
             model_targets("qwen2.5-vl:3b"),
