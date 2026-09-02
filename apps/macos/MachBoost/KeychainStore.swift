@@ -4,6 +4,8 @@ import Security
 enum KeychainStore {
     private static let service = "io.machboost.MachBoost"
     private static let account = "lan-api-token"
+    private static let communityStore = CommunityCredentialStore()
+    private static let usesCommunityStore = signingTeamIdentifier() == nil
 
     static func token() -> String? {
         value(account: account)
@@ -30,6 +32,9 @@ enum KeychainStore {
     }
 
     private static func value(account: String) -> String? {
+        if usesCommunityStore {
+            return communityStore.value(account: account)
+        }
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -129,6 +134,10 @@ enum KeychainStore {
     }
 
     private static func delete(account: String) throws {
+        if usesCommunityStore {
+            try communityStore.delete(account: account)
+            return
+        }
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -141,6 +150,10 @@ enum KeychainStore {
     }
 
     private static func save(value: String, account: String) throws {
+        if usesCommunityStore {
+            try communityStore.save(value: value, account: account)
+            return
+        }
         let base: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -163,6 +176,97 @@ enum KeychainStore {
         guard createStatus == errSecSuccess else {
             throw KeychainError(status: createStatus)
         }
+    }
+
+    private static func signingTeamIdentifier() -> String? {
+        var code: SecCode?
+        guard SecCodeCopySelf([], &code) == errSecSuccess, let code else {
+            return nil
+        }
+        var staticCode: SecStaticCode?
+        guard
+            SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess,
+            let staticCode
+        else {
+            return nil
+        }
+        var information: CFDictionary?
+        guard
+            SecCodeCopySigningInformation(
+                staticCode,
+                SecCSFlags(rawValue: kSecCSSigningInformation),
+                &information
+            ) == errSecSuccess,
+            let values = information as? [String: Any]
+        else {
+            return nil
+        }
+        return values[kSecCodeInfoTeamIdentifier as String] as? String
+    }
+}
+
+final class CommunityCredentialStore: @unchecked Sendable {
+    let credentialsURL: URL
+
+    private let root: URL
+    private let lock = NSLock()
+
+    init(root: URL? = nil) {
+        let resolvedRoot = root ?? FileManager.default
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("MachBoost", isDirectory: true)
+        self.root = resolvedRoot
+        credentialsURL = resolvedRoot.appendingPathComponent(
+            "credentials.community.json",
+            isDirectory: false
+        )
+    }
+
+    func value(account: String) -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return load()[account]
+    }
+
+    func save(value: String, account: String) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        var values = load()
+        values[account] = value
+        try persist(values)
+    }
+
+    func delete(account: String) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        var values = load()
+        guard values.removeValue(forKey: account) != nil else { return }
+        try persist(values)
+    }
+
+    private func load() -> [String: String] {
+        guard
+            let data = try? Data(contentsOf: credentialsURL),
+            let values = try? JSONDecoder().decode([String: String].self, from: data)
+        else {
+            return [:]
+        }
+        return values
+    }
+
+    private func persist(_ values: [String: String]) throws {
+        let fileManager = FileManager.default
+        try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
+        try fileManager.setAttributes(
+            [.posixPermissions: NSNumber(value: 0o700)],
+            ofItemAtPath: root.path
+        )
+        let data = try JSONEncoder().encode(values)
+        try data.write(to: credentialsURL, options: .atomic)
+        try fileManager.setAttributes(
+            [.posixPermissions: NSNumber(value: 0o600)],
+            ofItemAtPath: credentialsURL.path
+        )
     }
 }
 
