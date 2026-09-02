@@ -65,6 +65,107 @@ CHAT_HELP = """Commands:
 Ctrl-C stops the current reply. Ctrl-D unloads the model and exits."""
 
 
+class ChatConsole:
+    """Small dependency-free terminal renderer for interactive chat."""
+
+    GREEN = "\033[38;2;34;197;94m"
+    CYAN = "\033[38;2;34;211;238m"
+    MUTED = "\033[38;5;245m"
+    BOLD = "\033[1m"
+    RESET = "\033[0m"
+
+    def __init__(self, stream) -> None:
+        self.stream = stream
+        forced = str(os.environ.get("MACHBOOST_TUI") or "").strip().lower()
+        is_tty = bool(getattr(stream, "isatty", lambda: False)())
+        self.pretty = is_tty or forced in {"1", "true", "yes", "on"}
+        self.color = self.pretty and "NO_COLOR" not in os.environ
+
+    def styled(self, text: str, *styles: str) -> str:
+        if not self.color:
+            return text
+        return "".join(styles) + text + self.RESET
+
+    def prompt(self) -> str:
+        label = self.styled("You", self.GREEN, self.BOLD)
+        caret = self.styled(">", self.GREEN, self.BOLD)
+        return f"\n{label}\n{caret} "
+
+    def header(
+        self,
+        *,
+        model: str,
+        engine: str,
+        state: str,
+        host: str,
+        route: str,
+    ) -> None:
+        width = max(48, min(88, shutil.get_terminal_size((80, 24)).columns))
+        value_width = max(24, width - 12)
+        divider = self.styled("-" * width, self.MUTED)
+        print("", file=self.stream)
+        print(
+            self.styled("MachBoost", self.GREEN, self.BOLD)
+            + "  "
+            + self.styled(f"v{__version__}", self.MUTED),
+            file=self.stream,
+        )
+        print(divider, file=self.stream)
+        for label, value in (
+            ("model", _middle_truncate(model, value_width)),
+            ("engine", engine),
+            ("state", state),
+            ("host", _display_endpoint(host)),
+            ("route", route.replace("_", " ")),
+        ):
+            print(
+                self.styled(f"{label:<8}", self.MUTED) + f" {value}",
+                file=self.stream,
+            )
+        print(divider, file=self.stream)
+        print(
+            self.styled("/help", self.CYAN)
+            + self.styled(" commands  |  Ctrl-C stop  |  Ctrl-D unload", self.MUTED),
+            file=self.stream,
+        )
+
+    def begin_reply(self) -> None:
+        print(
+            "\n" + self.styled("MachBoost", self.GREEN, self.BOLD),
+            file=self.stream,
+            flush=True,
+        )
+
+    def section(self, title: str) -> None:
+        print(self.styled(title, self.MUTED, self.BOLD), file=self.stream, flush=True)
+
+    def notice(self, text: str) -> None:
+        print(self.styled(text, self.MUTED), file=self.stream)
+
+    def tool(self, name: str, fields: str) -> None:
+        label = self.styled("Tool", self.CYAN, self.BOLD)
+        suffix = f"({fields})" if fields else ""
+        print(f"{label}  {name}{suffix}", file=self.stream)
+
+
+def _middle_truncate(value: str, limit: int) -> str:
+    if len(value) <= limit:
+        return value
+    if limit <= 3:
+        return value[:limit]
+    left = (limit - 3) // 2
+    right = limit - 3 - left
+    return value[:left] + "..." + value[-right:]
+
+
+def _display_endpoint(endpoint: str) -> str:
+    parsed = urlparse(endpoint)
+    if not parsed.hostname:
+        return endpoint
+    host = "localhost" if parsed.hostname in {"127.0.0.1", "::1", "localhost"} else parsed.hostname
+    return f"{host}:{parsed.port}" if parsed.port else host
+
+
 @dataclass(frozen=True)
 class PackageStatus:
     available: bool
@@ -900,6 +1001,7 @@ def run_native_chat(
 ) -> int:
     output_stream = output_stream or sys.stdout
     error_stream = error_stream or sys.stderr
+    console = ChatConsole(output_stream)
     try:
         accelerator = load_native_accelerator(args, stream=error_stream)
     except Exception as exc:
@@ -914,16 +1016,26 @@ def run_native_chat(
         print(f"video input error: {exc}", file=error_stream)
         return 2
     turns: list[dict[str, object]] = []
-    print(f"machboost run: {args.model}", file=output_stream)
-    print("Type /bye, /exit, or /quit to leave. Type /clear to reset chat history.", file=output_stream)
-    print(
-        "Use /image PATH, /video PATH, /images, or /clear-images to manage visual inputs.",
-        file=output_stream,
-    )
+    if console.pretty:
+        display_backend = resolve_model(args.model, args.backend).backend
+        console.header(
+            model=args.model,
+            engine=display_backend,
+            state="direct",
+            host="this process",
+            route="local_only",
+        )
+    else:
+        print(f"machboost run: {args.model}", file=output_stream)
+        print("Type /bye, /exit, or /quit to leave. Type /clear to reset chat history.", file=output_stream)
+        print(
+            "Use /image PATH, /video PATH, /images, or /clear-images to manage visual inputs.",
+            file=output_stream,
+        )
 
     while True:
         try:
-            user_text = input_func(">>> ")
+            user_text = input_func(console.prompt() if console.pretty else ">>> ")
         except EOFError:
             print("", file=output_stream)
             return 0
@@ -938,7 +1050,9 @@ def run_native_chat(
             return 0
         if command == "/clear":
             turns = []
-            print("chat history cleared", file=output_stream)
+            console.notice("Chat history cleared.") if console.pretty else print(
+                "chat history cleared", file=output_stream
+            )
             continue
         if command.startswith("/image "):
             image = command.partition(" ")[2].strip()
@@ -977,25 +1091,43 @@ def run_native_chat(
                 return 2
             messages[-1]["images"] = list(active_images)
         streamed = False
+        reply_started = False
+        thinking_started = False
+
+        def begin_reply() -> None:
+            nonlocal reply_started
+            if reply_started:
+                return
+            if console.pretty:
+                console.begin_reply()
+            reply_started = True
 
         def emit(chunk: str) -> None:
             nonlocal streamed
             if not chunk:
                 return
+            if not streamed:
+                begin_reply()
+                if thinking_started and console.pretty:
+                    print("", flush=True, file=output_stream)
+                    console.section("Answer")
             streamed = True
             print(chunk, end="", flush=True, file=output_stream)
 
         started = time.perf_counter()
-        thinking_started = False
 
         def emit_thinking(chunk: str) -> None:
             nonlocal thinking_started
             if not chunk:
                 return
             if not thinking_started:
-                print("thinking> ", end="", flush=True, file=error_stream)
+                begin_reply()
+                if console.pretty:
+                    console.section("Thinking")
+                else:
+                    print("thinking> ", end="", flush=True, file=error_stream)
                 thinking_started = True
-            print(chunk, end="", flush=True, file=error_stream)
+            print(chunk, end="", flush=True, file=output_stream if console.pretty else error_stream)
 
         try:
             kwargs = {"max_tokens": args.max_tokens, "on_text": emit}
@@ -1027,19 +1159,39 @@ def run_native_chat(
         elapsed_s = time.perf_counter() - started
         response = response.strip()
         if thinking_started:
-            print("", flush=True, file=error_stream)
+            print("", flush=True, file=output_stream if console.pretty else error_stream)
         if streamed:
             print("", flush=True, file=output_stream)
         else:
+            begin_reply()
             print(response, flush=True, file=output_stream)
         if args.show_stats:
             tokens_per_second = stats.generated_tokens / elapsed_s if elapsed_s > 0 else 0.0
             stats_backend = getattr(stats, "backend", "")
-            if stats_backend == "mlx-vlm":
+            decode_rate = float(
+                getattr(stats, "generation_tokens_per_second", 0.0) or tokens_per_second
+            )
+            if console.pretty:
+                parts = [f"{decode_rate:.1f} tok/s"]
+                ttft = getattr(stats, "time_to_first_token_seconds", None)
+                if ttft is not None:
+                    parts.append(f"{float(ttft):.2f}s TTFT")
+                parts.extend((f"{stats.generated_tokens} tokens", stats_backend or display_backend))
+                if stats_backend == "mlx-vlm":
+                    cache = (
+                        "cache hit"
+                        if stats.visual_cache_hit
+                        else "cache miss"
+                        if stats.visual_cache_miss
+                        else "cache off"
+                    )
+                    parts.append(cache)
+                console.notice("  |  ".join(parts))
+            elif stats_backend == "mlx-vlm":
                 print(
                     "stats: "
                     f"elapsed={elapsed_s:.2f}s "
-                    f"tokens_per_second={tokens_per_second:.2f} "
+                    f"tokens_per_second={decode_rate:.2f} "
                     f"prompt_tps={stats.prompt_tokens_per_second:.2f} "
                     f"vision_cache={'hit' if stats.visual_cache_hit else 'miss' if stats.visual_cache_miss else 'off'}",
                     file=output_stream,
@@ -1118,6 +1270,7 @@ def run_ollama_chat(
 ) -> int:
     output_stream = output_stream or sys.stdout
     error_stream = error_stream or sys.stderr
+    console = ChatConsole(output_stream)
     adapter = OllamaHTTPAdapter(args.model, endpoint=args.endpoint, timeout=args.timeout)
     options = ollama_options(args)
     messages: list[dict[str, str]] = []
@@ -1131,12 +1284,21 @@ def run_ollama_chat(
         print("Make sure Ollama is installed and running. Try `ollama serve` in another terminal.", file=error_stream)
         return 2
 
-    print(f"machboost ollama wrapper: {adapter.model}", file=output_stream)
-    print("Type /bye, /exit, or /quit to leave. Type /clear to reset chat history.", file=output_stream)
+    if console.pretty:
+        console.header(
+            model=adapter.model,
+            engine="ollama",
+            state="connected",
+            host=adapter.endpoint,
+            route="local_only",
+        )
+    else:
+        print(f"machboost ollama wrapper: {adapter.model}", file=output_stream)
+        print("Type /bye, /exit, or /quit to leave. Type /clear to reset chat history.", file=output_stream)
 
     while True:
         try:
-            prompt = input_func(">>> ")
+            prompt = input_func(console.prompt() if console.pretty else ">>> ")
         except EOFError:
             print("", file=output_stream)
             return 0
@@ -1151,14 +1313,20 @@ def run_ollama_chat(
             return 0
         if command == "/clear":
             messages = [message for message in messages if message.get("role") == "system"]
-            print("chat history cleared", file=output_stream)
+            console.notice("Chat history cleared.") if console.pretty else print(
+                "chat history cleared", file=output_stream
+            )
             continue
 
         messages.append({"role": "user", "content": prompt})
         chunks: list[str] = []
+        reply_started = False
         try:
             for chunk in adapter.chat(messages, options=options):
                 if chunk.content:
+                    if not reply_started and console.pretty:
+                        console.begin_reply()
+                    reply_started = True
                     print(chunk.content, end="", flush=True, file=output_stream)
                     chunks.append(chunk.content)
                 if chunk.done:
@@ -1171,7 +1339,11 @@ def run_ollama_chat(
             print(f"\nollama error: {exc}", file=error_stream)
             return 2
 
-        print("", file=output_stream)
+        if not reply_started and console.pretty:
+            console.begin_reply()
+            console.notice("No visible response was returned.")
+        else:
+            print("", file=output_stream)
         messages.append({"role": "assistant", "content": "".join(chunks)})
 
 
@@ -1410,7 +1582,12 @@ def chat_route_options(args: argparse.Namespace) -> Optional[dict[str, dict[str,
     return {"route": route}
 
 
-def print_tool_call_summary(tool_calls: Sequence[dict], *, stream=None) -> None:
+def print_tool_call_summary(
+    tool_calls: Sequence[dict],
+    *,
+    stream=None,
+    console: Optional[ChatConsole] = None,
+) -> None:
     stream = stream or sys.stdout
     for call in tool_calls:
         function = call.get("function") if isinstance(call, dict) else None
@@ -1428,7 +1605,10 @@ def print_tool_call_summary(tool_calls: Sequence[dict], *, stream=None) -> None:
             )
         else:
             fields = str(arguments or "")[:160]
-        print(f"tool> {name}({fields})", file=stream)
+        if console is not None and console.pretty:
+            console.tool(name, fields)
+        else:
+            print(f"tool> {name}({fields})", file=stream)
 
 
 def run_resident_chat(
@@ -1440,6 +1620,7 @@ def run_resident_chat(
 ) -> int:
     output_stream = output_stream or sys.stdout
     error_stream = error_stream or sys.stderr
+    console = ChatConsole(output_stream)
     session_started = time.perf_counter()
     try:
         client = connect_resident(args, error_stream=error_stream)
@@ -1476,23 +1657,32 @@ def run_resident_chat(
     state = f"load {model_load:.2f}s" if model_load > 0 else "resident"
     if warmup_duration > 0:
         state += f" | compile {warmup_duration:.2f}s"
-    width = max(48, min(88, shutil.get_terminal_size((80, 24)).columns))
-    print("-" * width, file=output_stream)
-    print(f"MachBoost  {args.model}", file=output_stream)
-    print(
-        f"{backend} | {state} | wall {preload_wall:.2f}s | {client.endpoint}",
-        file=output_stream,
-    )
     route_name = str(getattr(args, "route", "local_only"))
-    print(f"route {route_name.replace('_', ' ')} | /help for commands", file=output_stream)
-    print("-" * width, file=output_stream)
-    if resolved_model != args.model and args.show_stats:
-        print(f"model: {resolved_model}", file=output_stream)
-    print("", file=output_stream)
+    if console.pretty:
+        console.header(
+            model=resolved_model,
+            engine=backend,
+            state=f"{state} | ready in {preload_wall:.2f}s",
+            host=client.endpoint,
+            route=route_name,
+        )
+    else:
+        width = max(48, min(88, shutil.get_terminal_size((80, 24)).columns))
+        print("-" * width, file=output_stream)
+        print(f"MachBoost  {args.model}", file=output_stream)
+        print(
+            f"{backend} | {state} | wall {preload_wall:.2f}s | {client.endpoint}",
+            file=output_stream,
+        )
+        print(f"route {route_name.replace('_', ' ')} | /help for commands", file=output_stream)
+        print("-" * width, file=output_stream)
+        if resolved_model != args.model and args.show_stats:
+            print(f"model: {resolved_model}", file=output_stream)
+        print("", file=output_stream)
 
     while True:
         try:
-            user_text = input_func("you> ")
+            user_text = input_func(console.prompt() if console.pretty else "you> ")
         except EOFError:
             print("", file=output_stream)
             unload_resident_model(client, args.model, stream=output_stream)
@@ -1507,6 +1697,8 @@ def run_resident_chat(
         if command in {"/bye", "/exit", "/quit"}:
             return 0
         if command in {"/?", "/help"}:
+            if console.pretty:
+                console.section("Commands")
             print(CHAT_HELP, file=output_stream)
             continue
         if command == "/status":
@@ -1532,14 +1724,17 @@ def run_resident_chat(
                 show_stats = setting == "on"
             else:
                 show_stats = not show_stats
-            print(f"response stats {'on' if show_stats else 'off'}", file=output_stream)
+            message = f"Response stats {'on' if show_stats else 'off'}."
+            console.notice(message) if console.pretty else print(message.lower(), file=output_stream)
             continue
         if command == "/unload":
             unload_resident_model(client, args.model, stream=output_stream)
             return 0
         if command == "/clear":
             turns = []
-            print("chat history cleared", file=output_stream)
+            console.notice("Chat history cleared.") if console.pretty else print(
+                "chat history cleared", file=output_stream
+            )
             continue
         if command.startswith("/image "):
             image = command.partition(" ")[2].strip()
@@ -1577,13 +1772,26 @@ def run_resident_chat(
         rows = None
         thinking_started = False
         answer_started = False
+        reply_started = False
+
+        def begin_reply() -> None:
+            nonlocal reply_started
+            if reply_started:
+                return
+            if console.pretty:
+                console.begin_reply()
+            reply_started = True
 
         def show_thinking(chunk: str) -> None:
             nonlocal thinking_started
             if not args.show_thinking or not chunk:
                 return
             if not thinking_started:
-                print("thinking> ", end="", flush=True, file=output_stream)
+                begin_reply()
+                if console.pretty:
+                    console.section("Thinking")
+                else:
+                    print("thinking> ", end="", flush=True, file=output_stream)
                 thinking_started = True
             print(chunk, end="", flush=True, file=output_stream)
 
@@ -1592,9 +1800,13 @@ def run_resident_chat(
             if not chunk:
                 return
             if not answer_started:
+                begin_reply()
                 if thinking_started:
                     print("", flush=True, file=output_stream)
-                print("assistant> ", end="", flush=True, file=output_stream)
+                    if console.pretty:
+                        console.section("Answer")
+                if not console.pretty:
+                    print("assistant> ", end="", flush=True, file=output_stream)
                 answer_started = True
             print(chunk, end="", flush=True, file=output_stream)
 
@@ -1637,14 +1849,26 @@ def run_resident_chat(
         if thinking_started and not answer_started:
             print("", flush=True, file=output_stream)
         if not answer_started and tool_calls:
-            print("assistant> ", file=output_stream)
+            begin_reply()
+            if not console.pretty:
+                print("assistant> ", file=output_stream)
         elif answer_started:
             print("", flush=True, file=output_stream)
+        elif not thinking_started:
+            begin_reply()
+            console.notice("No visible response was returned.") if console.pretty else print(
+                "no visible response was returned", file=output_stream
+            )
         response = "".join(response_parts).strip()
         if tool_calls:
-            print_tool_call_summary(tool_calls, stream=output_stream)
+            print_tool_call_summary(tool_calls, stream=output_stream, console=console)
         if show_stats:
-            print_resident_stats(final_row, time.perf_counter() - started, stream=output_stream)
+            print_resident_stats(
+                final_row,
+                time.perf_counter() - started,
+                stream=output_stream,
+                console=console,
+            )
         turns.append({"role": "assistant", "content": response})
 
 
@@ -1773,7 +1997,13 @@ def completion_prompt(args: argparse.Namespace) -> str:
     return sys.stdin.read()
 
 
-def print_resident_stats(row: dict, elapsed_s: float, *, stream=None) -> None:
+def print_resident_stats(
+    row: dict,
+    elapsed_s: float,
+    *,
+    stream=None,
+    console: Optional[ChatConsole] = None,
+) -> None:
     stream = stream or sys.stdout
     metrics = row.get("machboost") or {}
     stats = metrics.get("stats") or {}
@@ -1811,6 +2041,16 @@ def print_resident_stats(row: dict, elapsed_s: float, *, stream=None) -> None:
                 f" vision_tokens={post_fusion.get('mode', 'unknown')}"
                 f":{float(post_fusion.get('actual_visual_retention_ratio') or 0.0):.0%}"
             )
+    backend = str(metrics.get("backend") or stats.get("backend") or "unknown")
+    if console is not None and console.pretty:
+        parts = [f"{rate:.1f} tok/s"]
+        if ttft is not None:
+            parts.append(f"{float(ttft):.2f}s TTFT")
+        parts.extend((f"{generated} tokens", backend))
+        if cache_state:
+            parts.append(cache_state.strip().replace(" ", " | "))
+        console.notice("  |  ".join(parts))
+        return
     print(f"total duration:       {total_s:.3f}s", file=stream)
     print(f"load duration:        {load_s:.3f}s", file=stream)
     if ttft is not None:
@@ -1821,7 +2061,6 @@ def print_resident_stats(row: dict, elapsed_s: float, *, stream=None) -> None:
     print(f"eval count:           {generated} token(s)", file=stream)
     print(f"eval duration:        {eval_s:.3f}s", file=stream)
     print(f"eval rate:            {rate:.2f} tokens/s", file=stream)
-    backend = str(metrics.get("backend") or stats.get("backend") or "unknown")
     if backend == "ollama-mlx":
         speculative = "on" if stats.get("native_speculative_decoding", True) else "off"
         print(
