@@ -44,7 +44,7 @@ from machboost.workspace import WorkspaceStore
 class ToolCallParsingTests(unittest.TestCase):
     def test_anthropic_tool_budget_defaults_to_cold_prefill_limit(self):
         with patch.dict("os.environ", {}, clear=True):
-            self.assertEqual(anthropic_tool_limit(), 24)
+            self.assertEqual(anthropic_tool_limit(), 12)
 
         with patch.dict(
             "os.environ",
@@ -1266,12 +1266,14 @@ class HTTPServerTests(unittest.TestCase):
         self.loaded.append((config, accelerator))
         return accelerator
 
-    def request(self, path, payload=None):
+    def request(self, path, payload=None, *, headers=None):
         data = None if payload is None else json.dumps(payload).encode("utf-8")
+        request_headers = {"Content-Type": "application/json"} if data else {}
+        request_headers.update(headers or {})
         request = Request(
             self.base_url + path,
             data=data,
-            headers={"Content-Type": "application/json"} if data else {},
+            headers=request_headers,
         )
         with urlopen(request, timeout=3.0) as response:
             return response.status, response.headers, response.read().decode("utf-8")
@@ -2098,6 +2100,73 @@ class HTTPServerTests(unittest.TestCase):
         self.assertNotIn("I should inspect the repository.", str(forwarded))
         self.assertIn("list_files", str(forwarded))
         self.assertIn("README.md", str(forwarded))
+
+    def test_claude_code_uses_compact_session_scoped_agent_cache_lane(self):
+        payload = {
+            "model": "qwen2.5-vl:3b",
+            "system": [
+                {
+                    "type": "text",
+                    "text": """
+You are an interactive agent that helps users with software engineering tasks.
+
+# Harness
+Very long generic harness instructions.
+
+# Environment
+ - Primary working directory: /tmp/project
+ - Is a git repository: true
+ - Platform: darwin
+ - Shell: zsh
+
+# Corrections
+More generic harness instructions.
+""",
+                }
+            ],
+            "messages": [
+                {"role": "user", "content": "Inspect this repository"},
+                {
+                    "role": "system",
+                    "content": "Available agent types for the Agent tool:\n"
+                    "- Explore\n\nThe following skills are available for use with the Skill tool:\n"
+                    "- docs",
+                },
+            ],
+            "metadata": {
+                "user_id": '{"device_id":"device-1","session_id":"session-42"}'
+            },
+            "max_tokens": 16,
+            "tools": [
+                {
+                    "name": name,
+                    "description": "large" * (2_000 if name == "Monitor" else 1),
+                    "input_schema": {"type": "object"},
+                }
+                for name in ("Bash", "Read", "Edit", "Write", "Monitor")
+            ],
+        }
+
+        with patch("machboost.models.native_mlx_vlm_available", return_value=True):
+            self.request(
+                "/v1/messages",
+                payload,
+                headers={
+                    "User-Agent": "claude-cli/2.1.255 (external, claude-desktop-3p)"
+                },
+            )
+
+        accelerator = self.loaded[0][1]
+        forwarded = accelerator.chat_calls[0][0]
+        forwarded_tools = accelerator.chat_calls[0][5]
+        self.assertTrue(accelerator.cache_keys[0].startswith("client:anthropic-agent-"))
+        self.assertIn("interactive coding agent", str(forwarded))
+        self.assertNotIn("Very long generic harness instructions", str(forwarded))
+        self.assertNotIn("Available agent types", str(forwarded))
+        self.assertEqual(
+            [item["function"]["name"] for item in forwarded_tools],
+            ["Bash", "Read", "Edit", "Write"],
+        )
 
     def test_claude_desktop_discovers_routes_counts_tokens_and_routes_messages(self):
         catalog_patcher = patch(
