@@ -402,7 +402,10 @@ class MLXVLMAcceleratorTests(unittest.TestCase):
 
         self.assertEqual(self.stream.calls[0]["kwargs"]["thinking_budget"], 64)
         self.assertTrue(self.stream.calls[0]["kwargs"]["enable_thinking"])
-        self.assertEqual(self.stream.calls[0]["kwargs"]["thinking_start_token"], "to=self")
+        self.assertEqual(
+            self.stream.calls[0]["kwargs"]["thinking_start_token"],
+            "<|eot|>",
+        )
         self.assertEqual(self.stream.calls[0]["kwargs"]["thinking_end_token"], "<|eom|>")
 
     def test_muse_defaults_to_bounded_low_reasoning(self):
