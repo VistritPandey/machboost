@@ -5,6 +5,28 @@ import XCTest
 @testable import MachBoost
 
 final class MachBoostTests: XCTestCase {
+    func testCommunityCredentialStorePersistsUpdatesAndDeletesSecrets() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = CommunityCredentialStore(root: root)
+
+        try store.save(value: "first-token", account: "lan-api-token")
+        try store.save(value: "provider-secret", account: "provider-test")
+        try store.save(value: "updated-token", account: "lan-api-token")
+
+        XCTAssertEqual(store.value(account: "lan-api-token"), "updated-token")
+        XCTAssertEqual(store.value(account: "provider-test"), "provider-secret")
+        let attributes = try FileManager.default.attributesOfItem(
+            atPath: store.credentialsURL.path
+        )
+        XCTAssertEqual(attributes[.posixPermissions] as? NSNumber, NSNumber(value: 0o600))
+
+        try store.delete(account: "lan-api-token")
+        XCTAssertNil(store.value(account: "lan-api-token"))
+        XCTAssertEqual(store.value(account: "provider-test"), "provider-secret")
+    }
+
     func testAppsGatewayOmitsCredentialsForOpenLocalDaemon() throws {
         let token = try AppsGatewayCredentials.localToken(
             authenticationRequired: false,
