@@ -1966,10 +1966,12 @@ def run_model_alias_action(
             result = client.copy_model(args.source, args.destination)
             print(f"copied {args.source} to {result['model']['name']}", file=output_stream)
         else:
-            if not client.delete_model(args.model):
-                print(f"model alias not found: {args.model}", file=error_stream)
+            if not client.delete_model(args.model, purge=args.weights):
+                kind = "model" if args.weights else "model alias"
+                print(f"{kind} not found: {args.model}", file=error_stream)
                 return 2
-            print(f"removed {args.model}", file=output_stream)
+            suffix = " and its downloaded weights" if args.weights else ""
+            print(f"removed {args.model}{suffix}", file=output_stream)
         return 0
     except (MachBoostAPIError, ValueError) as exc:
         print(f"machboost {args.command} error: {exc}", file=error_stream)
@@ -2789,8 +2791,16 @@ def build_parser() -> argparse.ArgumentParser:
     copy_model.add_argument("destination")
     add_server_connection_arguments(copy_model, include_autostart=True)
 
-    remove_model = subcommands.add_parser("rm", help="Remove a local model alias without deleting weights.")
+    remove_model = subcommands.add_parser(
+        "rm",
+        help="Remove a local model alias, or add --weights to delete its downloaded cache.",
+    )
     remove_model.add_argument("model")
+    remove_model.add_argument(
+        "--weights",
+        action="store_true",
+        help="Unload the model and permanently delete its managed cached weights.",
+    )
     add_server_connection_arguments(remove_model, include_autostart=True)
 
     ps = subcommands.add_parser("ps", help="List models currently loaded in MachBoost memory.")
