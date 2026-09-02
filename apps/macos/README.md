@@ -15,6 +15,8 @@ a separate MachBoost installation.
   and delete
 - tested-model catalog, explicit downloads, architecture preflight, load state,
   memory guidance, cancellation, and unload controls
+- debounced live Hugging Face discovery in Models and the chat picker, with
+  remote MLX results marked unverified until preflight succeeds
 - advanced MLX and MLX-VLM repository entry, with compatibility validation
   before download and automatic discovery after a compatible model is cached
 - repository workspaces with local indexing, per-conversation selection,
@@ -135,6 +137,9 @@ arguments or app logs. Because Claude rejects plain HTTP gateways away from
 loopback, MachBoost starts a private authenticated localhost bridge for a saved
 LAN host and forwards the stream with the host credential. The Apps screen
 continues to display the actual destination rather than the bridge address.
+Claude title helpers are answered without occupying the model queue; repeated
+client harness text and tool schemas are compacted before inference, while
+reusable prompt prefixes remain available across coding tool rounds.
 
 ## Repository Workspaces
 
@@ -312,8 +317,8 @@ Build an ad-hoc signed DMG for local packaging and runtime tests without Apple
 credentials:
 
 ```sh
-./scripts/release_macos.sh 0.16.2-local --local
-open dist/macos/MachBoost-0.16.2-local-arm64.dmg
+./scripts/release_macos.sh 0.16.3-local --local
+open dist/macos/MachBoost-0.16.3-local-arm64.dmg
 ```
 
 Local mode builds the locked runtime, archives the arm64 app, embeds and signs
@@ -334,14 +339,14 @@ export MACHBOOST_DEVELOPER_ID='Developer ID Application: ...'
 export MACHBOOST_NOTARY_PROFILE=...
 export SPARKLE_PUBLIC_ED_KEY=...
 export SPARKLE_PRIVATE_KEY=/secure/path/to/sparkle-private-key
-./scripts/release_macos.sh 0.16.2
-./scripts/publish_macos_release.sh 0.16.2 ./release-notes/0.16.2.md
+./scripts/release_macos.sh 0.16.3
+./scripts/publish_macos_release.sh 0.16.3 ./release-notes/0.16.3.md
 ```
 
 The release script builds the embedded runtime, archives the arm64 app, signs
 nested Mach-O files and the app, creates and notarizes a DMG, staples the
 ticket, runs Gatekeeper verification, writes a SHA-256 checksum, and produces a
-signed Sparkle appcast. The publisher requires an existing `v0.16.2` tag, an
+signed Sparkle appcast. The publisher requires an existing `v0.16.3` tag, an
 authenticated GitHub CLI session, and an explicit release-notes file. It refuses
 to overwrite an existing release and uploads the DMG, checksum, and appcast to
 the matching GitHub release.
