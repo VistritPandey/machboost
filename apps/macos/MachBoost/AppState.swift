@@ -881,6 +881,16 @@ final class AppState {
         activeCatalog.first { $0.name == name || $0.repository == name }
     }
 
+    func searchHubModels(query: String, limit: Int = 16) async -> [CatalogModel] {
+        let normalized = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard normalized.count >= 2, serverIsRunning else { return [] }
+        do {
+            return try await api.searchCatalog(query: normalized, limit: limit)
+        } catch {
+            return []
+        }
+    }
+
     func workspace(id: String?) -> WorkspaceSummary? {
         guard let id else { return nil }
         return workspaces.first { $0.id == id }
