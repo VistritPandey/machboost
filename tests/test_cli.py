@@ -360,6 +360,23 @@ class CLITests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("created company-coder:latest", output.getvalue())
 
+    def test_model_rm_weights_purges_downloaded_cache(self):
+        calls = []
+        client = SimpleNamespace(
+            delete_model=lambda model, *, purge=False: calls.append((model, purge)) or True
+        )
+        args = cli.build_parser().parse_args(
+            ["rm", "mlx-community/example", "--weights"]
+        )
+        output = io.StringIO()
+
+        with patch("machboost.cli.connect_resident", return_value=client):
+            code = cli.run_model_alias_action(args, output_stream=output)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(calls, [("mlx-community/example", True)])
+        self.assertIn("downloaded weights", output.getvalue())
+
     def test_main_self_test_json(self):
         output = io.StringIO()
 
