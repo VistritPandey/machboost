@@ -36,6 +36,7 @@ from .models import (
     ollama_model_manifest,
     preflight_model,
     resolve_model,
+    search_huggingface_models,
 )
 from .ollama_compat import (
     apply_generate_template,
@@ -1974,6 +1975,32 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                 {
                     "schema": "machboost.catalog.v1",
                     "models": catalog_rows(),
+                }
+            )
+            return
+        if path == "/api/catalog/search":
+            if not self.require_scope("models:read"):
+                return
+            query = str((parse_qs(parsed.query).get("q") or [""])[0]).strip()
+            try:
+                limit = int((parse_qs(parsed.query).get("limit") or [16])[0])
+            except (TypeError, ValueError):
+                self.send_error_json(400, "limit must be an integer", code="invalid_limit")
+                return
+            try:
+                models = search_huggingface_models(query, limit=limit)
+            except (OSError, TimeoutError, TypeError, ValueError, json.JSONDecodeError) as exc:
+                self.send_error_json(
+                    502,
+                    f"Hugging Face model search failed: {exc}",
+                    code="huggingface_unavailable",
+                )
+                return
+            self.send_json(
+                {
+                    "schema": "machboost.catalog-search.v1",
+                    "query": query,
+                    "models": models,
                 }
             )
             return
