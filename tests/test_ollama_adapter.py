@@ -60,6 +60,19 @@ class OllamaAdapterTest(unittest.TestCase):
         self.assertTrue(model_is_installed("qwen2.5:3b", ["qwen2.5:3b"]))
         self.assertFalse(model_is_installed("qwen2.5:7b", ["qwen2.5:3b"]))
 
+    def test_delete_removes_selected_ollama_model(self):
+        opener = RecordingOpener(b"")
+        adapter = OllamaHTTPAdapter(
+            "qwen2.5:3b",
+            endpoint="127.0.0.1:11434",
+            opener=opener,
+        )
+
+        self.assertTrue(adapter.delete())
+        self.assertEqual(opener.requests[0].method, "DELETE")
+        self.assertEqual(opener.requests[0].full_url, "http://127.0.0.1:11434/api/delete")
+        self.assertEqual(json.loads(opener.requests[0].data), {"model": "qwen2.5:3b"})
+
     def test_generate_posts_non_streaming_payload_and_reports_tps(self):
         opener = RecordingOpener(
             {
