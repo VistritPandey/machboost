@@ -206,30 +206,14 @@ class CLITests(unittest.TestCase):
         self.assertTrue(args.no_restart)
 
     def test_claude_launch_reads_the_native_app_keychain_token(self):
-        completed = SimpleNamespace(returncode=0, stdout="keychain-token\n")
-
-        with (
-            patch("machboost.cli.platform.system", return_value="Darwin"),
-            patch("machboost.cli.Path.exists", return_value=True),
-            patch("machboost.cli.subprocess.run", return_value=completed) as run,
-        ):
+        with patch(
+            "machboost.cli.machboost_app_api_token",
+            return_value="app-token",
+        ) as resolver:
             token = cli._machboost_app_api_token()
 
-        self.assertEqual(token, "keychain-token")
-        run.assert_called_once_with(
-            [
-                "/usr/bin/security",
-                "find-generic-password",
-                "-w",
-                "-s",
-                "io.machboost.MachBoost",
-                "-a",
-                "lan-api-token",
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
+        self.assertEqual(token, "app-token")
+        resolver.assert_called_once_with()
 
     def test_launch_connects_claude_to_validated_gateway(self):
         output = io.StringIO()
