@@ -404,6 +404,27 @@ class MLXVLMAcceleratorTests(unittest.TestCase):
         self.assertEqual(self.stream.calls[0]["kwargs"]["thinking_start_token"], "to=self")
         self.assertEqual(self.stream.calls[0]["kwargs"]["thinking_end_token"], "<|eom|>")
 
+    def test_muse_defaults_to_bounded_low_reasoning(self):
+        self.accelerator.model.config = {"model_type": "muse_glimmer"}
+        self.accelerator.generate_chat(
+            [{"role": "user", "content": "Say hello."}],
+            max_tokens=128,
+        )
+
+        _, template_options = self.templates[0]
+        self.assertTrue(template_options["enable_thinking"])
+        self.assertEqual(template_options["reasoning_strength"], "low")
+        self.assertEqual(self.stream.calls[0]["kwargs"]["thinking_budget"], 64)
+
+    def test_muse_completion_also_uses_bounded_low_reasoning(self):
+        self.accelerator.model.config = {"model_type": "muse_glimmer"}
+        self.accelerator.generate("Say hello.", max_tokens=128)
+
+        _, template_options = self.templates[0]
+        self.assertTrue(template_options["enable_thinking"])
+        self.assertEqual(template_options["reasoning_strength"], "low")
+        self.assertEqual(self.stream.calls[0]["kwargs"]["thinking_budget"], 64)
+
     def test_disabled_thinking_does_not_apply_reasoning_budget(self):
         self.accelerator.generate_chat(
             [{"role": "user", "content": "Inspect the code."}],
