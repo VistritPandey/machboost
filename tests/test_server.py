@@ -1361,6 +1361,37 @@ class HTTPServerTests(unittest.TestCase):
         self.assertEqual(metrics["schema"], "machboost.metrics.v1")
         self.assertIn("peak_resident_memory_bytes", metrics["process"])
 
+    def test_catalog_search_returns_live_huggingface_results(self):
+        row = {
+            "name": "mlx-community/Gemma-3-4B-it-4bit",
+            "display_name": "Gemma-3-4B-it-4bit",
+            "repository": "mlx-community/Gemma-3-4B-it-4bit",
+            "backend": "mlx-vlm",
+            "capabilities": ["chat", "vision"],
+            "cached": False,
+            "cached_path": None,
+            "recommended": False,
+            "tested": False,
+            "download_size_gb": None,
+            "disk_size_gb": None,
+            "minimum_memory_gb": None,
+            "context_length": None,
+            "support": "unverified",
+            "support_reason": "Compatibility is checked before download.",
+        }
+        with patch(
+            "machboost.server.search_huggingface_models",
+            return_value=[row],
+        ) as search:
+            status, _, body = self.request("/api/catalog/search?q=gemma&limit=8")
+
+        response = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertEqual(response["schema"], "machboost.catalog-search.v1")
+        self.assertEqual(response["query"], "gemma")
+        self.assertEqual(response["models"], [row])
+        search.assert_called_once_with("gemma", limit=8)
+
     def test_workspace_lifecycle_endpoints(self):
         repository = Path(self.temporary.name) / "repository"
         repository.mkdir()
