@@ -68,6 +68,7 @@ final class AppState {
     private(set) var lastCreatedTeamToken: String?
     private(set) var downloads: [String: PullEvent] = [:]
     private(set) var loadingModels: Set<String> = []
+    private(set) var deletingModels: Set<String> = []
     private(set) var lastModelLoad: ModelLoadResponse?
     private(set) var indexingWorkspaces: Set<String> = []
     private(set) var isRefreshing = false
@@ -749,6 +750,7 @@ final class AppState {
     }
 
     func pull(model: String) async {
+        guard downloads[model] == nil else { return }
         let requestID = "pull-\(UUID().uuidString.lowercased())"
         downloads[model] = PullEvent(
             requestID: requestID,
@@ -783,6 +785,28 @@ final class AppState {
     func cancelPull(model: String) async {
         guard let requestID = downloads[model]?.requestID else { return }
         _ = try? await api.cancel(requestID: requestID)
+    }
+
+    func deleteModel(_ model: String) async {
+        guard serverIsRunning else {
+            presentedError = AppStateError.serverNotRunning.localizedDescription
+            return
+        }
+        guard downloads[model] == nil else {
+            presentedError = "Cancel the active model download before deleting it."
+            return
+        }
+        deletingModels.insert(model)
+        defer { deletingModels.remove(model) }
+        do {
+            let response = try await api.deleteModel(model: model)
+            guard response.removed else {
+                throw AppStateError.modelNotFound(model)
+            }
+            await refreshAll()
+        } catch {
+            presentedError = error.localizedDescription
+        }
     }
 
     func load(
@@ -1561,6 +1585,7 @@ final class AppState {
 enum AppStateError: LocalizedError {
     case serverNotRunning
     case unsupportedModel(String)
+    case modelNotFound(String)
     case invalidTeamHost(String)
 
     var errorDescription: String? {
@@ -1569,6 +1594,8 @@ enum AppStateError: LocalizedError {
             "Start the MachBoost server before loading a model."
         case let .unsupportedModel(reason):
             "This model is not compatible with the bundled MLX runtime: \(reason)"
+        case let .modelNotFound(model):
+            "The downloaded files for \(model) were not found."
         case let .invalidTeamHost(reason):
             reason
         }
