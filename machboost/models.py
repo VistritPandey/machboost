@@ -396,10 +396,15 @@ def resolve_model(model: str, backend: str = "auto") -> ModelResolution:
 
 
 def select_backend_for_repo(model: str, backend: str = "auto") -> str:
+    normalized = model.lower()
+    is_vision = looks_like_vision_model(normalized)
+    if backend == "mlx" and is_vision:
+        return "mlx-vlm"
+    if backend == "hf" and is_vision:
+        return "hf-vlm"
     if backend != "auto":
         return backend
-    normalized = model.lower()
-    if looks_like_vision_model(normalized):
+    if is_vision:
         return "mlx-vlm" if normalized.startswith("mlx-community/") else "hf-vlm"
     if normalized.startswith("mlx-community/") or "mlx" in normalized:
         return "mlx"
