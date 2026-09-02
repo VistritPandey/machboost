@@ -340,12 +340,12 @@ struct ChatView: View {
     private var modelBrowser: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass")
-                    .foregroundStyle(.secondary)
-                TextField("Search models", text: $modelSearch)
-                    .textFieldStyle(.plain)
-                    .accessibilityLabel("Search models")
-                    .accessibilityIdentifier("model-search-field")
+                ModelSearchField(
+                    text: $modelSearch,
+                    placeholder: "Search models",
+                    accessibilityIdentifier: "model-search-field"
+                )
+                .frame(height: 24)
                 Button {
                     Task { await appState.refreshAll() }
                 } label: {
