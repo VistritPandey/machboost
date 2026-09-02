@@ -116,6 +116,12 @@ imported attachments remain local, model downloads always require confirmation,
 and closing the window leaves the selected models available until they expire,
 are unloaded, or MachBoost is quit.
 
+The Models view and chat model picker search the bundled catalog and local cache
+first, then query the public Hugging Face catalog for MLX repositories as the
+user types. Live results are marked unverified: MachBoost validates the model
+architecture and required files before offering a download, and never downloads
+weights without confirmation.
+
 Downloaded models can be loaded and compile-warmed explicitly from **Models**
 or **Server → Developer**. The Server view also makes the network boundary
 visible: `127.0.0.1` is local to the host Mac, while authenticated LAN mode
@@ -347,6 +353,15 @@ is restored. Restore the profile at any time with:
 ```sh
 machboost launch claude-desktop --restore
 ```
+
+The Claude gateway keeps title-generation helpers off the model queue, trims
+repeated client harness text, compacts large tool schemas, and preserves the
+reusable prompt prefix across tool rounds. On the development Apple Silicon
+machine, one captured Claude Code request using Muse Glimmer 30B measured about
+`10.6s` to first token from a cold prompt and `1.0-1.5s` after the same coding
+prefix was warm, down from `235.6s` before these gateway fixes. Those numbers
+describe that captured workload and machine; they are not a claim that every
+new prompt or model receives the same speedup.
 
 MachBoost preserves the previously active Claude inference profile during this
 round trip, including an existing Ollama gateway configuration.
