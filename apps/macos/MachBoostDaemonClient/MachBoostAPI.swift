@@ -19,6 +19,7 @@ public enum MachBoostAPIError: LocalizedError {
 
 public protocol MachBoostAPIProtocol: AnyObject, Sendable {
     func catalog() async throws -> [CatalogModel]
+    func searchCatalog(query: String, limit: Int) async throws -> [CatalogModel]
     func metrics() async throws -> ServerMetrics
     func models() async throws -> [ModelInstance]
     func workspaces() async throws -> [WorkspaceSummary]
@@ -122,6 +123,10 @@ public protocol MachBoostAPIProtocol: AnyObject, Sendable {
 }
 
 public extension MachBoostAPIProtocol {
+    func searchCatalog(query: String, limit: Int = 16) async throws -> [CatalogModel] {
+        []
+    }
+
     func stop() async throws {
         try await stop(model: nil)
     }
@@ -347,6 +352,17 @@ public final class MachBoostAPI: MachBoostAPIProtocol, @unchecked Sendable {
 
     public func catalog() async throws -> [CatalogModel] {
         let response: CatalogResponse = try await get("/api/catalog")
+        return response.models
+    }
+
+    public func searchCatalog(query: String, limit: Int = 16) async throws -> [CatalogModel] {
+        var allowed = CharacterSet.urlQueryAllowed
+        allowed.remove(charactersIn: "&+=?")
+        let encoded = query.addingPercentEncoding(withAllowedCharacters: allowed) ?? ""
+        let boundedLimit = min(25, max(1, limit))
+        let response: CatalogResponse = try await get(
+            "/api/catalog/search?q=\(encoded)&limit=\(boundedLimit)"
+        )
         return response.models
     }
 
