@@ -360,6 +360,73 @@ def claude_code_session_title(payload: dict[str, Any]) -> str | None:
     return title or "Coding session"
 
 
+def is_claude_code_request(payload: dict[str, Any], user_agent: str = "") -> bool:
+    """Recognize Claude Code even when proxies rewrite its User-Agent header."""
+    if "claude-cli/" in str(user_agent or "").lower():
+        return True
+    system = _anthropic_text(payload.get("system", ""))
+    return (
+        "You are an interactive agent that helps users with software engineering tasks."
+        in system
+    )
+
+
+def compact_claude_code_tools(
+    tools: Sequence[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Keep callable tool contracts while removing client-side help prose."""
+    compacted: list[dict[str, Any]] = []
+    for tool in tools:
+        name = str(tool.get("name") or "")
+        compacted.append(
+            {
+                "name": name,
+                "description": _concise_tool_description(
+                    str(tool.get("description") or ""),
+                    fallback=f"Call {name}.",
+                ),
+                "input_schema": _compact_json_schema(
+                    tool.get("input_schema")
+                    or {"type": "object", "properties": {}}
+                ),
+            }
+        )
+    return compacted
+
+
+def _concise_tool_description(text: str, *, fallback: str) -> str:
+    normalized = " ".join(text.split())
+    if not normalized:
+        return fallback
+    sentence = re.match(r"^(.+?[.!?])(?:\s|$)", normalized)
+    concise = sentence.group(1) if sentence else normalized
+    if len(concise) <= 160:
+        return concise
+    return concise[:157].rsplit(" ", 1)[0].rstrip(" ,;:") + "..."
+
+
+def _compact_json_schema(value: Any) -> Any:
+    if isinstance(value, list):
+        return [_compact_json_schema(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    prose_keys = {
+        "$comment",
+        "default",
+        "deprecated",
+        "description",
+        "examples",
+        "readOnly",
+        "title",
+        "writeOnly",
+    }
+    return {
+        key: _compact_json_schema(item)
+        for key, item in value.items()
+        if key not in prose_keys
+    }
+
+
 def compact_claude_code_messages(
     messages: Sequence[dict[str, Any]],
     *,
