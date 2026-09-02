@@ -316,6 +316,50 @@ def anthropic_cache_affinity(
     return f"anthropic-{lane}-{hashlib.sha256(encoded).hexdigest()[:24]}"
 
 
+def claude_code_session_title(payload: dict[str, Any]) -> str | None:
+    """Answer Claude Code's title helper without occupying an inference replica."""
+    system = _anthropic_text(payload.get("system", ""))
+    if not (
+        "You are naming a coding session" in system
+        and 'single "title" field' in system
+        and not payload.get("tools")
+    ):
+        return None
+
+    source = ""
+    messages = payload.get("messages")
+    if isinstance(messages, list):
+        for message in messages:
+            if not isinstance(message, dict) or message.get("role") != "user":
+                continue
+            source = _anthropic_text(message.get("content", ""))
+            match = re.search(r"(?is)<session>(.*?)</session>", source)
+            if match:
+                source = match.group(1)
+            break
+
+    source = re.sub(r"(?is)<[^>]+>", " ", source)
+    words = re.findall(r"[A-Za-z0-9][A-Za-z0-9_.:/+-]*", source)
+    ignored = {
+        "a",
+        "an",
+        "and",
+        "can",
+        "exactly",
+        "for",
+        "me",
+        "please",
+        "reply",
+        "the",
+        "to",
+        "with",
+        "you",
+    }
+    meaningful = [word for word in words if word.lower() not in ignored]
+    title = " ".join(meaningful[:4]).strip(" .,:;-/")
+    return title or "Coding session"
+
+
 def compact_claude_code_messages(
     messages: Sequence[dict[str, Any]],
     *,
