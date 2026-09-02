@@ -8,7 +8,6 @@ import json
 import os
 import platform
 import shutil
-import subprocess
 import sys
 import time
 from dataclasses import asdict, dataclass
@@ -20,7 +19,12 @@ from urllib.parse import urlparse
 from . import __version__, machboost
 from .accelerator import Accelerator, read_context_paths, resolve_context
 from .adapters.ollama import OllamaHTTPAdapter, OllamaHTTPError
-from .client import MachBoostAPIError, MachBoostClient, ensure_server
+from .client import (
+    MachBoostAPIError,
+    MachBoostClient,
+    ensure_server,
+    machboost_app_api_token,
+)
 from .claude_desktop import (
     ClaudeDesktopProfileManager,
     save_model_mappings,
@@ -801,23 +805,7 @@ def _claude_desktop_gateway(args: argparse.Namespace) -> tuple[str, str, bool]:
 
 
 def _machboost_app_api_token() -> str:
-    if platform.system() != "Darwin" or not Path("/usr/bin/security").exists():
-        return ""
-    result = subprocess.run(
-        [
-            "/usr/bin/security",
-            "find-generic-password",
-            "-w",
-            "-s",
-            "io.machboost.MachBoost",
-            "-a",
-            "lan-api-token",
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    return result.stdout.strip() if result.returncode == 0 else ""
+    return machboost_app_api_token()
 
 
 def select_native_backend(model: str, backend: str) -> str:
