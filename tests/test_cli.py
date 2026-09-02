@@ -814,6 +814,41 @@ class CLITests(unittest.TestCase):
         self.assertEqual(client.load_calls[0][2], "5m")
         self.assertTrue(client.load_calls[0][3])
 
+    def test_resident_chat_uses_the_interactive_terminal_layout(self):
+        output = io.StringIO()
+        prompts = iter(["hello", "/bye"])
+        prompt_labels = []
+        client = FakeResidentClient()
+
+        def answer(prompt):
+            prompt_labels.append(prompt)
+            return next(prompts)
+
+        with (
+            patch.dict(
+                "os.environ",
+                {"MACHBOOST_TUI": "1", "NO_COLOR": "1"},
+                clear=False,
+            ),
+            patch.object(cli, "connect_resident", return_value=client),
+        ):
+            code = cli.run_resident_chat(
+                cli.build_parser().parse_args(
+                    ["run", "mlx-community/Qwen2.5-3B-Instruct-4bit"]
+                ),
+                input_func=answer,
+                output_stream=output,
+            )
+
+        rendered = output.getvalue()
+        self.assertEqual(code, 0)
+        self.assertIn("MachBoost  v", rendered)
+        self.assertIn("model    mlx-community/Qwen2.5-3B-Instruct-4bit", rendered)
+        self.assertIn("host     localhost:11435", rendered)
+        self.assertIn("\nMachBoost\nresident response\n", rendered)
+        self.assertNotIn("assistant>", rendered)
+        self.assertEqual(prompt_labels[0], "\nYou\n> ")
+
     def test_resident_run_forwards_paid_api_route(self):
         output = io.StringIO()
         prompts = iter(["hello", "/bye"])
