@@ -342,8 +342,24 @@ final class MachBoostUITests: XCTestCase {
         focus(search)
         search.typeText("Muse")
 
+        XCTAssertEqual(search.value as? String, "Muse")
         XCTAssertTrue(app.buttons["Muse Glimmer 30B, ready"].waitForExistence(timeout: 3))
         XCTAssertFalse(app.buttons["Qwen2.5 3B, ready"].exists)
+    }
+
+    @MainActor
+    func testModelsPageSearchDoesNotDuplicateTyping() {
+        let app = launchApp()
+        let models = app.staticTexts["Models"].firstMatch
+        XCTAssertTrue(models.waitForExistence(timeout: 10))
+        models.click()
+
+        let search = app.descendants(matching: .any)["models-page-search-field"]
+        XCTAssertTrue(search.waitForExistence(timeout: 3))
+        focus(search)
+        search.typeText("gemma")
+
+        XCTAssertEqual(search.value as? String, "gemma")
     }
 
     @MainActor
