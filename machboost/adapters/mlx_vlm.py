@@ -409,6 +409,11 @@ class MLXVLMAccelerator:
     ) -> tuple[str, VisionRunStats]:
         normalized, image_sources = normalize_multimodal_messages(messages)
         images = self.assets.materialize_all(image_sources)
+        enable_thinking, reasoning_strength = _effective_reasoning(
+            self.model.config,
+            enable_thinking,
+            reasoning_strength,
+        )
         prompt = self._format_chat_prompt(
             normalized,
             image_count=len(images),
@@ -528,12 +533,18 @@ class MLXVLMAccelerator:
         cache_key: Optional[str] = None,
     ) -> tuple[str, VisionRunStats]:
         materialized = self.assets.materialize_all(images or ())
+        enable_thinking, reasoning_strength = _effective_reasoning(
+            self.model.config,
+            enable_thinking,
+            None,
+        )
         templated = self._apply_chat_template(
             self.processor,
             self.model.config,
             prompt,
             num_images=len(materialized),
             enable_thinking=enable_thinking,
+            reasoning_strength=reasoning_strength,
         )
         return self._generate(
             templated,
@@ -554,7 +565,9 @@ class MLXVLMAccelerator:
             policy_prompt=prompt,
             reasoning_echoes=(prompt,),
             cache_key=cache_key,
-            thinking_budget=None,
+            thinking_budget=(
+                _thinking_budget(reasoning_strength) if enable_thinking else None
+            ),
         )
 
     def _generate(
@@ -1161,6 +1174,16 @@ def _thinking_budget(reasoning_strength: Optional[str]) -> Optional[int]:
         "medium": 256,
         "high": 768,
     }.get(str(reasoning_strength or "").lower())
+
+
+def _effective_reasoning(
+    config: Any,
+    enable_thinking: bool,
+    reasoning_strength: Optional[str],
+) -> tuple[bool, Optional[str]]:
+    if config_value(config, "model_type", "") == "muse_glimmer" and not enable_thinking:
+        return True, reasoning_strength or "low"
+    return enable_thinking, reasoning_strength
 
 
 def _latest_user_text(messages: Sequence[dict[str, str]]) -> str:
