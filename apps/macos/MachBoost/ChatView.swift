@@ -43,6 +43,9 @@ struct ChatView: View {
     @State private var showsModelBrowser = false
     @State private var modelSearch = ""
     @State private var modelFilter = ModelBrowserFilter.all
+    @State private var hubModels: [CatalogModel] = []
+    @State private var isSearchingHub = false
+    @State private var hubSearchTask: Task<Void, Never>?
     @State private var pendingModelDownload: CatalogModel?
     @StateObject private var toolApproval = ToolApprovalCoordinator()
     @State private var pendingPermissionMode: CodingPermissionMode?
@@ -150,6 +153,9 @@ struct ChatView: View {
         .onChange(of: selectableModels.map(\.name)) {
             selectAvailableModelIfNeeded()
         }
+        .onChange(of: modelSearch) { _, value in
+            scheduleHubSearch(value)
+        }
         .onChange(of: appState.providers.map { "\($0.id):\($0.models.joined(separator: ",")):\($0.hasSecret)" }) {
             selectAvailableProviderIfNeeded()
         }
@@ -169,6 +175,7 @@ struct ChatView: View {
             stop()
             cancelCodingPrefixPreparation()
             workspaceChangesTask?.cancel()
+            hubSearchTask?.cancel()
         }
         .task(id: codingWarmupKey) {
             await prepareCodingPrefixIfNeeded()
@@ -346,13 +353,19 @@ struct ChatView: View {
                     accessibilityIdentifier: "model-search-field"
                 )
                 .frame(height: 24)
-                Button {
-                    Task { await appState.refreshAll() }
-                } label: {
-                    Image(systemName: "arrow.clockwise")
+                if isSearchingHub {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Button {
+                        Task { await appState.refreshAll() }
+                        scheduleHubSearch(modelSearch)
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Refresh model catalog")
                 }
-                .buttonStyle(.borderless)
-                .help("Refresh model catalog")
             }
             .padding(12)
 
@@ -392,7 +405,7 @@ struct ChatView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 Spacer()
-                Text("MLX native models")
+                Text(hubModels.isEmpty ? "MLX native models" : "MLX native + Hugging Face")
                     .font(.caption.weight(.medium))
                     .foregroundStyle(.green)
             }
@@ -1098,10 +1111,15 @@ struct ChatView: View {
 
     private var browsableModels: [CatalogModel] {
         let query = modelSearch.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return appState.activeCatalog
+        var seen: Set<String> = []
+        let combined = (appState.activeCatalog + hubModels).filter { model in
+            let identity = model.repository ?? model.name
+            return seen.insert(identity).inserted
+        }
+        return combined
             .filter { model in
                 guard
-                    model.support == "ready",
+                    model.support == "ready" || model.support == "unverified",
                     model.backend.hasPrefix("mlx") || model.backend == "dflash"
                 else {
                     return false
@@ -1132,6 +1150,25 @@ struct ChatView: View {
                 return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName)
                     == .orderedAscending
             }
+    }
+
+    private func scheduleHubSearch(_ value: String) {
+        hubSearchTask?.cancel()
+        let query = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard query.count >= 2, appState.inferenceMode == .local else {
+            hubModels = []
+            isSearchingHub = false
+            return
+        }
+        isSearchingHub = true
+        hubSearchTask = Task {
+            try? await Task.sleep(for: .milliseconds(300))
+            guard !Task.isCancelled else { return }
+            let models = await appState.searchHubModels(query: query)
+            guard !Task.isCancelled else { return }
+            hubModels = models
+            isSearchingHub = false
+        }
     }
 
     private var isGenerating: Bool { activeRequestID != nil }
