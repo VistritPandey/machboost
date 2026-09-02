@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import platform
+import stat
 import subprocess
 import sys
 import time
@@ -39,8 +40,56 @@ def default_endpoint() -> str:
     return value.rstrip("/")
 
 
+def _community_app_api_token() -> str:
+    credentials = (
+        Path.home()
+        / "Library"
+        / "Application Support"
+        / "MachBoost"
+        / "credentials.community.json"
+    )
+    try:
+        metadata = credentials.stat()
+        if metadata.st_uid != os.getuid() or stat.S_IMODE(metadata.st_mode) & 0o077:
+            return ""
+        payload = json.loads(credentials.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return ""
+    token = payload.get("lan-api-token") if isinstance(payload, dict) else None
+    return str(token).strip() if token else ""
+
+
+def _machboost_app_uses_community_credentials() -> Optional[bool]:
+    app_locations = (
+        Path("/Applications/MachBoost.app"),
+        Path.home() / "Applications" / "MachBoost.app",
+    )
+    for app in app_locations:
+        if not app.exists():
+            continue
+        result = subprocess.run(
+            ["/usr/bin/codesign", "-dv", "--verbose=4", str(app)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        details = f"{result.stdout}\n{result.stderr}"
+        if "TeamIdentifier=not set" in details or "Signature=adhoc" in details:
+            return True
+        if "TeamIdentifier=" in details:
+            return False
+    return None
+
+
 def machboost_app_api_token() -> str:
-    if platform.system() != "Darwin" or not Path("/usr/bin/security").exists():
+    if platform.system() != "Darwin":
+        return ""
+    community_credentials = _machboost_app_uses_community_credentials()
+    if community_credentials is not False:
+        token = _community_app_api_token()
+        if token:
+            return token
+    if not Path("/usr/bin/security").exists():
         return ""
     result = subprocess.run(
         [
