@@ -321,8 +321,8 @@ Build an ad-hoc signed DMG for local packaging and runtime tests without Apple
 credentials:
 
 ```sh
-./scripts/release_macos.sh 0.16.4-local --local
-open dist/macos/MachBoost-0.16.4-local-arm64.dmg
+./scripts/release_macos.sh 0.16.4 --local
+open dist/macos/MachBoost-0.16.4-arm64.dmg
 ```
 
 Local mode builds the locked runtime, archives the arm64 app, embeds and signs
