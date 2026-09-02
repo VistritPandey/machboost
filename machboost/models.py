@@ -10,6 +10,8 @@ import shutil
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Optional
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 
 
 @dataclass(frozen=True)
@@ -571,6 +573,87 @@ def catalog_rows(
             )
         )
     return sorted(rows, key=lambda row: str(row["name"]).lower())
+
+
+def search_huggingface_models(
+    query: str,
+    *,
+    limit: int = 16,
+    timeout: float = 6.0,
+) -> list[dict[str, Any]]:
+    """Search public MLX-tagged Hub repositories without downloading weights."""
+    normalized = " ".join(str(query or "").split())[:100]
+    if len(normalized) < 2:
+        return []
+    bounded_limit = max(1, min(25, int(limit)))
+    parameters = urlencode(
+        {
+            "search": normalized,
+            "filter": "mlx",
+            "sort": "downloads",
+            "direction": -1,
+            "limit": bounded_limit,
+        }
+    )
+    request = Request(
+        f"https://huggingface.co/api/models?{parameters}",
+        headers={
+            "Accept": "application/json",
+            "User-Agent": "MachBoost model discovery",
+        },
+    )
+    with urlopen(request, timeout=max(1.0, min(float(timeout), 15.0))) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    if not isinstance(payload, list):
+        raise ValueError("Hugging Face returned an invalid model search response")
+
+    rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        repository = str(item.get("id") or item.get("modelId") or "").strip()
+        if not repository or "/" not in repository or repository in seen:
+            continue
+        seen.add(repository)
+        tags = {
+            str(tag).strip().lower()
+            for tag in item.get("tags") or ()
+            if str(tag).strip()
+        }
+        pipeline = str(item.get("pipeline_tag") or "").strip().lower()
+        vision = pipeline in {
+            "any-to-any",
+            "image-text-to-text",
+            "image-to-text",
+            "visual-question-answering",
+        } or bool(tags & {"vision", "mlx-vlm", "image-text-to-text"})
+        capabilities = ["chat", "vision"] if vision else ["chat", "completion"]
+        if tags & {"reasoning", "thinking", "chain-of-thought"}:
+            capabilities.append("reasoning")
+        if tags & {"tool-calling", "tool-use", "function-calling"}:
+            capabilities.append("tools")
+        cached_path = cached_repo_path(repository)
+        rows.append(
+            {
+                "name": repository,
+                "display_name": repository.rsplit("/", 1)[-1],
+                "repository": repository,
+                "backend": "mlx-vlm" if vision else "mlx",
+                "capabilities": capabilities,
+                "cached": cached_path is not None,
+                "cached_path": str(cached_path) if cached_path is not None else None,
+                "recommended": False,
+                "tested": False,
+                "download_size_gb": None,
+                "disk_size_gb": _directory_size_gb(cached_path),
+                "minimum_memory_gb": None,
+                "context_length": None,
+                "support": "unverified",
+                "support_reason": "Compatibility is checked before download.",
+            }
+        )
+    return rows
 
 
 def default_hf_cache_dirs() -> list[Path]:
