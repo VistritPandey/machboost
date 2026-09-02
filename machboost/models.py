@@ -9,7 +9,7 @@ import platform
 import shutil
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
@@ -673,6 +673,169 @@ def default_hf_cache_dirs() -> list[Path]:
             result.append(resolved)
             seen.add(resolved)
     return result
+
+
+def huggingface_repository_cache_dir(repository: str, cache_dir: Path) -> Path:
+    """Return the managed Hub cache directory for a repository identifier."""
+    pieces = str(repository).strip().split("/")
+    if len(pieces) != 2 or any(
+        not piece or piece in {".", ".."} or "/" in piece or "\\" in piece
+        for piece in pieces
+    ):
+        raise ValueError(f"invalid Hugging Face repository: {repository!r}")
+    root = Path(cache_dir).expanduser().resolve()
+    return root / f"models--{pieces[0]}--{pieces[1]}"
+
+
+def delete_cached_repositories(
+    model: str,
+    *,
+    cache_dirs: Optional[list[Path]] = None,
+) -> dict[str, Any]:
+    """Delete model weights from managed Hugging Face caches only."""
+    requested_path = Path(model).expanduser()
+    if requested_path.exists():
+        raise ValueError("MachBoost will not delete weights from a user-selected local path")
+
+    repositories = model_repositories(model)
+    removed_paths: list[str] = []
+    removed_bytes = 0
+    roots = cache_dirs or default_hf_cache_dirs()
+    for repository in repositories:
+        for root in roots:
+            repository_dir = huggingface_repository_cache_dir(repository, root)
+            if repository_dir.is_dir():
+                removed_bytes += _directory_size_bytes(repository_dir)
+                shutil.rmtree(repository_dir)
+                removed_paths.append(str(repository_dir))
+            lock_dir = Path(root).expanduser().resolve() / ".locks" / repository_dir.name
+            if lock_dir.is_dir():
+                shutil.rmtree(lock_dir)
+
+    return {
+        "removed": bool(removed_paths),
+        "model": model,
+        "repositories": list(repositories),
+        "paths": removed_paths,
+        "bytes_removed": removed_bytes,
+    }
+
+
+def repository_download_state(
+    repository: str,
+    files: Sequence[Any],
+    *,
+    cache_dirs: Optional[list[Path]] = None,
+) -> dict[str, Any]:
+    """Measure aggregate Hub download progress, including partial Xet shards."""
+    rows = list(files)
+    repository_dir = _download_repository_dir(repository, rows, cache_dirs=cache_dirs)
+    tree = _download_tree(repository_dir, rows)
+    total_bytes = 0
+    completed_bytes = 0
+    completed_files = 0
+    active_files: list[str] = []
+
+    for row in rows:
+        filename = str(getattr(row, "filename", "") or "")
+        file_size = max(0, int(getattr(row, "file_size", 0) or 0))
+        total_bytes += file_size
+        local_path = Path(str(getattr(row, "local_path", "") or "")).expanduser()
+        downloaded = file_size if local_path.is_file() else 0
+        metadata = tree.get(filename) if isinstance(tree.get(filename), dict) else {}
+        blob_keys = tuple(
+            str(value)
+            for value in (
+                metadata.get("lfs_sha256"),
+                metadata.get("blob_id"),
+            )
+            if value
+        )
+        if repository_dir is not None and blob_keys:
+            blob_dir = repository_dir / "blobs"
+            candidates: list[Path] = []
+            for key in blob_keys:
+                exact = blob_dir / key
+                if exact.is_file():
+                    candidates.append(exact)
+                candidates.extend(blob_dir.glob(f"{key}.*.incomplete"))
+            if candidates:
+                downloaded = max(
+                    downloaded,
+                    min(file_size, max(path.stat().st_size for path in candidates)),
+                )
+        completed_bytes += downloaded
+        if file_size == 0 or downloaded >= file_size:
+            completed_files += 1
+        elif downloaded > 0 and filename:
+            active_files.append(filename)
+
+    return {
+        "completed": min(total_bytes, completed_bytes),
+        "total": total_bytes,
+        "files_completed": completed_files,
+        "files_total": len(rows),
+        "active_files": active_files,
+    }
+
+
+def _download_repository_dir(
+    repository: str,
+    rows: Sequence[Any],
+    *,
+    cache_dirs: Optional[list[Path]],
+) -> Optional[Path]:
+    for row in rows:
+        raw_path = str(getattr(row, "local_path", "") or "")
+        if not raw_path:
+            continue
+        local_path = Path(raw_path).expanduser()
+        parents = local_path.parents
+        if len(parents) >= 3 and parents[1].name == "snapshots":
+            return parents[2]
+    for root in cache_dirs or default_hf_cache_dirs():
+        try:
+            candidate = huggingface_repository_cache_dir(repository, root)
+        except ValueError:
+            return None
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _download_tree(
+    repository_dir: Optional[Path],
+    rows: Sequence[Any],
+) -> dict[str, Any]:
+    if repository_dir is None:
+        return {}
+    commits = {
+        str(getattr(row, "commit_hash", "") or "")
+        for row in rows
+        if getattr(row, "commit_hash", None)
+    }
+    candidates = [repository_dir / "trees" / f"{commit}.json" for commit in commits]
+    candidates.extend(sorted((repository_dir / "trees").glob("*.json"), reverse=True))
+    for path in candidates:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            files = payload.get("files") if isinstance(payload, dict) else None
+            if isinstance(files, dict):
+                return files
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+    return {}
+
+
+def _directory_size_bytes(path: Path) -> int:
+    total = 0
+    for child in path.rglob("*"):
+        try:
+            if child.is_file() and not child.is_symlink():
+                total += child.stat().st_size
+        except OSError:
+            continue
+    return total
 
 
 def _cached_repository_rows(
