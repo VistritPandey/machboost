@@ -110,6 +110,23 @@ class ToolCallParsingTests(unittest.TestCase):
         self.assertEqual("".join(emitted), "I will inspect it.")
         self.assertNotIn("atem", "".join(emitted))
 
+    def test_tool_aware_stream_preserves_first_word_after_short_role_marker(self):
+        emitted = []
+        stream = ToolAwareTextStream(emitted.append)
+
+        for chunk in ("to=user<|mes", "sage|>You're wel", "come!"):
+            stream.feed(chunk)
+
+        self.assertEqual("".join(emitted), "You're welcome!")
+
+    def test_extract_tool_calls_removes_short_role_marker_without_eating_text(self):
+        content, calls = extract_tool_calls(
+            "assistant to=user<|message|>I'm doing great, thanks!"
+        )
+
+        self.assertEqual(content, "I'm doing great, thanks!")
+        self.assertEqual(calls, [])
+
     def test_extracts_muse_attribute_call_without_exposing_control_tokens(self):
         content, calls = extract_tool_calls(
             '<|start|>assistant to=list_files<|message|>'
