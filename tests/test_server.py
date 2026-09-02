@@ -301,6 +301,14 @@ class PrefixDroppingAccelerator(FakeAccelerator):
         return "You're welcome!", FakeStats(generated_tokens=4)
 
 
+class TailDroppingAccelerator(FakeAccelerator):
+    def generate_chat(self, messages, *, max_tokens, on_text=None, **_kwargs):
+        self.chat_calls.append((messages, max_tokens, None))
+        if on_text is not None:
+            on_text("CAPT")
+        return "CAPTURE_OK", FakeStats(generated_tokens=3)
+
+
 class NativePromptCacheConfigurationTests(unittest.TestCase):
     def test_vlm_requests_use_tenant_as_implicit_cache_affinity(self):
         self.assertEqual(
@@ -1255,6 +1263,8 @@ class HTTPServerTests(unittest.TestCase):
             accelerator = FailingAccelerator()
         elif config.model.endswith("prefix-dropping"):
             accelerator = PrefixDroppingAccelerator()
+        elif config.model.endswith("tail-dropping"):
+            accelerator = TailDroppingAccelerator()
         elif config.model.endswith("streaming-tool-calling"):
             accelerator = StreamingToolCallingAccelerator()
         elif config.model.endswith("tool-calling"):
@@ -2296,6 +2306,64 @@ More generic harness instructions.
         self.assertEqual(event_types[0], "message_start")
         self.assertIn("content_block_delta", event_types)
         self.assertEqual(event_types[-1], "message_stop")
+
+    def test_sse_protocols_flush_the_final_tokenizer_fragment(self):
+        anthropic_payload = {
+            "model": "mlx-community/tail-dropping",
+            "messages": [{"role": "user", "content": "Reply exactly"}],
+            "max_tokens": 32,
+            "stream": True,
+        }
+        _, _, anthropic_body = self.request("/v1/messages", anthropic_payload)
+        anthropic_events = [
+            json.loads(line.removeprefix("data: "))
+            for line in anthropic_body.splitlines()
+            if line.startswith("data: ")
+        ]
+        anthropic_text = "".join(
+            event.get("delta", {}).get("text", "")
+            for event in anthropic_events
+            if event.get("type") == "content_block_delta"
+        )
+
+        openai_payload = {
+            "model": "mlx-community/tail-dropping",
+            "messages": [{"role": "user", "content": "Reply exactly"}],
+            "max_tokens": 32,
+            "stream": True,
+        }
+        _, _, openai_body = self.request("/v1/chat/completions", openai_payload)
+        openai_events = [
+            json.loads(line.removeprefix("data: "))
+            for line in openai_body.splitlines()
+            if line.startswith("data: {")
+        ]
+        openai_text = "".join(
+            event["choices"][0].get("delta", {}).get("content", "")
+            for event in openai_events
+        )
+
+        responses_payload = {
+            "model": "mlx-community/tail-dropping",
+            "input": "Reply exactly",
+            "max_output_tokens": 32,
+            "stream": True,
+        }
+        _, _, responses_body = self.request("/v1/responses", responses_payload)
+        responses_events = [
+            json.loads(line.removeprefix("data: "))
+            for line in responses_body.splitlines()
+            if line.startswith("data: ")
+        ]
+        responses_text = "".join(
+            event.get("delta", "")
+            for event in responses_events
+            if event.get("type") == "response.output_text.delta"
+        )
+
+        self.assertEqual(anthropic_text, "CAPTURE_OK")
+        self.assertEqual(openai_text, "CAPTURE_OK")
+        self.assertEqual(responses_text, "CAPTURE_OK")
 
     def test_claude_session_titles_bypass_the_model_queue(self):
         payload = {
