@@ -80,16 +80,16 @@ pip install -e ".[all]"
 Install the current CLI directly from its GitHub release tag:
 
 ```sh
-python3 -m pip install "machboost[mlx] @ git+https://github.com/VistritPandey/machboost.git@v0.16.6"
-python3 -m pip install "machboost[vision] @ git+https://github.com/VistritPandey/machboost.git@v0.16.6"
-python3 -m pip install "machboost[dflash] @ git+https://github.com/VistritPandey/machboost.git@v0.16.6"
+python3 -m pip install "machboost[mlx] @ git+https://github.com/VistritPandey/machboost.git@v0.16.7"
+python3 -m pip install "machboost[vision] @ git+https://github.com/VistritPandey/machboost.git@v0.16.7"
+python3 -m pip install "machboost[dflash] @ git+https://github.com/VistritPandey/machboost.git@v0.16.7"
 ```
 
 Update an existing install:
 
 ```sh
 python3 -m pip uninstall -y machboost
-python3 -m pip install "machboost[mlx] @ git+https://github.com/VistritPandey/machboost.git@v0.16.6"
+python3 -m pip install "machboost[mlx] @ git+https://github.com/VistritPandey/machboost.git@v0.16.7"
 machboost version
 ```
 
@@ -192,6 +192,10 @@ machboost warm qwen2.5:3b
 machboost ps
 ```
 
+Interactive terminals use a compact green chat layout with separate user,
+answer, reasoning, tool, and performance rows. Redirected output stays plain
+for scripts and logs. Set `NO_COLOR=1` to keep the layout without ANSI colors.
+
 Connect a local MCP server or save reusable instructions from the CLI:
 
 ```sh
@@ -222,7 +226,7 @@ MachBoost alias uses the native 4-bit MLX-VLM conversion and recommends at least
 32 GB unified memory. Higher-bit variants require more memory.
 
 ```sh
-python3 -m pip install "machboost[vision] @ git+https://github.com/VistritPandey/machboost.git@v0.16.6"
+python3 -m pip install "machboost[vision] @ git+https://github.com/VistritPandey/machboost.git@v0.16.7"
 machboost pull muse-glimmer:30b
 machboost run muse-glimmer:30b --think high --show-thinking --show-stats
 machboost run muse-glimmer:30b --image ./screenshot.png --think medium
