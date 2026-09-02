@@ -48,8 +48,10 @@ from .ollama_compat import (
 from .providers import ProviderError, ProviderResult, ProviderStore, route_with_fallback
 from .protocols import (
     anthropic_body,
+    anthropic_cache_affinity,
     anthropic_messages,
     anthropic_tools,
+    compact_claude_code_messages,
     response_body,
     response_message_item,
     responses_messages,
@@ -3583,25 +3585,40 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
         translated["max_tokens"] = int(payload.get("max_tokens") or 1024)
         if "stop_sequences" in payload:
             translated["stop"] = payload["stop_sequences"]
-        tools = anthropic_tools(
-            select_anthropic_tools(
-                payload.get("tools"),
-                payload.get("messages"),
-                tool_choice=payload.get("tool_choice"),
-                limit=anthropic_tool_limit(),
-            )
+        selected_tools = select_anthropic_tools(
+            payload.get("tools"),
+            payload.get("messages"),
+            tool_choice=payload.get("tool_choice"),
+            limit=anthropic_tool_limit(),
         )
+        tools = anthropic_tools(selected_tools)
         if tools:
             translated["tools"] = tools
             translated["tool_choice"] = compatibility_tool_choice(payload.get("tool_choice"))
+        if not translated.get("affinity_key") and not (
+            isinstance(translated.get("machboost_options"), dict)
+            and translated["machboost_options"].get("affinity_key")
+        ):
+            translated["affinity_key"] = anthropic_cache_affinity(
+                payload,
+                selected_tools,
+            )
         thinking = payload.get("thinking")
         if isinstance(thinking, dict) and thinking.get("type") == "enabled":
             translated["reasoning_effort"] = "high"
+        messages = anthropic_messages(payload)
+        if "claude-cli/" in self.headers.get("User-Agent", "").lower():
+            messages = compact_claude_code_messages(
+                messages,
+                selected_tool_names={
+                    str(tool.get("name") or "") for tool in selected_tools
+                },
+            )
         prepared = self.prepare_compat_chat(
             payload,
             self.apply_skill_instructions(
                 payload,
-                normalize_messages(anthropic_messages(payload)),
+                normalize_messages(messages),
             ),
             openai_options(translated),
         )
@@ -5088,9 +5105,9 @@ def openai_options(payload: dict[str, Any]) -> dict[str, Any]:
 
 def anthropic_tool_limit() -> int:
     try:
-        return max(0, int(os.environ.get("MACHBOOST_ANTHROPIC_TOOL_LIMIT", "24")))
+        return max(0, int(os.environ.get("MACHBOOST_ANTHROPIC_TOOL_LIMIT", "12")))
     except ValueError:
-        return 24
+        return 12
 
 
 def compatibility_tool_choice(choice: Any) -> Any:
