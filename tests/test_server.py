@@ -760,6 +760,15 @@ class RuntimeManagerTests(unittest.TestCase):
         self.assertEqual(config.backend, "mlx-vlm")
         self.assertEqual(config.model, "mlx-community/Muse-Glimmer-30B-4bit")
 
+    def test_full_muse_repo_accepts_mlx_family_backend(self):
+        config = model_config(
+            "mlx-community/Muse-Glimmer-30B-4bit",
+            {"backend": "mlx"},
+        )
+
+        self.assertEqual(config.backend, "mlx-vlm")
+        self.assertEqual(config.model, "mlx-community/Muse-Glimmer-30B-4bit")
+
     def test_muse_glimmer_runtime_preserves_native_reasoning_and_tools(self):
         manager = RuntimeManager(loader=lambda config: FakeMuseAccelerator())
         tools = [
