@@ -7,6 +7,8 @@ from machboost.protocols import (
     anthropic_messages,
     claude_code_session_title,
     compact_claude_code_messages,
+    compact_claude_code_tools,
+    is_claude_code_request,
     select_anthropic_tools,
 )
 
@@ -172,6 +174,58 @@ class AnthropicCacheAffinityTests(unittest.TestCase):
 
 
 class ClaudeCodeCompactionTests(unittest.TestCase):
+    def test_detects_claude_code_from_harness_without_user_agent(self):
+        payload = {
+            "system": (
+                "You are an interactive agent that helps users with software "
+                "engineering tasks."
+            )
+        }
+
+        self.assertTrue(is_claude_code_request(payload, "Python-urllib/3"))
+        self.assertTrue(is_claude_code_request({}, "claude-cli/2.1.255"))
+        self.assertFalse(
+            is_claude_code_request(
+                {"system": "You are a concise assistant."},
+                "anthropic-sdk-python/1.0",
+            )
+        )
+
+    def test_compacts_tool_prose_without_changing_schema_contract(self):
+        verbose = "Detailed guidance that repeats client behavior. " * 80
+        tools = [
+            {
+                "name": "Read",
+                "description": "Reads a file from the local filesystem. " + verbose,
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": verbose,
+                        },
+                        "mode": {
+                            "type": "string",
+                            "enum": ["text", "binary"],
+                            "description": verbose,
+                        },
+                    },
+                    "required": ["path"],
+                    "additionalProperties": False,
+                },
+            }
+        ]
+
+        compacted = compact_claude_code_tools(tools)
+
+        self.assertEqual([item["name"] for item in compacted], ["Read"])
+        schema = compacted[0]["input_schema"]
+        self.assertEqual(schema["required"], ["path"])
+        self.assertEqual(schema["properties"]["mode"]["enum"], ["text", "binary"])
+        self.assertFalse(schema["additionalProperties"])
+        self.assertNotIn("repeats client behavior", str(compacted))
+        self.assertLess(len(str(compacted)), len(str(tools)) // 4)
+
     def test_extracts_session_title_without_running_the_model(self):
         payload = {
             "system": (
