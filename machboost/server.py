@@ -3549,8 +3549,8 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
             return
 
         content, tool_calls = result_content_and_tool_calls(result)
-        if content and not streamed_text:
-            emit(content)
+        if remaining := stream_remainder(content, streamed_text):
+            emit(remaining)
         completed = response_body(
             response_id=request_id,
             model=prepared.model,
@@ -3845,10 +3845,10 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
             return
 
         content, tool_calls = result_content_and_tool_calls(result)
-        if result.thinking and not streamed_thinking:
-            emit_thinking(result.thinking)
-        if content and not streamed_text:
-            emit(content)
+        if remaining := stream_remainder(result.thinking, streamed_thinking):
+            emit_thinking(remaining)
+        if remaining := stream_remainder(content, streamed_text):
+            emit(remaining)
         if thinking_index is not None:
             event("content_block_stop", index=thinking_index)
         if text_index is not None:
@@ -4090,6 +4090,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                 return
 
         stream_started = False
+        streamed_content = ""
 
         def on_admitted() -> None:
             nonlocal stream_started
@@ -4097,6 +4098,8 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
             stream_started = True
 
         def emit(text: str) -> None:
+            nonlocal streamed_content
+            streamed_content += text
             self.write_sse(
                 {
                     "id": request_id,
@@ -4206,6 +4209,8 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                         ],
                     }
                 )
+        elif remaining := stream_remainder(content, streamed_content):
+            emit(remaining)
         self.write_sse(
             {
                 "id": request_id,
@@ -5522,6 +5527,17 @@ def result_content_and_tool_calls(
             }
         )
     return content, calls
+
+
+def stream_remainder(final: str, streamed: str) -> str:
+    """Return an unflushed tokenizer tail without duplicating streamed text."""
+    if not final:
+        return ""
+    if not streamed:
+        return final
+    if final.startswith(streamed):
+        return final[len(streamed) :]
+    return ""
 
 
 def ollama_tool_calls(calls: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
