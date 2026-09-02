@@ -1097,6 +1097,19 @@ class RuntimeManagerTests(unittest.TestCase):
             ],
         )
 
+    def test_model_weights_cannot_be_deleted_during_matching_download(self):
+        manager = RuntimeManager(loader=lambda config: FakeAccelerator())
+        operation = manager.operations.begin(
+            "pull-active",
+            "pull",
+            "mlx-community/example",
+        )
+
+        with self.assertRaisesRegex(ValueError, "cancel the active model download"):
+            manager.delete_model_weights("mlx-community/example")
+
+        manager.operations.finish(operation, status="cancelled")
+
     def test_two_text_replicas_execute_same_model_requests_concurrently(self):
         probe = ConcurrencyProbe(target=2)
         loaded = []
@@ -2600,6 +2613,31 @@ More generic harness instructions.
         self.assertEqual(json.loads(stopped_body)["unloaded"], 1)
         self.assertTrue(json.loads(deleted_body)["removed"])
         self.assertEqual(self.server.manager.ps(), [])
+
+    def test_delete_with_purge_removes_downloaded_weights(self):
+        removal = {
+            "removed": True,
+            "model": "mlx-community/example",
+            "repositories": ["mlx-community/example"],
+            "paths": ["/cache/models--mlx-community--example"],
+            "bytes_removed": 8_000_000_000,
+            "unloaded": 1,
+        }
+        with patch.object(
+            self.server.manager,
+            "delete_model_weights",
+            return_value=removal,
+        ) as delete:
+            _, _, body = self.request(
+                "/api/delete",
+                {"model": "mlx-community/example", "purge": True},
+            )
+
+        result = json.loads(body)
+        delete.assert_called_once_with("mlx-community/example")
+        self.assertTrue(result["removed"])
+        self.assertEqual(result["bytes_removed"], 8_000_000_000)
+        self.assertEqual(result["repositories"], ["mlx-community/example"])
 
     def test_empty_ollama_request_loads_and_keep_alive_zero_unloads(self):
         _, _, load_body = self.request(
