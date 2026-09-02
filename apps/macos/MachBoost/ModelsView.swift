@@ -1,4 +1,47 @@
+import AppKit
 import SwiftUI
+
+struct ModelSearchField: NSViewRepresentable {
+    @Binding var text: String
+    let placeholder: String
+    let accessibilityIdentifier: String
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(parent: self)
+    }
+
+    func makeNSView(context: Context) -> NSSearchField {
+        let field = NSSearchField()
+        field.placeholderString = placeholder
+        field.delegate = context.coordinator
+        field.sendsSearchStringImmediately = true
+        field.setAccessibilityIdentifier(accessibilityIdentifier)
+        return field
+    }
+
+    func updateNSView(_ field: NSSearchField, context: Context) {
+        context.coordinator.parent = self
+        field.placeholderString = placeholder
+        if field.stringValue != text {
+            field.stringValue = text
+        }
+    }
+
+    final class Coordinator: NSObject, NSSearchFieldDelegate {
+        var parent: ModelSearchField
+
+        init(parent: ModelSearchField) {
+            self.parent = parent
+        }
+
+        func controlTextDidChange(_ notification: Notification) {
+            guard let field = notification.object as? NSSearchField else { return }
+            let next = field.stringValue
+            guard next != parent.text else { return }
+            parent.text = next
+        }
+    }
+}
 
 struct ModelsView: View {
     @Environment(AppState.self) private var appState
@@ -26,8 +69,12 @@ struct ModelsView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    TextField("Search models", text: $search)
-                        .textFieldStyle(.roundedBorder)
+                    ModelSearchField(
+                        text: $search,
+                        placeholder: "Search models",
+                        accessibilityIdentifier: "models-page-search-field"
+                    )
+                    .frame(height: 26)
 
                     if !recommendedModels.isEmpty {
                         modelSection(title: "Recommended", models: recommendedModels)
