@@ -596,9 +596,12 @@ class MachBoostClient:
             "/api/copy", {"source": source, "destination": destination}
         )
 
-    def delete_model(self, model: str) -> bool:
+    def delete_model(self, model: str, *, purge: bool = False) -> bool:
+        payload: dict[str, Any] = {"model": model}
+        if purge:
+            payload["purge"] = True
         try:
-            return bool(self.post("/api/delete", {"model": model}).get("removed"))
+            return bool(self.post("/api/delete", payload).get("removed"))
         except MachBoostAPIError as exc:
             if exc.status == 404:
                 return False
