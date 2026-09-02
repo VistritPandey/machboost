@@ -22,6 +22,19 @@ _TOOL_STOP_WORDS = {
     "or",
     "the",
     "to",
+    "tool",
+    "tools",
+    "use",
+    "using",
+    "reply",
+    "exactly",
+    "do",
+    "not",
+    "this",
+    "that",
+    "please",
+    "can",
+    "will",
     "with",
 }
 _CORE_AGENT_TOOLS = {
@@ -253,7 +266,9 @@ def select_anthropic_tools(
     ):
         if len(selected_indexes) >= max(limit, len(mandatory)):
             break
-        if score <= 0 and len(selected_indexes) >= minimum:
+        # A single generic description word ("context", "answer", "task")
+        # should not drag a multi-kilobyte schema into every Claude request.
+        if score < 100 and len(selected_indexes) >= minimum:
             continue
         selected_indexes.add(index)
     return [tool for index, tool in enumerate(candidates) if index in selected_indexes]
@@ -313,8 +328,9 @@ def compact_claude_code_messages(
             compacted.append(message)
             continue
         text = _anthropic_text(message.get("content", "")).strip()
-        if text.startswith(
+        if (
             "You are an interactive agent that helps users with software engineering tasks."
+            in text
         ):
             compacted.append(
                 {
@@ -324,8 +340,9 @@ def compact_claude_code_messages(
             )
             continue
         if text.startswith("Available agent types for the Agent tool:"):
-            if selected_tool_names & {"Agent", "Skill"}:
-                compacted.append(message)
+            catalog = _compact_claude_code_catalog(text, selected_tool_names)
+            if catalog:
+                compacted.append({**message, "content": catalog})
             continue
         compacted.append(message)
     return compacted
@@ -359,13 +376,38 @@ def _compact_claude_code_system(text: str) -> str:
     )
 
 
+def _compact_claude_code_catalog(text: str, selected_tool_names: set[str]) -> str:
+    lines: list[str] = []
+    if "Agent" in selected_tool_names:
+        agent_section = text.split(
+            "The following skills are available for use with the Skill tool:", 1
+        )[0]
+        names = re.findall(r"(?m)^- ([A-Za-z0-9_-]+):", agent_section)
+        if names:
+            lines.append("Available Agent subtypes: " + ", ".join(names[:16]) + ".")
+    if "Skill" in selected_tool_names:
+        skill_section = text.split(
+            "The following skills are available for use with the Skill tool:", 1
+        )[-1]
+        names = re.findall(r"(?m)^- ([A-Za-z0-9_-]+):", skill_section)
+        if names:
+            lines.append("Available Skill names: " + ", ".join(names[:32]) + ".")
+    return "\n".join(lines)
+
+
 def _initial_anthropic_user_text(messages: Any) -> str:
     if not isinstance(messages, list):
         return ""
     for message in messages:
         if not isinstance(message, dict) or message.get("role") != "user":
             continue
-        return _anthropic_text(message.get("content", ""))[-16_000:]
+        text = _anthropic_text(message.get("content", ""))
+        text = re.sub(
+            r"(?is)<system-reminder>.*?</system-reminder>",
+            " ",
+            text,
+        )
+        return text[-16_000:]
     return ""
 
 
