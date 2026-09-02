@@ -311,6 +311,14 @@ class OllamaHTTPAdapter:
         for item in self._stream_json_request("POST", "/api/pull", payload):
             yield OllamaPullStatus.from_dict(item)
 
+    def delete(self, model: Optional[str] = None) -> bool:
+        response = self._json_request(
+            "DELETE",
+            "/api/delete",
+            {"model": model or self.model},
+        )
+        return str(response.get("status") or "success") == "success"
+
     def chat(
         self,
         messages: Sequence[Mapping[str, Any]],
