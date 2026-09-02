@@ -336,7 +336,7 @@ final class MachBoostUITests: XCTestCase {
         XCTAssertTrue(picker.waitForExistence(timeout: 10))
         picker.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8)).click()
 
-        let search = app.descendants(matching: .any)["model-search-field"]
+        let search = app.searchFields["model-search-field"]
         XCTAssertTrue(search.waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["MLX native models"].exists)
         focus(search)
@@ -354,7 +354,7 @@ final class MachBoostUITests: XCTestCase {
         XCTAssertTrue(models.waitForExistence(timeout: 10))
         models.click()
 
-        let search = app.descendants(matching: .any)["models-page-search-field"]
+        let search = app.searchFields["models-page-search-field"]
         XCTAssertTrue(search.waitForExistence(timeout: 3))
         focus(search)
         search.typeText("gemma")
