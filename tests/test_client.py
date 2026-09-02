@@ -17,6 +17,7 @@ from machboost.client import (
     api_error,
     default_endpoint,
     ensure_server,
+    machboost_app_api_token,
 )
 from machboost.server import MachBoostHTTPServer, RuntimeManager
 
@@ -339,6 +340,57 @@ class ClientTests(unittest.TestCase):
         token.assert_called_once_with()
         retried_request = request.call_args_list[1].args[0]
         self.assertEqual(retried_request.get_header("Authorization"), "Bearer app-token")
+
+    def test_app_token_reads_protected_community_credentials_for_adhoc_app(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            credentials = (
+                root
+                / "Library"
+                / "Application Support"
+                / "MachBoost"
+                / "credentials.community.json"
+            )
+            credentials.parent.mkdir(parents=True)
+            credentials.write_text('{"lan-api-token":"community-token"}', encoding="utf-8")
+            credentials.chmod(0o600)
+
+            with (
+                patch("machboost.client.platform.system", return_value="Darwin"),
+                patch("machboost.client.Path.home", return_value=root),
+                patch(
+                    "machboost.client._machboost_app_uses_community_credentials",
+                    return_value=True,
+                ),
+            ):
+                self.assertEqual(machboost_app_api_token(), "community-token")
+
+    def test_app_token_rejects_world_readable_community_credentials(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            credentials = (
+                root
+                / "Library"
+                / "Application Support"
+                / "MachBoost"
+                / "credentials.community.json"
+            )
+            credentials.parent.mkdir(parents=True)
+            credentials.write_text('{"lan-api-token":"exposed-token"}', encoding="utf-8")
+            credentials.chmod(0o644)
+
+            with (
+                patch("machboost.client.platform.system", return_value="Darwin"),
+                patch("machboost.client.Path.home", return_value=root),
+                patch(
+                    "machboost.client._machboost_app_uses_community_credentials",
+                    return_value=True,
+                ),
+                patch("machboost.client.subprocess.run") as keychain,
+            ):
+                keychain.return_value.returncode = 1
+                keychain.return_value.stdout = ""
+                self.assertEqual(machboost_app_api_token(), "")
 
     def test_stream_retries_local_401_with_app_keychain_token(self):
         unauthorized = HTTPError(
