@@ -412,6 +412,20 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(post.call_args_list[0].args[0], "/api/create")
         self.assertEqual(post.call_args_list[2].args[1]["keep_alive"], "10m")
 
+    def test_client_can_purge_downloaded_model_weights(self):
+        with patch.object(
+            self.client,
+            "post",
+            return_value={"removed": True, "bytes_removed": 8_000_000_000},
+        ) as post:
+            removed = self.client.delete_model("mlx-community/example", purge=True)
+
+        self.assertTrue(removed)
+        post.assert_called_once_with(
+            "/api/delete",
+            {"model": "mlx-community/example", "purge": True},
+        )
+
     def test_client_exposes_memory_and_provider_administration(self):
         with patch.object(
             self.client,
