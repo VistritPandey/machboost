@@ -695,7 +695,12 @@ class MLXVLMAccelerator:
             if thinking_budget is not None:
                 stream_options["thinking_budget"] = thinking_budget
                 if config_value(self.model.config, "model_type", "") == "muse_glimmer":
-                    stream_options["thinking_start_token"] = "to=self"
+                    # Muse generates `to=self` after the prompt, while mlx-vlm
+                    # only enables its budget when the configured start token is
+                    # already in the uncached suffix. Every new user turn ends in
+                    # `<|eot|>`, so this keeps the cap active across KV reuse
+                    # without rearming it between reasoning and the final answer.
+                    stream_options["thinking_start_token"] = "<|eot|>"
                     stream_options["thinking_end_token"] = "<|eom|>"
             prompt_cache_enabled = False
             prompt_cache_prefix_tokens = 0
