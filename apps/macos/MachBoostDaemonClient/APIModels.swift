@@ -1034,6 +1034,11 @@ public struct PullEvent: Decodable, Sendable {
     public let completed: Int64?
     public let total: Int64?
     public let unit: String?
+    public let filesCompleted: Int?
+    public let filesTotal: Int?
+    public let activeFiles: [String]?
+    public let speedBytesPerSecond: Double?
+    public let etaSeconds: Double?
     public let done: Bool
     public let path: String?
     public let error: String?
@@ -1045,6 +1050,11 @@ public struct PullEvent: Decodable, Sendable {
         completed: Int64?,
         total: Int64?,
         unit: String?,
+        filesCompleted: Int? = nil,
+        filesTotal: Int? = nil,
+        activeFiles: [String]? = nil,
+        speedBytesPerSecond: Double? = nil,
+        etaSeconds: Double? = nil,
         done: Bool,
         path: String?,
         error: String?
@@ -1055,6 +1065,11 @@ public struct PullEvent: Decodable, Sendable {
         self.completed = completed
         self.total = total
         self.unit = unit
+        self.filesCompleted = filesCompleted
+        self.filesTotal = filesTotal
+        self.activeFiles = activeFiles
+        self.speedBytesPerSecond = speedBytesPerSecond
+        self.etaSeconds = etaSeconds
         self.done = done
         self.path = path
         self.error = error
@@ -1067,9 +1082,44 @@ public struct PullEvent: Decodable, Sendable {
         case completed
         case total
         case unit
+        case filesCompleted = "files_completed"
+        case filesTotal = "files_total"
+        case activeFiles = "active_files"
+        case speedBytesPerSecond = "speed_bytes_per_second"
+        case etaSeconds = "eta_seconds"
         case done
         case path
         case error
+    }
+}
+
+public struct ModelDeleteResponse: Decodable, Sendable {
+    public let status: String
+    public let removed: Bool
+    public let bytesRemoved: Int64
+    public let unloaded: Int
+    public let repositories: [String]
+
+    public init(
+        status: String,
+        removed: Bool,
+        bytesRemoved: Int64,
+        unloaded: Int,
+        repositories: [String]
+    ) {
+        self.status = status
+        self.removed = removed
+        self.bytesRemoved = bytesRemoved
+        self.unloaded = unloaded
+        self.repositories = repositories
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case status
+        case removed
+        case bytesRemoved = "bytes_removed"
+        case unloaded
+        case repositories
     }
 }
 
