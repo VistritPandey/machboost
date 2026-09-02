@@ -51,6 +51,7 @@ from .protocols import (
     anthropic_cache_affinity,
     anthropic_messages,
     anthropic_tools,
+    claude_code_session_title,
     compact_claude_code_messages,
     response_body,
     response_message_item,
@@ -3581,6 +3582,70 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
         event("response.completed", response=completed)
 
     def handle_anthropic_message(self, payload: dict[str, Any]) -> None:
+        session_title = claude_code_session_title(payload)
+        if session_title is not None:
+            request_id = request_identifier(payload, "msg")
+            model = str(payload.get("model") or "machboost")
+            text = json.dumps(
+                {"title": session_title},
+                separators=(",", ":"),
+                ensure_ascii=True,
+            )
+            metadata = {
+                "backend": "gateway",
+                "utility": "claude_session_title",
+            }
+            if not bool(payload.get("stream", False)):
+                self.send_json(
+                    anthropic_body(
+                        message_id=request_id,
+                        model=model,
+                        text=text,
+                        thinking="",
+                        tool_calls=[],
+                        usage={"prompt_tokens": 0, "completion_tokens": 0},
+                        metadata=metadata,
+                    )
+                )
+                return
+
+            self.start_stream("text/event-stream")
+
+            def title_event(event_type: str, **values: Any) -> None:
+                self.write_named_sse(event_type, {"type": event_type, **values})
+
+            title_event(
+                "message_start",
+                message={
+                    "id": request_id,
+                    "type": "message",
+                    "role": "assistant",
+                    "model": model,
+                    "content": [],
+                    "stop_reason": None,
+                    "stop_sequence": None,
+                    "usage": {"input_tokens": 0, "output_tokens": 0},
+                },
+            )
+            title_event(
+                "content_block_start",
+                index=0,
+                content_block={"type": "text", "text": ""},
+            )
+            title_event(
+                "content_block_delta",
+                index=0,
+                delta={"type": "text_delta", "text": text},
+            )
+            title_event("content_block_stop", index=0)
+            title_event(
+                "message_delta",
+                delta={"stop_reason": "end_turn", "stop_sequence": None},
+                usage={"output_tokens": 0},
+            )
+            title_event("message_stop")
+            return
+
         translated = dict(payload)
         translated["max_tokens"] = int(payload.get("max_tokens") or 1024)
         if "stop_sequences" in payload:
