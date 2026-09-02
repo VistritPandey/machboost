@@ -77,19 +77,25 @@ pip install -e ".[video]"
 pip install -e ".[all]"
 ```
 
-Install a published package directly:
+Install the current CLI directly from its GitHub release tag:
 
 ```sh
-pip install "machboost[mlx]"
-pip install "machboost[vision]"
-pip install "machboost[dflash]"
+python3 -m pip install "machboost[mlx] @ git+https://github.com/VistritPandey/machboost.git@v0.16.5"
+python3 -m pip install "machboost[vision] @ git+https://github.com/VistritPandey/machboost.git@v0.16.5"
+python3 -m pip install "machboost[dflash] @ git+https://github.com/VistritPandey/machboost.git@v0.16.5"
 ```
 
 Update an existing install:
 
 ```sh
-pip install --upgrade "machboost[mlx]"
+python3 -m pip uninstall -y machboost
+python3 -m pip install "machboost[mlx] @ git+https://github.com/VistritPandey/machboost.git@v0.16.5"
+machboost version
 ```
+
+The explicit uninstall removes stale editable installs that otherwise continue
+loading code from an older checkout. MachBoost is not currently distributed on
+PyPI; the native app and tagged GitHub source are the supported release paths.
 
 Check the install:
 
@@ -216,7 +222,7 @@ MachBoost alias uses the native 4-bit MLX-VLM conversion and recommends at least
 32 GB unified memory. Higher-bit variants require more memory.
 
 ```sh
-python3 -m pip install --upgrade "machboost[vision]"
+python3 -m pip install "machboost[vision] @ git+https://github.com/VistritPandey/machboost.git@v0.16.5"
 machboost pull muse-glimmer:30b
 machboost run muse-glimmer:30b --think high --show-thinking --show-stats
 machboost run muse-glimmer:30b --image ./screenshot.png --think medium
