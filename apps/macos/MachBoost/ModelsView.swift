@@ -49,6 +49,7 @@ struct ModelsView: View {
     @State private var advancedRepository = ""
     @State private var pendingDownload: CatalogModel?
     @State private var pendingRepository: String?
+    @State private var pendingDeletion: CatalogModel?
     @State private var hubModels: [CatalogModel] = []
     @State private var isSearchingHub = false
     @State private var hubSearchTask: Task<Void, Never>?
@@ -78,6 +79,10 @@ struct ModelsView: View {
                         accessibilityIdentifier: "models-page-search-field"
                     )
                     .frame(height: 26)
+
+                    if !appState.downloads.isEmpty {
+                        activeDownloadsSection
+                    }
 
                     if !recommendedModels.isEmpty {
                         modelSection(title: "Recommended", models: recommendedModels)
@@ -129,11 +134,49 @@ struct ModelsView: View {
                 Text("MachBoost will verify \(repository) against the bundled MLX runtime before downloading its weights.")
             }
         }
+        .confirmationDialog(
+            "Delete downloaded model?",
+            isPresented: Binding(
+                get: { pendingDeletion != nil },
+                set: { if !$0 { pendingDeletion = nil } }
+            )
+        ) {
+            Button("Delete Model", role: .destructive) {
+                let model = pendingDeletion?.name
+                pendingDeletion = nil
+                if let model {
+                    Task { await appState.deleteModel(model) }
+                }
+            }
+            Button("Cancel", role: .cancel) {
+                pendingDeletion = nil
+            }
+        } message: {
+            if let model = pendingDeletion {
+                Text(deleteMessage(for: model))
+            }
+        }
         .onChange(of: search) { _, value in
             scheduleHubSearch(value)
         }
         .onDisappear {
             hubSearchTask?.cancel()
+        }
+    }
+
+    private var activeDownloadsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Active Downloads")
+                .font(.headline)
+            ForEach(appState.downloads.keys.sorted(), id: \.self) { model in
+                if let event = appState.downloads[model] {
+                    ActiveDownloadRow(
+                        model: model,
+                        event: event,
+                        onCancel: { Task { await appState.cancelPull(model: model) } }
+                    )
+                }
+            }
         }
     }
 
@@ -150,6 +193,7 @@ struct ModelsView: View {
                             $0.model == model.repository || $0.model == model.name
                         },
                         loading: appState.loadingModels.contains(model.name),
+                        deleting: appState.deletingModels.contains(model.name),
                         download: appState.downloads[model.name],
                         onDownload: { pendingDownload = model },
                         onCancel: { Task { await appState.cancelPull(model: model.name) } },
@@ -158,7 +202,8 @@ struct ModelsView: View {
                         },
                         onUnload: {
                             Task { await appState.stop(model: model.name) }
-                        }
+                        },
+                        onDelete: { pendingDeletion = model }
                     )
                 }
             }
@@ -199,11 +244,11 @@ struct ModelsView: View {
     }
 
     private var recommendedModels: [CatalogModel] {
-        filteredModels.filter(\.recommended)
+        filteredModels.filter { $0.recommended && appState.downloads[$0.name] == nil }
     }
 
     private var remainingModels: [CatalogModel] {
-        filteredModels.filter { !$0.recommended }
+        filteredModels.filter { !$0.recommended && appState.downloads[$0.name] == nil }
     }
 
     private var filteredHubModels: [CatalogModel] {
@@ -211,6 +256,7 @@ struct ModelsView: View {
         return hubModels.filter {
             !localNames.contains($0.name)
                 && !($0.repository.map(localNames.contains) ?? false)
+                && appState.downloads[$0.name] == nil
         }
     }
 
@@ -246,17 +292,33 @@ struct ModelsView: View {
         )
         return pieces.joined(separator: " ")
     }
+
+    private func deleteMessage(for model: CatalogModel) -> String {
+        var pieces = ["Delete \(model.displayName) from this Mac?"]
+        if let size = model.diskSizeGB {
+            pieces.append(
+                "This will free about \(size.formatted(.number.precision(.fractionLength(2)))) GB."
+            )
+        }
+        if appState.loadedModels.contains(where: { $0.model == model.repository || $0.model == model.name }) {
+            pieces.append("The resident model will be unloaded first.")
+        }
+        pieces.append("You can download it again later.")
+        return pieces.joined(separator: " ")
+    }
 }
 
 private struct ModelRow: View {
     let model: CatalogModel
     let loaded: Bool
     let loading: Bool
+    let deleting: Bool
     let download: PullEvent?
     let onDownload: () -> Void
     let onCancel: () -> Void
     let onLoad: () -> Void
     let onUnload: () -> Void
+    let onDelete: () -> Void
 
     var body: some View {
         HStack(spacing: 14) {
@@ -322,16 +384,18 @@ private struct ModelRow: View {
                 }
 
                 if let download {
-                    downloadProgress(download)
+                    ModelDownloadProgress(event: download)
                 }
             }
 
             Spacer()
 
-            if loading {
+            if loading || deleting {
                 ProgressView()
                     .controlSize(.small)
-                    .accessibilityLabel("Loading \(model.displayName)")
+                    .accessibilityLabel(
+                        deleting ? "Deleting \(model.displayName)" : "Loading \(model.displayName)"
+                    )
             } else if download != nil {
                 Button(action: onCancel) {
                     Image(systemName: "xmark")
@@ -339,11 +403,16 @@ private struct ModelRow: View {
                 .accessibilityLabel("Cancel download for \(model.displayName)")
                 .help("Cancel download")
             } else if loaded {
-                Button(action: onUnload) {
-                    Image(systemName: "eject")
+                HStack(spacing: 8) {
+                    Button(action: onUnload) {
+                        Image(systemName: "eject")
+                    }
+                    .accessibilityLabel("Unload \(model.displayName)")
+                    .help("Unload model")
+                    if model.cached {
+                        deleteButton
+                    }
                 }
-                .accessibilityLabel("Unload \(model.displayName)")
-                .help("Unload model")
             } else if
                 !model.cached,
                 model.support != "unsupported",
@@ -355,13 +424,18 @@ private struct ModelRow: View {
                 .accessibilityLabel("Download \(model.displayName)")
                 .accessibilityIdentifier("download-model-\(model.name)")
                 .help("Download model")
-            } else if model.support == "ready" {
-                Button(action: onLoad) {
-                    Image(systemName: "play.fill")
+            } else if model.cached {
+                HStack(spacing: 8) {
+                    if model.support == "ready" {
+                        Button(action: onLoad) {
+                            Image(systemName: "play.fill")
+                        }
+                        .accessibilityLabel("Load \(model.displayName)")
+                        .accessibilityIdentifier("load-model-\(model.name)")
+                        .help("Load and warm model")
+                    }
+                    deleteButton
                 }
-                .accessibilityLabel("Load \(model.displayName)")
-                .accessibilityIdentifier("load-model-\(model.name)")
-                .help("Load and warm model")
             }
         }
         .padding(12)
@@ -373,8 +447,54 @@ private struct ModelRow: View {
         }
     }
 
-    @ViewBuilder
-    private func downloadProgress(_ event: PullEvent) -> some View {
+    private var deleteButton: some View {
+        Button(action: onDelete) {
+            Image(systemName: "trash")
+        }
+        .accessibilityLabel("Delete \(model.displayName)")
+        .accessibilityIdentifier("delete-model-\(model.name)")
+        .help("Delete downloaded model")
+    }
+}
+
+private struct ActiveDownloadRow: View {
+    let model: String
+    let event: PullEvent
+    let onCancel: () -> Void
+
+    var body: some View {
+        HStack(spacing: 14) {
+            Image(systemName: "arrow.down.circle.fill")
+                .font(.title3)
+                .foregroundStyle(.green)
+                .frame(width: 28)
+            VStack(alignment: .leading, spacing: 5) {
+                Text(model)
+                    .font(.body.weight(.medium))
+                    .textSelection(.enabled)
+                ModelDownloadProgress(event: event)
+            }
+            Spacer()
+            Button(action: onCancel) {
+                Image(systemName: "xmark")
+            }
+            .accessibilityLabel("Cancel download for \(model)")
+            .help("Cancel download")
+        }
+        .padding(12)
+        .background(Color(nsColor: .controlBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .stroke(Color(nsColor: .separatorColor).opacity(0.7), lineWidth: 1)
+        }
+    }
+}
+
+private struct ModelDownloadProgress: View {
+    let event: PullEvent
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 8) {
                 Text(event.file ?? event.status ?? "Preparing download")
@@ -382,12 +502,27 @@ private struct ModelRow: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                 Spacer()
-                if let detail = progressDetail(event) {
+                if let detail = progressDetail {
                     Text(detail)
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
             }
+            HStack(spacing: 10) {
+                if let filesCompleted = event.filesCompleted,
+                   let filesTotal = event.filesTotal,
+                   filesTotal > 0 {
+                    Text("\(filesCompleted) of \(filesTotal) files")
+                }
+                if let speed = event.speedBytesPerSecond, speed > 0 {
+                    Text("\(Self.bytes(speed))/s")
+                }
+                if let eta = event.etaSeconds, eta > 0 {
+                    Text("about \(Self.duration(eta)) left")
+                }
+            }
+            .font(.caption2.monospacedDigit())
+            .foregroundStyle(.secondary)
             if let completed = event.completed, let total = event.total, total > 0 {
                 ProgressView(value: Double(completed), total: Double(total))
             } else {
@@ -398,7 +533,7 @@ private struct ModelRow: View {
         .accessibilityIdentifier("model-download-progress")
     }
 
-    private func progressDetail(_ event: PullEvent) -> String? {
+    private var progressDetail: String? {
         guard let completed = event.completed, let total = event.total, total > 0 else {
             return nil
         }
@@ -407,6 +542,18 @@ private struct ModelRow: View {
         let completedText = ByteCountFormatter.string(fromByteCount: completed, countStyle: .file)
         let totalText = ByteCountFormatter.string(fromByteCount: total, countStyle: .file)
         return "\(percent)%  \(completedText) / \(totalText)"
+    }
+
+    private static func bytes(_ value: Double) -> String {
+        ByteCountFormatter.string(fromByteCount: Int64(value), countStyle: .file)
+    }
+
+    private static func duration(_ seconds: Double) -> String {
+        let formatter = DateComponentsFormatter()
+        formatter.unitsStyle = .abbreviated
+        formatter.allowedUnits = seconds >= 3600 ? [.hour, .minute] : [.minute, .second]
+        formatter.maximumUnitCount = 2
+        return formatter.string(from: seconds) ?? "a moment"
     }
 }
 
