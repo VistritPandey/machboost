@@ -2266,6 +2266,50 @@ More generic harness instructions.
         self.assertIn("content_block_delta", event_types)
         self.assertEqual(event_types[-1], "message_stop")
 
+    def test_claude_session_titles_bypass_the_model_queue(self):
+        payload = {
+            "model": "mlx-community/Muse-Glimmer-30B-4bit",
+            "system": (
+                "You are naming a coding session. "
+                'Return JSON with a single "title" field.'
+            ),
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "<session>Fix the doubled model search input</session>",
+                }
+            ],
+            "max_tokens": 64_000,
+        }
+
+        _, _, body = self.request("/v1/messages", payload)
+        response = json.loads(body)
+        self.assertEqual(
+            response["content"],
+            [{"type": "text", "text": '{"title":"Fix doubled model search"}'}],
+        )
+        self.assertEqual(response["machboost"]["backend"], "gateway")
+        self.assertEqual(self.loaded, [])
+
+        _, headers, body = self.request(
+            "/v1/messages",
+            {**payload, "stream": True},
+        )
+        events = [
+            json.loads(line.removeprefix("data: "))
+            for line in body.splitlines()
+            if line.startswith("data: ")
+        ]
+        text = "".join(
+            event.get("delta", {}).get("text", "")
+            for event in events
+            if event.get("type") == "content_block_delta"
+        )
+        self.assertEqual(headers.get_content_type(), "text/event-stream")
+        self.assertEqual(text, '{"title":"Fix doubled model search"}')
+        self.assertEqual(events[-1]["type"], "message_stop")
+        self.assertEqual(self.loaded, [])
+
     def test_anthropic_base64_image_maps_to_native_vision_content(self):
         with patch("machboost.models.native_mlx_vlm_available", return_value=True):
             self.request(
