@@ -68,9 +68,9 @@ class InitialReasoningEchoFilter:
 
     def __init__(self, candidates: Sequence[str]) -> None:
         normalized = tuple(
-            value
-            for value in (_collapsed_whitespace(value) for value in candidates)
-            if value
+            variant
+            for value in candidates
+            for variant in _reasoning_echo_variants(value)
         )
         fragments = [
             fragment
@@ -1095,6 +1095,14 @@ def _user_texts(messages: Sequence[dict[str, str]]) -> tuple[str, ...]:
 
 def _collapsed_whitespace(value: str) -> str:
     return " ".join(value.split())
+
+
+def _reasoning_echo_variants(value: str) -> tuple[str, ...]:
+    normalized = _collapsed_whitespace(value)
+    if not normalized:
+        return ()
+    without_articles = re.sub(r"\b(?:a|an|the)\b\s*", "", normalized, flags=re.I)
+    return tuple(dict.fromkeys((normalized, _collapsed_whitespace(without_articles))))
 
 
 def _resolution_scoped_images(
