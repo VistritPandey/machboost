@@ -356,6 +356,89 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertEqual(result["model_type"], "qwen2")
         validate.assert_called_once()
 
+    def test_preflight_infers_muse_capabilities_from_local_response_template(self):
+        with tempfile.TemporaryDirectory() as directory:
+            Path(directory, "config.json").write_text(
+                json.dumps(
+                    {
+                        "model_type": "muse_glimmer",
+                        "architectures": ["MuseGlimmerForConditionalGeneration"],
+                        "vision_config": {"model_type": "siglip_vision_model"},
+                        "text_config": {"max_position_embeddings": 131_072},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            Path(directory, "tokenizer_config.json").write_text(
+                json.dumps(
+                    {
+                        "response_template": {
+                            "fields": {
+                                "content": {"open_pattern": r"to=user<\|message\|>"},
+                                "reasoning_content": {
+                                    "open_pattern": r"to=self<\|message\|>",
+                                    "close": "<|eom|>",
+                                },
+                                "tool_calls": {
+                                    "open_pattern": r"<atem:invoke\b[^>]*>",
+                                    "close": "</atem:invoke>",
+                                },
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with (
+                patch("machboost.models.backend_available", return_value=True),
+                patch("machboost.models._validate_mlx_architecture"),
+            ):
+                result = preflight_model(directory, "mlx-vlm")
+
+        self.assertEqual(
+            result["capabilities"],
+            ["chat", "vision", "reasoning", "tools"],
+        )
+        self.assertEqual(result["context_length"], 131_072)
+
+    def test_preflight_infers_reasoning_and_tools_for_unlisted_local_models(self):
+        fixtures = (
+            (
+                "qwen3_8",
+                "{% if enable_thinking %}<think>{{ reasoning_content }}</think>{% endif %}"
+                "{% if tools is defined %}<tool_call>{{ tool_calls }}</tool_call>{% endif %}",
+            ),
+            (
+                "deepseek_v3",
+                "<think>{{ message.reasoning_content }}</think>"
+                "<tool_call>{{ message.tool_calls }}</tool_call>",
+            ),
+        )
+        for model_type, template in fixtures:
+            with self.subTest(model_type=model_type), tempfile.TemporaryDirectory() as directory:
+                Path(directory, "config.json").write_text(
+                    json.dumps(
+                        {
+                            "model_type": model_type,
+                            "max_position_embeddings": 65_536,
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                Path(directory, "tokenizer_config.json").write_text(
+                    json.dumps({"chat_template": template}),
+                    encoding="utf-8",
+                )
+                with (
+                    patch("machboost.models.backend_available", return_value=True),
+                    patch("machboost.models._validate_mlx_architecture"),
+                ):
+                    result = preflight_model(directory, "mlx")
+
+                self.assertIn("reasoning", result["capabilities"])
+                self.assertIn("tools", result["capabilities"])
+                self.assertEqual(result["context_length"], 65_536)
+
     def test_preflight_exposes_unsupported_architecture_reason(self):
         with tempfile.TemporaryDirectory() as directory:
             Path(directory, "config.json").write_text(
