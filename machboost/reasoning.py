@@ -1,13 +1,73 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional, Sequence
+from typing import Any, Mapping, Optional, Sequence
 
 
 @dataclass(frozen=True)
 class ThinkingDelta:
     reasoning: str = ""
     content: str = ""
+
+
+@dataclass(frozen=True)
+class ThinkingProtocol:
+    start_marker: Optional[str] = None
+    end_marker: Optional[str] = None
+
+    def starts_in_thinking(self, enabled: bool) -> bool:
+        return bool(enabled) and self.start_marker in {
+            None,
+            "<think>",
+            "<|START_THINKING|>",
+        }
+
+
+def resolve_thinking_protocol(config: Any, tokenizer: Any) -> ThinkingProtocol:
+    """Resolve reasoning delimiters from a model's config or response schema."""
+    start_marker = _value(config, "thinking_start_token")
+    end_marker = _value(config, "thinking_end_token")
+    response_template = _value(tokenizer, "response_template")
+    if not isinstance(response_template, Mapping):
+        init_kwargs = _value(tokenizer, "init_kwargs")
+        if isinstance(init_kwargs, Mapping):
+            response_template = init_kwargs.get("response_template")
+    if isinstance(response_template, Mapping):
+        fields = response_template.get("fields")
+        reasoning = fields.get("reasoning_content") if isinstance(fields, Mapping) else None
+        if isinstance(reasoning, Mapping):
+            schema_start = _literal_response_marker(reasoning.get("open_pattern"))
+            schema_end = reasoning.get("close")
+            if schema_start:
+                start_marker = schema_start
+            if isinstance(schema_end, str) and schema_end:
+                end_marker = schema_end
+            elif isinstance(schema_end, Sequence) and not isinstance(schema_end, str):
+                end_marker = next(
+                    (value for value in schema_end if isinstance(value, str) and value),
+                    end_marker,
+                )
+
+    model_type = str(_value(config, "model_type") or "").lower()
+    if model_type == "muse_glimmer":
+        start_marker = start_marker or "to=self<|message|>"
+        end_marker = end_marker or "<|eom|>"
+    return ThinkingProtocol(start_marker=start_marker, end_marker=end_marker)
+
+
+def _value(source: Any, key: str) -> Any:
+    if isinstance(source, Mapping):
+        return source.get(key)
+    return getattr(source, key, None)
+
+
+def _literal_response_marker(value: Any) -> Optional[str]:
+    if not isinstance(value, str) or not value:
+        return None
+    marker = value.replace(r"\|", "|")
+    if any(character in marker for character in "[](){}?+*^$") or r"\b" in marker:
+        return None
+    return marker
 
 
 class ThinkingStreamSplitter:
