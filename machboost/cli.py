@@ -25,6 +25,13 @@ from .client import (
     ensure_server,
     machboost_app_api_token,
 )
+from .coding import (
+    PERMISSION_MODES,
+    CodingWorkspace,
+    ToolExecution,
+    coding_system_prompt,
+    coding_tools,
+)
 from .claude_desktop import (
     ClaudeDesktopProfileManager,
     save_model_mappings,
@@ -53,6 +60,7 @@ CHAT_HELP = """Commands:
   /? or /help       show this help
   /status           show model, host, route, and active context
   /stats on|off     toggle per-response performance statistics
+  /think LEVEL      set reasoning to off, low, medium, high, or xhigh
   /route            show local/API routing for this session
   /clear            reset chat history
   /image PATH       attach an image
@@ -63,6 +71,11 @@ CHAT_HELP = """Commands:
   /bye or /exit     exit and keep the model warm until its idle timeout
 
 Ctrl-C stops the current reply. Ctrl-D unloads the model and exits."""
+CODING_HELP = """Coding commands:
+  /mode MODE        use manual, accept-edits, plan, or bypass permissions
+  /diff             show changes in the selected workspace
+  /workspace        show the selected workspace
+  /tools            list the coding tools available to the model"""
 
 
 class ChatConsole:
@@ -72,6 +85,7 @@ class ChatConsole:
     CYAN = "\033[38;2;34;211;238m"
     MUTED = "\033[38;5;245m"
     BOLD = "\033[1m"
+    ITALIC = "\033[3m"
     RESET = "\033[0m"
 
     def __init__(self, stream) -> None:
@@ -139,6 +153,20 @@ class ChatConsole:
     def section(self, title: str) -> None:
         print(self.styled(title, self.MUTED, self.BOLD), file=self.stream, flush=True)
 
+    def begin_thinking(self) -> None:
+        print(
+            self.styled("Thinking", self.CYAN, self.BOLD)
+            + self.styled("  live reasoning", self.MUTED, self.ITALIC),
+            file=self.stream,
+            flush=True,
+        )
+
+    def end_thinking(self) -> None:
+        print(self.styled("done thinking", self.MUTED, self.ITALIC), file=self.stream)
+
+    def begin_answer(self) -> None:
+        print(self.styled("Answer", self.GREEN, self.BOLD), file=self.stream, flush=True)
+
     def notice(self, text: str) -> None:
         print(self.styled(text, self.MUTED), file=self.stream)
 
@@ -146,6 +174,12 @@ class ChatConsole:
         label = self.styled("Tool", self.CYAN, self.BOLD)
         suffix = f"({fields})" if fields else ""
         print(f"{label}  {name}{suffix}", file=self.stream)
+
+    def tool_result(self, execution: ToolExecution) -> None:
+        colors = {"done": self.GREEN, "denied": self.MUTED, "error": "\033[38;5;203m"}
+        status = self.styled(f"[{execution.status}]", colors.get(execution.status, self.MUTED), self.BOLD)
+        detail = execution.content.splitlines()[0] if execution.content else ""
+        print(f"{status} {execution.name}  {detail[:120]}", file=self.stream, flush=True)
 
 
 def _middle_truncate(value: str, limit: int) -> str:
@@ -1110,7 +1144,8 @@ def run_native_chat(
                 begin_reply()
                 if thinking_started and console.pretty:
                     print("", flush=True, file=output_stream)
-                    console.section("Answer")
+                    console.end_thinking()
+                    console.begin_answer()
             streamed = True
             print(chunk, end="", flush=True, file=output_stream)
 
@@ -1123,7 +1158,7 @@ def run_native_chat(
             if not thinking_started:
                 begin_reply()
                 if console.pretty:
-                    console.section("Thinking")
+                    console.begin_thinking()
                 else:
                     print("thinking> ", end="", flush=True, file=error_stream)
                 thinking_started = True
@@ -1133,7 +1168,7 @@ def run_native_chat(
             kwargs = {"max_tokens": args.max_tokens, "on_text": emit}
             if args.think:
                 kwargs["enable_thinking"] = args.think
-            if args.show_thinking:
+            if args.show_thinking or args.think:
                 kwargs["on_thinking"] = emit_thinking
             if getattr(accelerator, "supports_vision", False):
                 kwargs.update(
@@ -1160,11 +1195,19 @@ def run_native_chat(
         response = response.strip()
         if thinking_started:
             print("", flush=True, file=output_stream if console.pretty else error_stream)
+            if console.pretty and not streamed:
+                console.end_thinking()
         if streamed:
             print("", flush=True, file=output_stream)
         else:
             begin_reply()
-            print(response, flush=True, file=output_stream)
+            if thinking_started and not response:
+                console.notice(
+                    "The model used its output budget for reasoning before producing a final "
+                    "answer. Increase --max-tokens or disable reasoning."
+                )
+            else:
+                print(response, flush=True, file=output_stream)
         if args.show_stats:
             tokens_per_second = stats.generated_tokens / elapsed_s if elapsed_s > 0 else 0.0
             stats_backend = getattr(stats, "backend", "")
@@ -1611,6 +1654,41 @@ def print_tool_call_summary(
             print(f"tool> {name}({fields})", file=stream)
 
 
+def normalize_agent_tool_calls(
+    tool_calls: Sequence[dict],
+    *,
+    round_index: int,
+) -> list[dict[str, object]]:
+    normalized: list[dict[str, object]] = []
+    for index, raw_call in enumerate(tool_calls):
+        if not isinstance(raw_call, dict):
+            continue
+        call = dict(raw_call)
+        function = call.get("function")
+        if not isinstance(function, dict):
+            continue
+        call["function"] = dict(function)
+        call.setdefault("type", "function")
+        call.setdefault("id", f"call_{round_index + 1}_{index + 1}")
+        normalized.append(call)
+    return normalized
+
+
+def confirm_coding_action(
+    description: str,
+    *,
+    input_func=input,
+    output_stream=None,
+) -> bool:
+    output_stream = output_stream or sys.stdout
+    try:
+        answer = input_func(f"\nAllow: {description}? [y/N] ")
+    except (EOFError, KeyboardInterrupt):
+        print("", file=output_stream)
+        return False
+    return answer.strip().lower() in {"y", "yes"}
+
+
 def run_resident_chat(
     args: argparse.Namespace,
     *,
@@ -1621,6 +1699,16 @@ def run_resident_chat(
     output_stream = output_stream or sys.stdout
     error_stream = error_stream or sys.stderr
     console = ChatConsole(output_stream)
+    coding: Optional[CodingWorkspace] = None
+    if bool(getattr(args, "dev", False)):
+        try:
+            coding = CodingWorkspace(
+                getattr(args, "workspace", "."),
+                permission_mode=getattr(args, "permission_mode", "manual"),
+            )
+        except ValueError as exc:
+            print(f"machboost code error: {exc}", file=error_stream)
+            return 2
     session_started = time.perf_counter()
     try:
         client = connect_resident(args, error_stream=error_stream)
@@ -1631,11 +1719,17 @@ def run_resident_chat(
 
     print(f"loading {args.model}...", file=error_stream, flush=True)
     try:
+        warmup_mode = getattr(args, "warmup", "background")
+        warmup_request: bool | str = {
+            "background": "background",
+            "sync": True,
+            "off": False,
+        }[warmup_mode]
         preload = client.load(
             args.model,
             options=native_server_options(args),
             keep_alive=args.keep_alive,
-            warmup=True,
+            warmup=warmup_request,
         )
     except MachBoostAPIError as exc:
         print(f"machboost load error: {exc}", file=error_stream)
@@ -1657,14 +1751,22 @@ def run_resident_chat(
     state = f"load {model_load:.2f}s" if model_load > 0 else "resident"
     if warmup_duration > 0:
         state += f" | compile {warmup_duration:.2f}s"
+    elif preload.get("warmup_scheduled") or instance.get("warming"):
+        state += " | optimizing in background"
     route_name = str(getattr(args, "route", "local_only"))
+    route_display = route_name
+    if coding is not None:
+        route_display += (
+            f" | code {coding.permission_mode} | think {args.think or 'off'} | "
+            f"{coding.root.name}"
+        )
     if console.pretty:
         console.header(
             model=resolved_model,
             engine=backend,
             state=f"{state} | ready in {preload_wall:.2f}s",
             host=client.endpoint,
-            route=route_name,
+            route=route_display,
         )
     else:
         width = max(48, min(88, shutil.get_terminal_size((80, 24)).columns))
@@ -1674,7 +1776,7 @@ def run_resident_chat(
             f"{backend} | {state} | wall {preload_wall:.2f}s | {client.endpoint}",
             file=output_stream,
         )
-        print(f"route {route_name.replace('_', ' ')} | /help for commands", file=output_stream)
+        print(f"route {route_display.replace('_', ' ')} | /help for commands", file=output_stream)
         print("-" * width, file=output_stream)
         if resolved_model != args.model and args.show_stats:
             print(f"model: {resolved_model}", file=output_stream)
@@ -1700,6 +1802,50 @@ def run_resident_chat(
             if console.pretty:
                 console.section("Commands")
             print(CHAT_HELP, file=output_stream)
+            if coding is not None:
+                print(CODING_HELP, file=output_stream)
+            continue
+        if command.startswith("/think"):
+            setting = command.partition(" ")[2].strip().lower()
+            if not setting:
+                setting = str(args.think or "off")
+                print(f"reasoning={setting}", file=output_stream)
+                continue
+            if setting == "on":
+                setting = "medium"
+            if setting not in {"off", "low", "medium", "high", "xhigh"}:
+                print("usage: /think off|low|medium|high|xhigh", file=error_stream)
+                continue
+            args.think = False if setting == "off" else setting
+            args.show_thinking = setting != "off"
+            console.notice(f"Reasoning {setting}.") if console.pretty else print(
+                f"reasoning={setting}", file=output_stream
+            )
+            continue
+        if command.startswith("/mode") and coding is not None:
+            setting = command.partition(" ")[2].strip().lower()
+            if not setting:
+                print(f"permission_mode={coding.permission_mode}", file=output_stream)
+                continue
+            if setting not in PERMISSION_MODES:
+                print(f"usage: /mode {'|'.join(PERMISSION_MODES)}", file=error_stream)
+                continue
+            coding.permission_mode = setting
+            console.notice(f"Coding permissions: {setting}.") if console.pretty else print(
+                f"permission_mode={setting}", file=output_stream
+            )
+            continue
+        if command == "/diff" and coding is not None:
+            print(coding.git_diff(), file=output_stream)
+            continue
+        if command == "/workspace" and coding is not None:
+            print(str(coding.root), file=output_stream)
+            continue
+        if command == "/tools" and coding is not None:
+            print(
+                "\n".join(item["function"]["name"] for item in coding_tools()),
+                file=output_stream,
+            )
             continue
         if command == "/status":
             print(
@@ -1764,112 +1910,193 @@ def run_resident_chat(
 
         content = video_prompt(user_text) if has_video_frames else user_text
         turns.append({"role": "user", "content": content})
-        messages = [{"role": "system", "content": args.system or DEFAULT_CHAT_SYSTEM}, *turns]
-        response_parts: list[str] = []
-        tool_calls: list[dict] = []
-        final_row: dict = {}
-        started = time.perf_counter()
-        rows = None
-        thinking_started = False
-        answer_started = False
-        reply_started = False
+        turn_start = len(turns) - 1
+        tool_round = 0
+        empty_agent_retries = 0
+        while True:
+            base_system = args.system or DEFAULT_CHAT_SYSTEM
+            if coding is not None:
+                coding_prompt = coding_system_prompt(coding.root, coding.permission_mode)
+                base_system = f"{coding_prompt}\n\n{base_system}" if args.system else coding_prompt
+            messages = [{"role": "system", "content": base_system}, *turns]
+            response_parts: list[str] = []
+            tool_calls: list[dict] = []
+            final_row: dict = {}
+            started = time.perf_counter()
+            rows = None
+            thinking_started = False
+            thinking_finished = False
+            answer_started = False
+            reply_started = False
+            show_reasoning = bool(args.show_thinking or args.think)
 
-        def begin_reply() -> None:
-            nonlocal reply_started
-            if reply_started:
-                return
-            if console.pretty:
-                console.begin_reply()
-            reply_started = True
-
-        def show_thinking(chunk: str) -> None:
-            nonlocal thinking_started
-            if not args.show_thinking or not chunk:
-                return
-            if not thinking_started:
-                begin_reply()
+            def begin_reply() -> None:
+                nonlocal reply_started
+                if reply_started:
+                    return
                 if console.pretty:
-                    console.section("Thinking")
-                else:
-                    print("thinking> ", end="", flush=True, file=output_stream)
-                thinking_started = True
-            print(chunk, end="", flush=True, file=output_stream)
+                    console.begin_reply()
+                reply_started = True
 
-        def show_answer(chunk: str) -> None:
-            nonlocal answer_started
-            if not chunk:
-                return
-            if not answer_started:
-                begin_reply()
-                if thinking_started:
-                    print("", flush=True, file=output_stream)
+            def finish_thinking() -> None:
+                nonlocal thinking_finished
+                if not thinking_started or thinking_finished:
+                    return
+                print("", flush=True, file=output_stream)
+                if console.pretty:
+                    console.end_thinking()
+                thinking_finished = True
+
+            def show_thinking(chunk: str) -> None:
+                nonlocal thinking_started
+                if not show_reasoning or not chunk:
+                    return
+                if not thinking_started:
+                    begin_reply()
                     if console.pretty:
-                        console.section("Answer")
-                if not console.pretty:
-                    print("assistant> ", end="", flush=True, file=output_stream)
-                answer_started = True
-            print(chunk, end="", flush=True, file=output_stream)
+                        console.begin_thinking()
+                    else:
+                        print("thinking> ", end="", flush=True, file=output_stream)
+                    thinking_started = True
+                print(chunk, end="", flush=True, file=output_stream)
 
-        try:
-            request_options = {
-                "options": native_server_options(args),
-                "keep_alive": args.keep_alive,
-                "stream": True,
-            }
-            if active_images:
-                request_options["images"] = active_images
-            route = chat_route_options(args)
-            if route is not None:
-                request_options["machboost"] = route
-            rows = client.chat(args.model, messages, **request_options)
-            for row in rows:
-                message = row.get("message") or {}
-                chunk = str(message.get("content") or "")
-                thinking = str(message.get("thinking") or "")
-                show_thinking(thinking)
-                if chunk:
-                    show_answer(chunk)
-                    response_parts.append(chunk)
-                if message.get("tool_calls"):
-                    tool_calls.extend(message["tool_calls"])
-                if row.get("done"):
-                    final_row = row
-        except KeyboardInterrupt:
-            close = getattr(rows, "close", None)
-            if callable(close):
-                close()
-            print("\n[generation stopped]", file=output_stream)
-            turns.pop()
-            continue
-        except MachBoostAPIError as exc:
-            turns.pop()
-            print(f"\ngeneration error: {exc}", file=error_stream)
-            continue
+            def show_answer(chunk: str) -> None:
+                nonlocal answer_started
+                if not chunk:
+                    return
+                if not answer_started:
+                    begin_reply()
+                    if thinking_started:
+                        finish_thinking()
+                        if console.pretty:
+                            console.begin_answer()
+                    if not console.pretty:
+                        print("assistant> ", end="", flush=True, file=output_stream)
+                    answer_started = True
+                print(chunk, end="", flush=True, file=output_stream)
 
-        if thinking_started and not answer_started:
-            print("", flush=True, file=output_stream)
-        if not answer_started and tool_calls:
-            begin_reply()
-            if not console.pretty:
-                print("assistant> ", file=output_stream)
-        elif answer_started:
-            print("", flush=True, file=output_stream)
-        elif not thinking_started:
-            begin_reply()
-            console.notice("No visible response was returned.") if console.pretty else print(
-                "no visible response was returned", file=output_stream
+            try:
+                request_options = {
+                    "options": native_server_options(args),
+                    "keep_alive": args.keep_alive,
+                    "stream": True,
+                }
+                if active_images:
+                    request_options["images"] = active_images
+                route = chat_route_options(args)
+                if route is not None:
+                    request_options["machboost"] = route
+                if coding is not None:
+                    request_options["tools"] = coding_tools()
+                    request_options["tool_choice"] = "auto"
+                rows = client.chat(args.model, messages, **request_options)
+                for row in rows:
+                    message = row.get("message") or {}
+                    chunk = str(message.get("content") or "")
+                    thinking = str(message.get("thinking") or "")
+                    show_thinking(thinking)
+                    if chunk:
+                        show_answer(chunk)
+                        response_parts.append(chunk)
+                    if message.get("tool_calls"):
+                        tool_calls.extend(message["tool_calls"])
+                    if row.get("done"):
+                        final_row = row
+            except KeyboardInterrupt:
+                close = getattr(rows, "close", None)
+                if callable(close):
+                    close()
+                print("\n[generation stopped]", file=output_stream)
+                del turns[turn_start:]
+                break
+            except MachBoostAPIError as exc:
+                del turns[turn_start:]
+                print(f"\ngeneration error: {exc}", file=error_stream)
+                break
+
+            finish_thinking()
+            if not answer_started and tool_calls:
+                begin_reply()
+            elif answer_started:
+                print("", flush=True, file=output_stream)
+            elif thinking_started:
+                message = (
+                    "The model used its output budget for reasoning before producing a final "
+                    "answer. Increase --max-tokens or use /think off."
+                )
+                console.notice(message) if console.pretty else print(
+                    f"notice: {message}", file=output_stream
+                )
+            elif not thinking_started and not (coding is not None and tool_round > 0):
+                begin_reply()
+                console.notice("No visible response was returned.") if console.pretty else print(
+                    "no visible response was returned", file=output_stream
+                )
+            response = "".join(response_parts).strip()
+            tool_calls = normalize_agent_tool_calls(tool_calls, round_index=tool_round)
+            if show_stats:
+                print_resident_stats(
+                    final_row,
+                    time.perf_counter() - started,
+                    stream=output_stream,
+                    console=console,
+                )
+            if coding is None or not tool_calls:
+                if (
+                    coding is not None
+                    and tool_round > 0
+                    and not response
+                    and empty_agent_retries < 3
+                ):
+                    turns.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "Continue from the completed tool result. Perform any remaining "
+                                "verification, then give the user a concise final answer."
+                            ),
+                        }
+                    )
+                    empty_agent_retries += 1
+                    continue
+                if tool_calls:
+                    print_tool_call_summary(tool_calls, stream=output_stream, console=console)
+                if response:
+                    turns.append({"role": "assistant", "content": response})
+                elif coding is not None and tool_round > 0:
+                    fallback = "Tool work completed, but the model did not produce a final summary."
+                    console.notice(fallback) if console.pretty else print(
+                        f"assistant> {fallback}", file=output_stream
+                    )
+                    turns.append({"role": "assistant", "content": fallback})
+                break
+
+            turns.append(
+                {"role": "assistant", "content": response, "tool_calls": tool_calls}
             )
-        response = "".join(response_parts).strip()
-        if tool_calls:
-            print_tool_call_summary(tool_calls, stream=output_stream, console=console)
-        if show_stats:
-            print_resident_stats(
-                final_row,
-                time.perf_counter() - started,
-                stream=output_stream,
-                console=console,
-            )
-        turns.append({"role": "assistant", "content": response})
+            for tool_call in tool_calls:
+                execution = coding.execute(
+                    tool_call,
+                    confirm=lambda description: confirm_coding_action(
+                        description,
+                        input_func=input_func,
+                        output_stream=output_stream,
+                    ),
+                )
+                if console.pretty:
+                    console.tool_result(execution)
+                else:
+                    print(
+                        f"tool> {execution.name} [{execution.status}] {execution.content}",
+                        file=output_stream,
+                    )
+                turns.append(execution.message())
+            tool_round += 1
+            if tool_round >= max(1, int(args.max_tool_rounds)):
+                console.notice("Tool round limit reached.") if console.pretty else print(
+                    "tool round limit reached", file=output_stream
+                )
+                break
 
 
 def unload_resident_model(
@@ -2815,10 +3042,21 @@ def build_parser() -> argparse.ArgumentParser:
     native_run = subcommands.add_parser("run", help="Chat with a native model through the resident MachBoost server.")
     add_native_run_arguments(native_run)
     add_chat_route_arguments(native_run)
+    add_coding_arguments(native_run, include_switch=True)
 
     chat = subcommands.add_parser("chat", help="Alias for resident native `machboost run`.")
     add_native_run_arguments(chat)
     add_chat_route_arguments(chat)
+    add_coding_arguments(chat, include_switch=True)
+
+    code = subcommands.add_parser(
+        "code",
+        help="Run a workspace-bounded coding agent with file, search, edit, and shell tools.",
+    )
+    add_native_run_arguments(code)
+    add_chat_route_arguments(code)
+    add_coding_arguments(code)
+    code.set_defaults(dev=True)
 
     complete = subcommands.add_parser("complete", help="Stream raw text or code completion from a resident model.")
     add_native_run_arguments(complete)
@@ -3185,7 +3423,7 @@ def add_native_run_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--show-thinking",
         action="store_true",
-        help="Print streamed reasoning separately from the visible answer.",
+        help="Print streamed reasoning separately. Enabled automatically with --think.",
     )
     parser.add_argument("--ngram", type=int, default=2)
     parser.add_argument("--max-draft-tokens", type=int, default=8)
@@ -3285,6 +3523,12 @@ def add_native_run_arguments(parser: argparse.ArgumentParser) -> None:
         default="5m",
         help="Idle resident lifetime, for example 5m, 1h, or forever.",
     )
+    parser.add_argument(
+        "--warmup",
+        choices=("background", "sync", "off"),
+        default="background",
+        help="Prepare first-token kernels in the background, synchronously, or on the first prompt.",
+    )
     add_server_connection_arguments(parser, include_autostart=True)
 
 
@@ -3297,6 +3541,36 @@ def add_chat_route_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--provider", help="Configured paid-provider ID.")
     parser.add_argument("--provider-model", help="Paid API model name used instead of the local model ID.")
+
+
+def add_coding_arguments(
+    parser: argparse.ArgumentParser,
+    *,
+    include_switch: bool = False,
+) -> None:
+    if include_switch:
+        parser.add_argument(
+            "--dev",
+            action="store_true",
+            help="Enable the workspace coding agent and its tools.",
+        )
+    parser.add_argument(
+        "--workspace",
+        default=".",
+        help="Workspace root available to coding tools. Defaults to the current directory.",
+    )
+    parser.add_argument(
+        "--permission-mode",
+        choices=PERMISSION_MODES,
+        default="manual",
+        help="Approval policy for edits and shell commands.",
+    )
+    parser.add_argument(
+        "--max-tool-rounds",
+        type=int,
+        default=12,
+        help="Maximum model/tool cycles for one user message.",
+    )
 
 
 def add_server_connection_arguments(parser: argparse.ArgumentParser, *, include_autostart: bool = False) -> None:
@@ -3377,9 +3651,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if args.command == "skill":
         return run_skill(args)
     if args.command == "run":
+        if args.direct and args.dev:
+            print("machboost --dev requires the resident server; remove --direct", file=sys.stderr)
+            return 2
         return run_native_chat(args) if args.direct else run_resident_chat(args)
     if args.command == "chat":
+        if args.direct and args.dev:
+            print("machboost --dev requires the resident server; remove --direct", file=sys.stderr)
+            return 2
         return run_native_chat(args) if args.direct else run_resident_chat(args)
+    if args.command == "code":
+        if args.direct:
+            print("machboost code requires the resident server; remove --direct", file=sys.stderr)
+            return 2
+        return run_resident_chat(args)
     if args.command == "complete":
         return run_resident_completion(args)
     if args.command == "bench":
