@@ -558,6 +558,48 @@ class MLXVLMAcceleratorTests(unittest.TestCase):
         self.assertEqual(text, "Done")
         self.assertEqual("".join(content), "Done")
 
+    def test_removes_prompt_echo_when_model_drops_articles(self):
+        self.accelerator.model.config = {"model_type": "muse_glimmer"}
+        tokenizer = FakeTokenizer("")
+        tokenizer.response_template = {
+            "fields": {
+                "reasoning_content": {
+                    "open_pattern": r"to=self<\|message\|>",
+                    "close": "<|eom|>",
+                }
+            }
+        }
+        self.accelerator.processor = SimpleNamespace(tokenizer=tokenizer)
+
+        def reasoning_stream(model, processor, prompt, **kwargs):
+            yield FakeGenerationRow(
+                "<|start|>assistant to=self<|message|>Use list_files to inspect "
+                "workspace top level, then name first three entries you found.\n\n"
+            )
+            yield FakeGenerationRow("I should call the tool.<|eom|>")
+            yield FakeGenerationRow("<|start|>assistant to=user<|message|>Done")
+
+        self.accelerator._stream_generate = reasoning_stream
+        thinking = []
+
+        text, stats = self.accelerator.generate_chat(
+            [
+                {
+                    "role": "user",
+                    "content": (
+                        "Use list_files to inspect the workspace top level, then name "
+                        "the first three entries you found."
+                    ),
+                }
+            ],
+            max_tokens=32,
+            on_thinking=thinking.append,
+        )
+
+        self.assertEqual("".join(thinking), "I should call the tool.")
+        self.assertEqual(stats.thinking, "I should call the tool.")
+        self.assertEqual(text, "Done")
+
     def test_removes_prompt_suffix_echo_without_hiding_following_reasoning(self):
         self.accelerator.model.config = {
             "model_type": "muse_glimmer",
