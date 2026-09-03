@@ -812,7 +812,68 @@ class CLITests(unittest.TestCase):
         self.assertEqual(client.chat_calls[0][2]["ngram"], 3)
         self.assertEqual(client.chat_calls[0][3], "5m")
         self.assertEqual(client.load_calls[0][2], "5m")
-        self.assertTrue(client.load_calls[0][3])
+        self.assertEqual(client.load_calls[0][3], "background")
+
+    def test_code_command_executes_tools_and_continues_agent_loop(self):
+        output = io.StringIO()
+        prompts = iter(["Create hello.py with a greeting.", "/bye"])
+        client = FakeCodingResidentClient()
+        with tempfile.TemporaryDirectory() as temporary:
+            with patch.object(cli, "connect_resident", return_value=client):
+                code = cli.run_resident_chat(
+                    cli.build_parser().parse_args(
+                        [
+                            "code",
+                            "mlx-community/example",
+                            "--workspace",
+                            temporary,
+                            "--permission-mode",
+                            "bypass",
+                            "--warmup",
+                            "off",
+                        ]
+                    ),
+                    input_func=lambda prompt: next(prompts),
+                    output_stream=output,
+                )
+
+            created = Path(temporary) / "hello.py"
+            self.assertEqual(code, 0)
+            self.assertEqual(created.read_text(encoding="utf-8"), "print('hello')\n")
+            self.assertEqual(len(client.chat_calls), 2)
+            self.assertIn("create_file", [tool["function"]["name"] for tool in client.tools[0]])
+            self.assertEqual(client.chat_calls[1][1][-1]["role"], "tool")
+            self.assertIn("tool> create_file [done]", output.getvalue())
+            self.assertIn("Created and checked hello.py.", output.getvalue())
+
+    def test_code_command_retries_one_empty_post_tool_turn(self):
+        output = io.StringIO()
+        prompts = iter(["Create hello.py.", "/bye"])
+        client = EmptyPostToolResidentClient()
+        with tempfile.TemporaryDirectory() as temporary:
+            with patch.object(cli, "connect_resident", return_value=client):
+                code = cli.run_resident_chat(
+                    cli.build_parser().parse_args(
+                        [
+                            "code",
+                            "mlx-community/example",
+                            "--workspace",
+                            temporary,
+                            "--permission-mode",
+                            "bypass",
+                            "--warmup",
+                            "off",
+                        ]
+                    ),
+                    input_func=lambda prompt: next(prompts),
+                    output_stream=output,
+                )
+
+        self.assertEqual(code, 0)
+        self.assertEqual(len(client.chat_calls), 3)
+        self.assertIn("Continue from the completed tool result", client.chat_calls[2][1][-1]["content"])
+        self.assertIn("Finished after retry.", output.getvalue())
+        self.assertNotIn("no visible response was returned", output.getvalue())
 
     def test_resident_chat_uses_the_interactive_terminal_layout(self):
         output = io.StringIO()
@@ -1264,7 +1325,6 @@ class CLITests(unittest.TestCase):
                         "muse-glimmer:30b-mlx",
                         "--think",
                         "high",
-                        "--show-thinking",
                         "--ctx",
                         "32768",
                     ]
@@ -1550,16 +1610,113 @@ class FakeResidentClient:
         return {
             "status": "success",
             "load_duration_seconds": 1.25,
-            "warmup_duration_seconds": 0.5 if warmup else 0.0,
+            "warmup_duration_seconds": 0.5 if warmup is True else 0.0,
+            "warmup_scheduled": warmup == "background",
             "instance": {
                 "model": "mlx-community/Qwen2.5-3B-Instruct-4bit",
                 "backend": "mlx",
+                "warming": warmup == "background",
             },
         }
 
     def stop(self, model):
         self.stop_calls.append(model)
         return {"unloaded": 1}
+
+
+class FakeCodingResidentClient(FakeResidentClient):
+    def __init__(self):
+        super().__init__()
+        self.tools = []
+
+    def chat(
+        self,
+        model,
+        messages,
+        *,
+        options,
+        keep_alive,
+        stream,
+        images=None,
+        machboost=None,
+        tools=None,
+        tool_choice=None,
+    ):
+        self.chat_calls.append((model, messages, options, keep_alive, stream, images, machboost))
+        self.tools.append(tools)
+        if len(self.chat_calls) == 1:
+            return iter(
+                [
+                    {
+                        "message": {
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "id": "call_create",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "create_file",
+                                        "arguments": {
+                                            "path": "hello.py",
+                                            "content": "print('hello')\n",
+                                        },
+                                    },
+                                }
+                            ],
+                        },
+                        "done": True,
+                        "machboost": {"backend": "mlx", "stats": {}},
+                    }
+                ]
+            )
+        return iter(
+            [
+                {"message": {"content": "Created and checked hello.py."}, "done": False},
+                {
+                    "message": {"content": ""},
+                    "done": True,
+                    "machboost": {"backend": "mlx", "stats": {}},
+                },
+            ]
+        )
+
+
+class EmptyPostToolResidentClient(FakeCodingResidentClient):
+    def chat(self, model, messages, **kwargs):
+        if not self.chat_calls:
+            return super().chat(model, messages, **kwargs)
+        self.chat_calls.append(
+            (
+                model,
+                messages,
+                kwargs["options"],
+                kwargs["keep_alive"],
+                kwargs["stream"],
+                kwargs.get("images"),
+                kwargs.get("machboost"),
+            )
+        )
+        self.tools.append(kwargs.get("tools"))
+        if len(self.chat_calls) == 2:
+            return iter(
+                [
+                    {
+                        "message": {"content": ""},
+                        "done": True,
+                        "machboost": {"backend": "mlx", "stats": {}},
+                    }
+                ]
+            )
+        return iter(
+            [
+                {"message": {"content": "Finished after retry."}, "done": False},
+                {
+                    "message": {"content": ""},
+                    "done": True,
+                    "machboost": {"backend": "mlx", "stats": {}},
+                },
+            ]
+        )
 
 
 class FakeMuseResidentClient(FakeResidentClient):
