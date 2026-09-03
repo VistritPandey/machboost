@@ -12,7 +12,12 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable, Optional, Sequence
 
-from ..reasoning import ThinkingDelta, ThinkingStreamSplitter
+from ..reasoning import (
+    ThinkingDelta,
+    ThinkingProtocol,
+    ThinkingStreamSplitter,
+    resolve_thinking_protocol,
+)
 from ..vision import (
     ContentAddressedVisionCache,
     VisualAssetStore,
@@ -629,15 +634,17 @@ class MLXVLMAccelerator:
                 image=stream_image,
                 **stream_options,
             )
-            thinking_start = config_value(
-                self.model.config, "thinking_start_token", None
+            tokenizer = getattr(self.processor, "tokenizer", self.processor)
+            thinking_protocol = resolve_thinking_protocol(
+                self.model.config,
+                tokenizer,
             )
-            thinking_end = config_value(
-                self.model.config, "thinking_end_token", None
-            )
+            thinking_start = thinking_protocol.start_marker
+            thinking_end = thinking_protocol.end_marker
             splitter = ThinkingStreamSplitter(
-                starts_in_thinking=bool(enable_thinking)
-                and thinking_start in {None, "<think>", "<|START_THINKING|>"},
+                starts_in_thinking=thinking_protocol.starts_in_thinking(
+                    enable_thinking
+                ),
                 start_marker=thinking_start,
                 end_marker=thinking_end,
             )
@@ -794,8 +801,10 @@ class MLXVLMAccelerator:
         if not raw:
             return None
         splitter = ThinkingStreamSplitter(
-            starts_in_thinking=bool(enable_thinking)
-            and thinking_start in {None, "<think>", "<|START_THINKING|>"},
+            starts_in_thinking=ThinkingProtocol(
+                start_marker=thinking_start,
+                end_marker=thinking_end,
+            ).starts_in_thinking(enable_thinking),
             start_marker=thinking_start,
             end_marker=thinking_end,
         )
