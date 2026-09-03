@@ -80,16 +80,16 @@ pip install -e ".[all]"
 Install the current CLI directly from its GitHub release tag:
 
 ```sh
-python3 -m pip install "machboost[mlx] @ git+https://github.com/VistritPandey/machboost.git@v0.16.7"
-python3 -m pip install "machboost[vision] @ git+https://github.com/VistritPandey/machboost.git@v0.16.7"
-python3 -m pip install "machboost[dflash] @ git+https://github.com/VistritPandey/machboost.git@v0.16.7"
+python3 -m pip install "machboost[mlx] @ git+https://github.com/VistritPandey/machboost.git@v0.16.8"
+python3 -m pip install "machboost[vision] @ git+https://github.com/VistritPandey/machboost.git@v0.16.8"
+python3 -m pip install "machboost[dflash] @ git+https://github.com/VistritPandey/machboost.git@v0.16.8"
 ```
 
 Update an existing install:
 
 ```sh
 python3 -m pip uninstall -y machboost
-python3 -m pip install "machboost[mlx] @ git+https://github.com/VistritPandey/machboost.git@v0.16.7"
+python3 -m pip install "machboost[mlx] @ git+https://github.com/VistritPandey/machboost.git@v0.16.8"
 machboost version
 ```
 
@@ -185,7 +185,15 @@ machboost pull qwen2.5:3b
 machboost run qwen2.5:3b
 ```
 
-`machboost run` starts a local server automatically when needed, loads the model, and performs a one-token compile warmup before showing the chat prompt. The header separates model load, compile warmup, and total wall time, so startup work is not hidden behind the first message. Models stay resident for five idle minutes by default; a background reaper releases expired models even when no later command is issued. Preload explicitly with:
+`machboost run` starts a local server automatically when needed, loads the model,
+and schedules its one-token MLX warmup in the background. The prompt appears after
+weights load; if a message arrives before a first-ever kernel compile finishes, that
+message waits behind the warmup and its TTFT includes the remaining compile time.
+Large models can take tens of seconds on their first compile for a given model shape,
+while later launches can reuse MLX's system kernel cache. Use `--warmup sync` to wait
+before showing the prompt or `--warmup off` to compile on the first generation.
+Models stay resident for five idle minutes by default; a background reaper releases
+expired models even when no later command is issued. Preload explicitly with:
 
 ```sh
 machboost warm qwen2.5:3b
@@ -195,6 +203,30 @@ machboost ps
 Interactive terminals use a compact green chat layout with separate user,
 answer, reasoning, tool, and performance rows. Redirected output stays plain
 for scripts and logs. Set `NO_COLOR=1` to keep the layout without ANSI colors.
+Reasoning is opt-in with `--think low|medium|high|xhigh` or `/think LEVEL`.
+MachBoost renders it separately from the final answer. Some reasoning models can
+spend the entire output budget before reaching an answer; increase `--max-tokens`
+or use `/think off` when the CLI reports that condition.
+
+Run a workspace-bounded coding session from the terminal:
+
+```sh
+cd /path/to/repository
+machboost code muse-glimmer:30b \
+  --workspace . \
+  --permission-mode manual \
+  --think low \
+  --show-stats
+```
+
+The coding loop can list and read files, search with ripgrep, make exact block
+replacements, create or delete files, run shell commands, and show the Git diff.
+`manual` asks before edits and commands, `accept-edits` approves file edits but
+asks before commands, `plan` blocks mutations, and `bypass` allows workspace
+actions without prompts. Paths cannot escape the selected workspace and `.git`
+metadata cannot be edited. Use `/mode`, `/diff`, `/workspace`, and `/tools` during
+the session. This is an early local coding harness, not a claim of feature parity
+with mature hosted coding agents.
 
 Connect a local MCP server or save reusable instructions from the CLI:
 
@@ -226,7 +258,7 @@ MachBoost alias uses the native 4-bit MLX-VLM conversion and recommends at least
 32 GB unified memory. Higher-bit variants require more memory.
 
 ```sh
-python3 -m pip install "machboost[vision] @ git+https://github.com/VistritPandey/machboost.git@v0.16.7"
+python3 -m pip install "machboost[vision] @ git+https://github.com/VistritPandey/machboost.git@v0.16.8"
 machboost pull muse-glimmer:30b
 machboost run muse-glimmer:30b --think high --show-thinking --show-stats
 machboost run muse-glimmer:30b --image ./screenshot.png --think medium
@@ -238,7 +270,9 @@ Muse Glimmer are routed to MLX-VLM automatically.
 
 The model stays behind the same OpenAI- and Ollama-compatible MachBoost
 endpoint. Connected agents may provide tool schemas and execute returned calls;
-MachBoost transports tool requests but does not grant or execute tools itself.
+ordinary API routes transport tool requests but do not grant file or shell access.
+The explicit `machboost code` command is the exception: it executes only its own
+workspace-bounded tools under the selected permission mode.
 Run the complete local reasoning/tool/vision example with:
 
 ```sh
