@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Iterable, Optional, Sequence, Tuple, Union
 
@@ -13,6 +13,7 @@ from .core import (
     Token,
     machboost,
 )
+from .reasoning import ThinkingStreamSplitter
 
 TEXT_SUFFIXES = {
     ".c",
@@ -199,6 +200,7 @@ class Accelerator:
         max_tokens: int = 128,
         context: Optional[Union[Iterable[str], str]] = None,
         on_text: Optional[Callable[[str], None]] = None,
+        on_thinking: Optional[Callable[[str], None]] = None,
         tools: Optional[Sequence[dict[str, Any]]] = None,
         enable_thinking: bool | str = False,
         stop_strings: Optional[Iterable[str]] = None,
@@ -214,19 +216,36 @@ class Accelerator:
         chat_stop_strings = tuple(
             dict.fromkeys((*CHAT_STOP_STRINGS, *(stop_strings or ())))
         )
-        streamer = ChatTextStreamer(on_text, chat_stop_strings) if on_text is not None else None
+        splitter = ThinkingStreamSplitter()
+        reasoning_parts: list[str] = []
+        content_parts: list[str] = []
+
+        def emit_split(text: str, *, final: bool = False) -> None:
+            delta = splitter.feed(text, final=final)
+            if delta.reasoning:
+                reasoning_parts.append(delta.reasoning)
+                if on_thinking is not None:
+                    on_thinking(delta.reasoning)
+            if delta.content:
+                content_parts.append(delta.content)
+                if on_text is not None:
+                    on_text(delta.content)
+
+        streamer = ChatTextStreamer(emit_split, chat_stop_strings)
         result = self.generate_result(
             prompt,
             max_tokens=max_tokens,
             context=context,
             stop_tokens=stop_tokens,
             stop_strings=chat_stop_strings,
-            on_text=streamer.push if streamer is not None else None,
+            on_text=streamer.push,
             generation_options=generation_options,
         )
-        if streamer is not None:
-            streamer.finish()
-        return clean_chat_response(result.text), result.stats
+        streamer.finish()
+        emit_split("", final=True)
+        text = clean_chat_response("".join(content_parts))
+        thinking = "".join(reasoning_parts).strip()
+        return text, replace(result.stats, thinking=thinking)
 
     def generate_result(
         self,
@@ -590,8 +609,6 @@ def service_stop_token_ids(service) -> Tuple[Token, ...]:
     ):
         add_token_id(ids, value)
     add_token_id(ids, getattr(tokenizer, "eos_token_ids", None))
-    add_token_id(ids, getattr(tokenizer, "all_special_ids", None))
-
     convert = getattr(tokenizer, "convert_tokens_to_ids", None)
     unk_id = getattr(tokenizer, "unk_token_id", None)
     if callable(convert):
