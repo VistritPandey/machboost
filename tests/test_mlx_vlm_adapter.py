@@ -468,6 +468,40 @@ class MLXVLMAcceleratorTests(unittest.TestCase):
         self.assertEqual(text, "Done")
         self.assertEqual("".join(content), text)
 
+    def test_muse_uses_tokenizer_response_schema_when_config_has_no_markers(self):
+        self.accelerator.model.config = {"model_type": "muse_glimmer"}
+        tokenizer = FakeTokenizer("")
+        tokenizer.response_template = {
+            "fields": {
+                "reasoning_content": {
+                    "open_pattern": r"to=self<\|message\|>",
+                    "close": "<|eom|>",
+                }
+            }
+        }
+        self.accelerator.processor = SimpleNamespace(tokenizer=tokenizer)
+
+        def reasoning_stream(model, processor, prompt, **kwargs):
+            yield FakeGenerationRow("<|start|>assistant to=self<|message|>Checking")
+            yield FakeGenerationRow(" the request<|eom|>")
+            yield FakeGenerationRow("<|start|>assistant to=user<|message|>Complete")
+
+        self.accelerator._stream_generate = reasoning_stream
+        content = []
+        thinking = []
+
+        text, stats = self.accelerator.generate_chat(
+            [{"role": "user", "content": "Do the work."}],
+            max_tokens=16,
+            on_text=content.append,
+            on_thinking=thinking.append,
+        )
+
+        self.assertEqual("".join(thinking), "Checking the request")
+        self.assertEqual(stats.thinking, "Checking the request")
+        self.assertEqual(text, "Complete")
+        self.assertEqual("".join(content), "Complete")
+
     def test_short_content_marker_does_not_leak_into_visible_answer(self):
         self.accelerator.model.config = {
             "model_type": "muse_glimmer",
