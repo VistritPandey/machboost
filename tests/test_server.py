@@ -23,6 +23,7 @@ from machboost.server import (
     OperationRegistry,
     RequestCancelled,
     RuntimeManager,
+    ThreadBoundAccelerator,
     ToolAwareTextStream,
     anthropic_tool_limit,
     configure_native_prompt_cache,
@@ -39,6 +40,39 @@ from machboost.server import (
 )
 from machboost.team import TeamStore
 from machboost.workspace import WorkspaceStore
+
+
+class ThreadBoundAcceleratorTests(unittest.TestCase):
+    def test_load_generate_and_close_stay_on_one_worker_thread(self):
+        created = []
+
+        class RecordingAccelerator:
+            def __init__(self):
+                self.load_thread = threading.get_ident()
+                self.close_thread = None
+
+            def worker_thread(self):
+                return threading.get_ident()
+
+            def close(self):
+                self.close_thread = threading.get_ident()
+
+        def loader(_config):
+            accelerator = RecordingAccelerator()
+            created.append(accelerator)
+            return accelerator
+
+        wrapper = ThreadBoundAccelerator(
+            loader,
+            ModelConfig(model="example", backend="mlx"),
+            worker_name="machboost-test",
+        )
+        worker_thread = wrapper.worker_thread()
+        wrapper.close()
+
+        self.assertNotEqual(worker_thread, threading.get_ident())
+        self.assertEqual(created[0].load_thread, worker_thread)
+        self.assertEqual(created[0].close_thread, worker_thread)
 
 
 class ToolCallParsingTests(unittest.TestCase):
@@ -1048,6 +1082,25 @@ class RuntimeManagerTests(unittest.TestCase):
         self.assertEqual(entry.warmups, 1)
         self.assertEqual(entry.requests, 0)
         self.assertEqual(entry.accelerator.chat_calls[0][1], 1)
+
+    def test_background_warmup_returns_before_generation_finishes(self):
+        probe = ConcurrencyProbe()
+        manager = RuntimeManager(loader=lambda config: BlockingAccelerator(probe))
+        entry, _ = manager.get_or_load("mlx-community/example")
+
+        self.assertTrue(manager.warm_async(entry))
+        self.assertTrue(probe.target_entered.wait(timeout=1.0))
+        self.assertTrue(entry.warming)
+        self.assertFalse(manager.warm_async(entry))
+
+        probe.release.set()
+        deadline = time.monotonic() + 1.0
+        while entry.warming and time.monotonic() < deadline:
+            time.sleep(0.01)
+
+        self.assertFalse(entry.warming)
+        self.assertEqual(entry.warmups, 1)
+        self.assertIsNone(entry.warmup_error)
 
     def test_openai_metadata_separates_load_prefill_and_generation_time(self):
         result = GenerationResult(
