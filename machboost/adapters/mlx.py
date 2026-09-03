@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import importlib
 import time
 from typing import Any, Callable, Iterable, Optional, Sequence, Tuple
 
@@ -211,6 +212,7 @@ class MLXCausalLMService:
         except ImportError as exc:
             raise ImportError("Install MLX support with `pip install machboost[mlx]`.") from exc
 
+        self._bind_thread_local_stream(generate_step)
         mx = self._mx()
         stop_set = {int(token) for token in stop_tokens or ()}
         prompt = self._array([prefix[-1]], mx)
@@ -248,6 +250,7 @@ class MLXCausalLMService:
         except ImportError as exc:
             raise ImportError("Install MLX support with `pip install machboost[mlx]`.") from exc
 
+        self._bind_thread_local_stream(stream_generate)
         self.reset_cache()
         self._last_native_metrics = {}
         stop_set = {int(token) for token in stop_tokens or ()}
@@ -660,6 +663,17 @@ class MLXCausalLMService:
             return False
         trim_prompt_cache(cache, num_tokens)
         return True
+
+    def _bind_thread_local_stream(self, generator: Any) -> None:
+        """Bind mlx-lm's generation stream to the current server worker thread."""
+        if not str(getattr(generator, "__module__", "")).startswith("mlx_lm"):
+            return
+        try:
+            import mlx.core as mx
+        except ImportError:
+            return
+        generation = importlib.import_module("mlx_lm.generate")
+        generation.generation_stream = mx.new_thread_local_stream(mx.default_device())
 
     def _mx(self):
         if self.mx is not None:
