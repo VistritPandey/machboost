@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import getpass
 import hashlib
+import inspect
 import importlib.util
 import json
 import os
@@ -1165,11 +1166,16 @@ def run_native_chat(
             print(chunk, end="", flush=True, file=output_stream if console.pretty else error_stream)
 
         try:
-            kwargs = {"max_tokens": args.max_tokens, "on_text": emit}
+            kwargs = {
+                "max_tokens": args.max_tokens,
+                "on_text": emit,
+            }
+            if "on_thinking" in inspect.signature(
+                accelerator.generate_chat
+            ).parameters:
+                kwargs["on_thinking"] = emit_thinking
             if args.think:
                 kwargs["enable_thinking"] = args.think
-            if args.show_thinking or args.think:
-                kwargs["on_thinking"] = emit_thinking
             if getattr(accelerator, "supports_vision", False):
                 kwargs.update(
                     use_vision_cache=not args.no_vision_cache,
