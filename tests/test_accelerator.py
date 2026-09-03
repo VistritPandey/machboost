@@ -9,6 +9,7 @@ from machboost.accelerator import (
     ChatTextStreamer,
     read_context_paths,
     resolve_context,
+    service_stop_token_ids,
 )
 
 
@@ -311,6 +312,35 @@ class AcceleratorTests(unittest.TestCase):
         )
 
         self.assertEqual(service.tokenizer.last_kwargs["enable_thinking"], "high")
+
+    def test_generate_chat_splits_thinking_channels_from_visible_text(self):
+        completion = "<|channel>thought\nCheck the request.<channel|>Ready"
+        rendered_prompt = "<user>reply</user><assistant>"
+        service = ScriptedService(rendered_prompt, completion)
+        service.tokenizer = FakeChatTokenizer()
+        accelerator = Accelerator(service)
+        visible = []
+        thinking = []
+
+        text, stats = accelerator.generate_chat(
+            [{"role": "user", "content": "reply"}],
+            max_tokens=len(completion),
+            on_text=visible.append,
+            on_thinking=thinking.append,
+            enable_thinking="medium",
+        )
+
+        self.assertEqual(text, "Ready")
+        self.assertEqual("".join(visible), "Ready")
+        self.assertEqual("".join(thinking).strip(), "Check the request.")
+        self.assertEqual(stats.thinking, "Check the request.")
+
+    def test_service_stop_tokens_do_not_include_non_terminating_control_tokens(self):
+        tokenizer = FakeChatTokenizer()
+        tokenizer.all_special_ids = [0, 100]
+        service = type("Service", (), {"tokenizer": tokenizer})()
+
+        self.assertEqual(service_stop_token_ids(service), (0,))
 
     def test_generate_chat_passes_tool_definitions_to_native_template(self):
         completion = '<tool_call>{"name":"read_file","arguments":{"path":"a.py"}}</tool_call>'
