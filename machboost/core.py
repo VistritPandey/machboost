@@ -38,6 +38,7 @@ class RunStats:
     prompt_eval_seconds: float = 0.0
     generation_seconds: float = 0.0
     time_to_first_token_seconds: Optional[float] = None
+    thinking: str = ""
 
     @property
     def estimated_speedup(self) -> float:
