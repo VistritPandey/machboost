@@ -1928,7 +1928,9 @@ def run_resident_chat(
             thinking_finished = False
             answer_started = False
             reply_started = False
-            show_reasoning = bool(args.show_thinking or args.think)
+            # Some reasoning-native models emit a dedicated thought channel even
+            # when their templates do not accept an explicit enable flag.
+            show_reasoning = True
 
             def begin_reply() -> None:
                 nonlocal reply_started
