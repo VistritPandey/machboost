@@ -484,6 +484,21 @@ def catalog_rows(
         )
         if alias.capability == "code":
             capabilities.append("code")
+        context_length = (
+            MUSE_GLIMMER_CONTEXT_LENGTH
+            if name.startswith("muse-glimmer:")
+            else None
+        )
+        if cached_path is not None:
+            metadata = _snapshot_model_metadata(
+                alias.mlx or name,
+                backend,
+                cached_path,
+            )
+            for capability in metadata["capabilities"]:
+                if capability not in capabilities:
+                    capabilities.append(capability)
+            context_length = metadata["context_length"] or context_length
         rows.append(
             {
                 "name": name,
@@ -498,11 +513,7 @@ def catalog_rows(
                 "download_size_gb": download_size_gb,
                 "disk_size_gb": _directory_size_gb(cached_path),
                 "minimum_memory_gb": minimum_memory_gb,
-                "context_length": (
-                    MUSE_GLIMMER_CONTEXT_LENGTH
-                    if name.startswith("muse-glimmer:")
-                    else None
-                ),
+                "context_length": context_length,
                 "support": "ready" if backend_available(backend) else "missing_runtime",
                 "support_reason": None,
             }
@@ -865,18 +876,14 @@ def _cached_repository_rows(
             if snapshot is None:
                 continue
             preflight = _preflight_cached_snapshot(repository, backend, snapshot)
-            capabilities = (
-                ["chat", "vision"]
-                if backend.endswith("-vlm")
-                else ["chat", "completion"]
-            )
+            metadata = _snapshot_model_metadata(repository, backend, snapshot)
             rows.append(
                 {
                     "name": repository,
                     "display_name": repository.rsplit("/", 1)[-1],
                     "repository": repository,
                     "backend": backend,
-                    "capabilities": capabilities,
+                    "capabilities": metadata["capabilities"],
                     "cached": True,
                     "cached_path": str(snapshot),
                     "recommended": False,
@@ -884,6 +891,7 @@ def _cached_repository_rows(
                     "download_size_gb": None,
                     "disk_size_gb": _directory_size_gb(snapshot),
                     "minimum_memory_gb": None,
+                    "context_length": metadata["context_length"],
                     "support": "ready" if preflight["supported"] else "unsupported",
                     "support_reason": preflight["reason"],
                 }
@@ -914,6 +922,137 @@ def _latest_snapshot(repository_dir: Path) -> Optional[Path]:
     if not candidates:
         return None
     return max(candidates, key=lambda path: path.stat().st_mtime_ns).resolve()
+
+
+def _snapshot_model_metadata(
+    repository: str,
+    backend: str,
+    snapshot: Path,
+    *,
+    config: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    model_config = config or _read_optional_json(snapshot / "config.json")
+    tokenizer_config = _read_optional_json(snapshot / "tokenizer_config.json")
+    template_path = snapshot / "chat_template.jinja"
+    try:
+        template = template_path.read_text(encoding="utf-8")
+    except OSError:
+        template = ""
+    metadata_text = json.dumps(
+        {
+            "response_template": tokenizer_config.get("response_template"),
+            "chat_template": tokenizer_config.get("chat_template"),
+            "config_chat_template": model_config.get("chat_template"),
+            "template_file": template,
+        },
+        ensure_ascii=True,
+        sort_keys=True,
+        default=str,
+    ).lower()
+    return {
+        "capabilities": _capabilities_from_model_metadata(
+            repository,
+            backend,
+            model_config,
+            metadata_text,
+        ),
+        "context_length": _context_length_from_config(model_config),
+    }
+
+
+def _read_optional_json(path: Path) -> dict[str, Any]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _capabilities_from_model_metadata(
+    repository: str,
+    backend: str,
+    config: dict[str, Any],
+    metadata_text: str,
+) -> list[str]:
+    model_type = str(config.get("model_type") or "").lower()
+    architectures = " ".join(
+        str(value).lower() for value in config.get("architectures") or []
+    )
+    identity = f"{repository} {model_type} {architectures}".lower()
+    vision = bool(
+        backend.endswith("-vlm")
+        or config.get("vision_config")
+        or config.get("visual")
+        or any(
+            marker in identity
+            for marker in (
+                "vision",
+                "vlm",
+                "llava",
+                "pixtral",
+                "mllama",
+                "gemma3",
+                "gemma4",
+                "muse_glimmer",
+            )
+        )
+    )
+    capabilities = ["chat", "vision"] if vision else ["chat", "completion"]
+
+    reasoning_metadata = (
+        "reasoning_content",
+        "enable_thinking",
+        "thinking_budget",
+        "<think>",
+        "start_thinking",
+        "to=self<\\\\|message\\\\|>",
+    )
+    reasoning_identity = (
+        "muse_glimmer",
+        "muse-glimmer",
+        "qwen3",
+        "qwen-3",
+        "deepseek-r1",
+        "deepseek_r1",
+        "reasoner",
+    )
+    if any(marker in metadata_text for marker in reasoning_metadata) or any(
+        marker in identity for marker in reasoning_identity
+    ):
+        capabilities.append("reasoning")
+
+    tool_metadata = (
+        '"tool_calls"',
+        "<tool_call>",
+        "atem:invoke",
+        "tools is defined",
+        "tools |",
+        "tools|",
+    )
+    if any(marker in metadata_text for marker in tool_metadata):
+        capabilities.append("tools")
+    return capabilities
+
+
+def _context_length_from_config(config: dict[str, Any]) -> Optional[int]:
+    candidates = (
+        config.get("max_position_embeddings"),
+        config.get("model_max_length"),
+        (config.get("text_config") or {}).get("max_position_embeddings")
+        if isinstance(config.get("text_config"), dict)
+        else None,
+        (config.get("language_config") or {}).get("max_position_embeddings")
+        if isinstance(config.get("language_config"), dict)
+        else None,
+    )
+    for value in candidates:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            continue
+        if 0 < parsed < 100_000_000:
+            return parsed
+    return None
 
 
 def _preflight_cached_snapshot(
@@ -1043,6 +1182,7 @@ def preflight_model(
         "cached": False,
         "cached_path": None,
         "model_type": None,
+        "context_length": None,
         "supported": False,
         "reason": None,
     }
@@ -1098,6 +1238,15 @@ def preflight_model(
         if not model_type:
             raise ValueError("config.json does not define model_type")
         result["model_type"] = model_type
+        snapshot = config_path.parent
+        metadata = _snapshot_model_metadata(
+            resolution.model,
+            resolution.backend,
+            snapshot,
+            config=config,
+        )
+        result["capabilities"] = metadata["capabilities"]
+        result["context_length"] = metadata["context_length"]
         _validate_mlx_architecture(
             config,
             resolution.backend,
