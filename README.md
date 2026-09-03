@@ -80,16 +80,16 @@ pip install -e ".[all]"
 Install the current CLI directly from its GitHub release tag:
 
 ```sh
-python3 -m pip install "machboost[mlx] @ git+https://github.com/VistritPandey/machboost.git@v0.16.8"
-python3 -m pip install "machboost[vision] @ git+https://github.com/VistritPandey/machboost.git@v0.16.8"
-python3 -m pip install "machboost[dflash] @ git+https://github.com/VistritPandey/machboost.git@v0.16.8"
+python3 -m pip install "machboost[mlx] @ git+https://github.com/VistritPandey/machboost.git@v0.16.9"
+python3 -m pip install "machboost[vision] @ git+https://github.com/VistritPandey/machboost.git@v0.16.9"
+python3 -m pip install "machboost[dflash] @ git+https://github.com/VistritPandey/machboost.git@v0.16.9"
 ```
 
 Update an existing install:
 
 ```sh
 python3 -m pip uninstall -y machboost
-python3 -m pip install "machboost[mlx] @ git+https://github.com/VistritPandey/machboost.git@v0.16.8"
+python3 -m pip install "machboost[mlx] @ git+https://github.com/VistritPandey/machboost.git@v0.16.9"
 machboost version
 ```
 
@@ -127,6 +127,12 @@ first, then query the public Hugging Face catalog for MLX repositories as the
 user types. Live results are marked unverified: MachBoost validates the model
 architecture and required files before offering a download, and never downloads
 weights without confirmation.
+
+For every downloaded repository, MachBoost reads the local architecture,
+context limit, tokenizer response schema, and chat template. That metadata
+drives text, vision, reasoning, and tool capability labels for arbitrary local
+models, including compatible Qwen 3.x and DeepSeek variants; support does not
+depend on a model having a built-in MachBoost alias.
 
 Downloaded models can be loaded and compile-warmed explicitly from **Models**
 or **Server → Developer**. The Server view also makes the network boundary
@@ -203,10 +209,11 @@ machboost ps
 Interactive terminals use a compact green chat layout with separate user,
 answer, reasoning, tool, and performance rows. Redirected output stays plain
 for scripts and logs. Set `NO_COLOR=1` to keep the layout without ANSI colors.
-Reasoning is opt-in with `--think low|medium|high|xhigh` or `/think LEVEL`.
-MachBoost renders it separately from the final answer. Some reasoning models can
-spend the entire output budget before reaching an answer; increase `--max-tokens`
-or use `/think off` when the CLI reports that condition.
+Reasoning effort is opt-in with `--think low|medium|high|xhigh` or `/think LEVEL`.
+When a model inherently emits a reasoning channel, MachBoost detects and renders
+that channel separately even without the flag. Some reasoning models can spend
+the entire output budget before reaching an answer; increase `--max-tokens` or
+use `/think off` where the model supports disabling reasoning.
 
 Run a workspace-bounded coding session from the terminal:
 
@@ -258,7 +265,7 @@ MachBoost alias uses the native 4-bit MLX-VLM conversion and recommends at least
 32 GB unified memory. Higher-bit variants require more memory.
 
 ```sh
-python3 -m pip install "machboost[vision] @ git+https://github.com/VistritPandey/machboost.git@v0.16.8"
+python3 -m pip install "machboost[vision] @ git+https://github.com/VistritPandey/machboost.git@v0.16.9"
 machboost pull muse-glimmer:30b
 machboost run muse-glimmer:30b --think high --show-thinking --show-stats
 machboost run muse-glimmer:30b --image ./screenshot.png --think medium
