@@ -679,7 +679,7 @@ class MachBoostClient:
         *,
         options: Optional[dict[str, Any]] = None,
         keep_alive: Any = "5m",
-        warmup: bool = False,
+        warmup: bool | str = False,
     ) -> dict[str, Any]:
         return self.post(
             "/api/load",
@@ -687,7 +687,7 @@ class MachBoostClient:
                 "model": model,
                 "options": dict(options or {}),
                 "keep_alive": keep_alive,
-                "warmup": bool(warmup),
+                "warmup": warmup,
             },
         )
 
