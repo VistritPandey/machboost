@@ -14,6 +14,7 @@ import threading
 import time
 import uuid
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -318,6 +319,60 @@ class ModelConfig:
     verify_mode: str = "adaptive"
 
 
+class ThreadBoundAccelerator:
+    """Keep an MLX accelerator on the worker thread that loaded its tensors."""
+
+    def __init__(
+        self,
+        loader: Callable[[ModelConfig], Any],
+        config: ModelConfig,
+        *,
+        worker_name: str,
+    ) -> None:
+        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix=worker_name)
+        self._closed = False
+        try:
+            self._accelerator = self._executor.submit(loader, config).result()
+        except BaseException:
+            self._executor.shutdown(wait=True, cancel_futures=True)
+            raise
+
+    def __getattr__(self, name: str) -> Any:
+        attribute = getattr(self._accelerator, name)
+        if not callable(attribute):
+            return attribute
+
+        def invoke(*args, **kwargs):
+            if self._closed:
+                raise RuntimeError("accelerator worker is closed")
+            return self._executor.submit(attribute, *args, **kwargs).result()
+
+        return invoke
+
+    def close(self) -> None:
+        if self._closed:
+            return
+
+        def release() -> None:
+            close = getattr(self._accelerator, "close", None)
+            if callable(close):
+                close()
+                return
+            reset_cache = getattr(self._accelerator, "reset_cache", None)
+            if not callable(reset_cache):
+                reset_cache = getattr(
+                    getattr(self._accelerator, "service", None),
+                    "reset_cache",
+                    None,
+                )
+            if callable(reset_cache):
+                reset_cache()
+
+        self._executor.submit(release).result()
+        self._closed = True
+        self._executor.shutdown(wait=True, cancel_futures=True)
+
+
 @dataclass
 class LoadedModel:
     config: ModelConfig
@@ -329,6 +384,8 @@ class LoadedModel:
     requests: int = 0
     warmups: int = 0
     warmup_duration_s: float = 0.0
+    warming: bool = False
+    warmup_error: Optional[str] = None
     replica_accelerators: tuple[Any, ...] = ()
     max_queue: int = DEFAULT_MAX_QUEUE
     queue_timeout: float = DEFAULT_QUEUE_TIMEOUT
@@ -362,6 +419,8 @@ class LoadedModel:
             "keep_alive_seconds": self.keep_alive,
             "load_duration_seconds": self.load_duration_s,
             "warmup_duration_seconds": self.warmup_duration_s,
+            "warming": self.warming,
+            "warmup_error": self.warmup_error,
             "requests": self.requests,
             "warmups": self.warmups,
             "context_paths": list(self.config.context_paths),
@@ -450,6 +509,7 @@ class RuntimeManager:
         queue_timeout: float = DEFAULT_QUEUE_TIMEOUT,
     ) -> None:
         self.loader = loader or load_accelerator
+        self.thread_bound_mlx = loader is None
         self.clock = clock
         self.default_keep_alive = float(default_keep_alive)
         self.replicas = validate_replicas(replicas)
@@ -526,8 +586,17 @@ class RuntimeManager:
             started = self.clock()
             accelerators = []
             try:
-                for _ in range(config.replicas):
-                    accelerators.append(self.loader(config))
+                for replica_index in range(config.replicas):
+                    if self.thread_bound_mlx and config.backend == "mlx":
+                        accelerators.append(
+                            ThreadBoundAccelerator(
+                                self.loader,
+                                config,
+                                worker_name=f"machboost-{replica_index}",
+                            )
+                        )
+                    else:
+                        accelerators.append(self.loader(config))
             except Exception:
                 for loaded_accelerator in accelerators:
                     release_accelerator(loaded_accelerator)
@@ -549,12 +618,45 @@ class RuntimeManager:
             return entry, load_duration
 
     def warm(self, entry: LoadedModel) -> tuple[float, bool]:
+        if not self._reserve_warmup(entry):
+            entry.last_used_at = self.clock()
+            return 0.0, False
+        return self._perform_warmup(entry)
+
+    def warm_async(self, entry: LoadedModel) -> bool:
+        if not self._reserve_warmup(entry):
+            return False
+
+        def target() -> None:
+            try:
+                self._perform_warmup(entry)
+            except Exception:
+                return
+
+        threading.Thread(
+            target=target,
+            name=f"machboost-warm-{entry.config.model.replace('/', '-')}",
+            daemon=True,
+        ).start()
+        return True
+
+    def _reserve_warmup(self, entry: LoadedModel) -> bool:
         with entry.lock:
-            if entry.warmups > 0:
-                entry.last_used_at = self.clock()
-                return 0.0, False
-            started = self.clock()
-            for accelerator in entry.replica_accelerators:
+            if entry.warmups > 0 or entry.warming:
+                return False
+            entry.warming = True
+            entry.warmup_error = None
+            return True
+
+    def _perform_warmup(self, entry: LoadedModel) -> tuple[float, bool]:
+        started = self.clock()
+        leases = []
+        error: Optional[BaseException] = None
+        try:
+            for _ in entry.replica_accelerators:
+                leases.append(entry.scheduler.acquire(timeout=-1.0))
+            for lease in leases:
+                accelerator = lease.resource
                 accelerator.generate_chat(
                     [
                         {"role": "system", "content": "Answer concisely."},
@@ -562,12 +664,23 @@ class RuntimeManager:
                     ],
                     max_tokens=1,
                 )
+        except BaseException as exc:
+            error = exc
+            raise
+        finally:
+            for lease in reversed(leases):
+                entry.scheduler.release(lease.index)
             finished = self.clock()
             duration = max(0.0, finished - started)
-            entry.warmups += 1
-            entry.warmup_duration_s = duration
-            entry.last_used_at = finished
-            return duration, True
+            with entry.lock:
+                if error is None:
+                    entry.warmups += 1
+                    entry.warmup_duration_s = duration
+                else:
+                    entry.warmup_error = str(error)
+                entry.warming = False
+                entry.last_used_at = finished
+        return duration, True
 
     def chat(
         self,
@@ -711,6 +824,10 @@ class RuntimeManager:
                     if emit is not None or cancel_event is not None
                     else None,
                 }
+                if emit_thinking is not None and _supports_keyword(
+                    accelerator.generate_chat, "on_thinking"
+                ):
+                    chat_kwargs["on_thinking"] = timed_emit_thinking
                 if "_think" in options:
                     chat_kwargs["enable_thinking"] = options["_think"]
                 if options.get("stop"):
@@ -2804,7 +2921,12 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                 )
                 warmup_duration = 0.0
                 warmed = False
-                if bool(payload.get("warmup", False)):
+                warmup_scheduled = False
+                warmup_mode = payload.get("warmup", False)
+                normalized_warmup = str(warmup_mode).strip().lower()
+                if normalized_warmup in {"async", "background"}:
+                    warmup_scheduled = self.runtime.warm_async(entry)
+                elif normalized_warmup not in {"", "0", "false", "none", "off"}:
                     warmup_duration, warmed = self.runtime.warm(entry)
                 self.send_json(
                     {
@@ -2813,6 +2935,7 @@ class MachBoostRequestHandler(BaseHTTPRequestHandler):
                         "load_duration_seconds": load_duration,
                         "warmup_duration_seconds": warmup_duration,
                         "warmup_performed": warmed,
+                        "warmup_scheduled": warmup_scheduled,
                         "instance": entry.to_dict(),
                     }
                 )
