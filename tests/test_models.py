@@ -10,6 +10,7 @@ from machboost.models import (
     DFLASH_ALIASES,
     MODEL_ALIASES,
     OLLAMA_MLX_ALIASES,
+    _capabilities_from_model_metadata,
     alias_rows,
     backend_available,
     cached_repo_path,
@@ -26,6 +27,22 @@ from machboost.models import (
 
 
 class ModelCatalogTests(unittest.TestCase):
+    def test_gemma_pipe_tool_protocol_is_reported_as_native_tools(self):
+        capabilities = _capabilities_from_model_metadata(
+            "lmstudio-community/gemma-4-26B-A4B-it-QAT-MLX-4bit",
+            "mlx",
+            {
+                "model_type": "gemma4",
+                "architectures": ["Gemma4ForConditionalGeneration"],
+                "vision_config": {},
+            },
+            "<|tool>declaration:list_files{}<tool|>"
+            "<|tool_call>call:list_files{path:<|\"|>src<|\"|>}<tool_call|>",
+        )
+
+        self.assertIn("vision", capabilities)
+        self.assertIn("tools", capabilities)
+
     def test_live_huggingface_search_returns_unverified_mlx_models(self):
         class Response:
             def __enter__(self):
