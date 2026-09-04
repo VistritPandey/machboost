@@ -128,7 +128,7 @@ struct RootView: View {
                 Circle()
                     .fill(appState.serverIsRunning ? Color.green : Color.red)
                     .frame(width: 8, height: 8)
-                Text(appState.inferenceMode == .team ? appState.inferenceLabel : (appState.serverIsRunning ? "Local ready" : "Local offline"))
+                Text(appState.inferenceStatusLabel)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
