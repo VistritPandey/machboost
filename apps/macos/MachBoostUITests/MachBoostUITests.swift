@@ -491,6 +491,15 @@ final class MachBoostUITests: XCTestCase {
     private func launchApp(environment: [String: String] = [:]) -> XCUIApplication {
         continueAfterFailure = false
         let app = XCUIApplication()
+        app.launchArguments += [
+            "-machboost.chat.maxTokens", "0",
+            "-machboost.chat.optionalOutputLimitMigrated", "YES",
+            "-machboost.chat.temperature", "0.2",
+            "-machboost.chat.reasoningStrength", "off",
+            "-machboost.chat.showReasoning", "YES",
+            "-machboost.chat.autoSummarize", "YES",
+            "-machboost.chat.summaryThreshold", "90",
+        ]
         app.launchEnvironment["MACHBOOST_UI_TESTING"] = "1"
         app.launchEnvironment["MACHBOOST_SOURCE_ROOT"] = repositoryRoot()
         for (key, value) in environment {
