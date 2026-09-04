@@ -1024,6 +1024,8 @@ def _capabilities_from_model_metadata(
     tool_metadata = (
         '"tool_calls"',
         "<tool_call>",
+        "<|tool_call>",
+        "<tool_call|>",
         "atem:invoke",
         "tools is defined",
         "tools |",
