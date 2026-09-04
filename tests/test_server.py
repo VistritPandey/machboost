@@ -232,6 +232,53 @@ class ToolCallParsingTests(unittest.TestCase):
             {"path": "services/app", "limit": 50},
         )
 
+    def test_extracts_native_gemma_tool_calls_with_structured_arguments(self):
+        content, calls = extract_tool_calls(
+            "I will update it. "
+            '<|tool_call>call:replace_in_file{path:<|"|>src/app.py<|"|>,'
+            'old:<|"|>x,y{z}<|"|>,lines:[1,2],options:{dry_run:true,ratio:0.5}}'
+            "<tool_call|>"
+        )
+
+        self.assertEqual(content, "I will update it.")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["function"]["name"], "replace_in_file")
+        self.assertEqual(
+            json.loads(calls[0]["function"]["arguments"]),
+            {
+                "path": "src/app.py",
+                "old": "x,y{z}",
+                "lines": [1, 2],
+                "options": {"dry_run": True, "ratio": 0.5},
+            },
+        )
+
+    def test_extracts_multiple_native_gemma_tool_calls(self):
+        content, calls = extract_tool_calls(
+            '<|tool_call>call:list_files{path:<|"|>src<|"|>}<tool_call|>'
+            '<|tool_call>call:read_file{path:<|"|>README.md<|"|>}<tool_call|>'
+        )
+
+        self.assertEqual(content, "")
+        self.assertEqual(
+            [call["function"]["name"] for call in calls],
+            ["list_files", "read_file"],
+        )
+
+    def test_tool_aware_stream_hides_split_gemma_protocol(self):
+        emitted = []
+        stream = ToolAwareTextStream(emitted.append)
+
+        for chunk in (
+            "Looking now. ",
+            "<|tool_",
+            "call>call:list_files{path:<|\"|>src<|\"|>}",
+            "<tool_call|>",
+        ):
+            stream.feed(chunk)
+
+        self.assertEqual("".join(emitted), "Looking now.")
+
     def test_rejects_invalid_tool_names_and_removes_bare_user_recipient(self):
         content, calls = extract_tool_calls(
             '<tool_call name="&quot;list_files<|message|" arguments={}></tool_call>'
