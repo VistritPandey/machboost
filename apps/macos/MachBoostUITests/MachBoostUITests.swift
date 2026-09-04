@@ -154,6 +154,40 @@ final class MachBoostUITests: XCTestCase {
     }
 
     @MainActor
+    func testManualSummaryWorksAfterOneExchangeAndIsUsedOnFollowup() {
+        let app = launchApp()
+        send("Remember release code 73", in: app)
+        XCTAssertTrue(app.staticTexts["Fixture response."].waitForExistence(timeout: 10))
+        let controls = app.buttons["Generation controls"]
+        focus(controls)
+        let usage = app.staticTexts["context-usage"]
+        XCTAssertTrue(usage.waitForExistence(timeout: 3))
+        XCTAssertTrue(usage.label.contains("tokens"))
+        let summarize = app.buttons["summarize-context"]
+        XCTAssertTrue(summarize.isEnabled)
+        summarize.click()
+        controls.click()
+        XCTAssertTrue(app.buttons["context-summary"].waitForExistence(timeout: 12))
+        send("Recall the release code", in: app)
+        XCTAssertTrue(app.staticTexts["Summary recall: 73."].waitForExistence(timeout: 10))
+    }
+
+    @MainActor
+    func testAutomaticSummaryRunsAtThresholdAndIsUsedOnFollowup() {
+        let app = launchApp(environment: ["MACHBOOST_UI_TEST_SMALL_CONTEXT": "1"])
+        let controls = app.buttons["Generation controls"]
+        XCTAssertTrue(controls.waitForExistence(timeout: 10))
+        focus(controls)
+        let automatic = app.checkBoxes["Summarize older turns automatically"]
+        if automatic.value as? Int != 1 { automatic.click() }
+        controls.click()
+        send("Fill context", in: app)
+        XCTAssertTrue(app.buttons["context-summary"].waitForExistence(timeout: 18))
+        send("Recall the release code", in: app)
+        XCTAssertTrue(app.staticTexts["Summary recall: 73."].waitForExistence(timeout: 10))
+    }
+
+    @MainActor
     func testMuseChatShowsReasoningControlsAndToolCalls() {
         let app = launchApp(environment: [
             "MACHBOOST_UI_TEST_MODEL": "muse-glimmer:30b"
