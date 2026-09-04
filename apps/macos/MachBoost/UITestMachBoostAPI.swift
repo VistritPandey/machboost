@@ -168,7 +168,7 @@ final class UITestMachBoostAPI: MachBoostAPIProtocol, @unchecked Sendable {
                     let isCancellationFixture = request.messages.last?.content
                         == "Stop this fixture response"
                     try await Task.sleep(
-                        for: .seconds(isCancellationFixture ? 15 : 5)
+                        for: isCancellationFixture ? .seconds(15) : .milliseconds(120)
                     )
                     if self.wasCancelled(request.requestID) {
                         continuation.yield(self.cancelledChatEvent(requestID: request.requestID))
