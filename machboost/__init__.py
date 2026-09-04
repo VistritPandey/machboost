@@ -1,4 +1,4 @@
-__version__ = "0.16.12"
+__version__ = "0.16.13"
 
 from .accelerator import Accelerator, AcceleratorResult, CalibrationResult
 from .bench import (
