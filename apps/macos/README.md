@@ -34,6 +34,8 @@ a separate MachBoost installation.
 - automatic conversation compaction before/after generation near a configurable
   threshold, manual summaries for short chats, inspectable saved summaries, and
   estimated context tokens displayed separately from measured request input
+- editable output and summary-threshold fields, no output ceiling by default,
+  and one-click restoration of generation defaults
 - Bonjour discovery and an automatic host pool that refreshes devices
   concurrently, scores model residency, RTT, replicas, active work, and queue
   depth, and can fail over before the first streamed output
