@@ -178,8 +178,11 @@ final class MachBoostUITests: XCTestCase {
         let controls = app.buttons["Generation controls"]
         XCTAssertTrue(controls.waitForExistence(timeout: 10))
         focus(controls)
-        let automatic = app.checkBoxes["Summarize older turns automatically"]
-        if automatic.value as? Int != 1 { automatic.click() }
+        let automatic = app.switches["Summarize older turns automatically"]
+        XCTAssertTrue(automatic.waitForExistence(timeout: 3))
+        if automatic.value as? String != "1" && automatic.value as? Int != 1 {
+            automatic.click()
+        }
         controls.click()
         send("Fill context", in: app)
         XCTAssertTrue(app.buttons["context-summary"].waitForExistence(timeout: 18))
