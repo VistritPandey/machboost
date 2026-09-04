@@ -132,6 +132,9 @@ chats. A successful summary replaces older turns in future requests without
 deleting them from history; click the summary indicator to inspect it. Interrupted,
 empty, or token-limited summaries leave the previous context unchanged and report
 an error. Summaries are model-generated and may omit details.
+Common credential shapes are redacted before summary inference and again before
+the summary is stored locally; this is defense in depth, not a guarantee that
+every possible secret format will be recognized.
 
 The Models view and chat model picker search the bundled catalog and local cache
 first, then query the public Hugging Face catalog for MLX repositories as the
