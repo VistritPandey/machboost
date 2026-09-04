@@ -22,6 +22,7 @@ private struct TeamHostRefreshResult: Sendable {
     let connected: TeamConnectResponse?
     let metrics: ServerMetrics?
     let roundTripSeconds: Double
+    let connectionIssue: TeamHostConnectionIssue?
     let error: String?
 }
 
@@ -230,6 +231,7 @@ final class AppState {
                 metrics: hostMetrics,
                 roundTripSeconds: Date().timeIntervalSince(started),
                 isOnline: true,
+                connectionIssue: nil,
                 lastError: nil,
                 updatedAt: .now
             )
@@ -1129,7 +1131,10 @@ final class AppState {
             mode: inferenceMode,
             serverIsRunning: serverIsRunning,
             onlineHostNames: onlineProfiles.map(\.hostName),
-            selectedOnlineName: selectedOnlineName
+            selectedOnlineName: selectedOnlineName,
+            remoteAuthenticationRequired: teamHostSnapshots.values.contains {
+                $0.connectionIssue == .authentication
+            }
         )
     }
 
@@ -1137,7 +1142,8 @@ final class AppState {
         mode: InferenceMode,
         serverIsRunning: Bool,
         onlineHostNames: [String],
-        selectedOnlineName: String?
+        selectedOnlineName: String?,
+        remoteAuthenticationRequired: Bool = false
     ) -> (destination: String, status: String) {
         guard mode == .team else {
             return (
@@ -1148,9 +1154,11 @@ final class AppState {
         guard !onlineHostNames.isEmpty else {
             return (
                 "This Mac",
-                serverIsRunning
-                    ? "Local fallback \u{00b7} remote unavailable"
-                    : "Remote unavailable"
+                remoteAuthenticationRequired
+                    ? "Local fallback \u{00b7} remote sign-in required"
+                    : serverIsRunning
+                        ? "Local fallback \u{00b7} remote unavailable"
+                        : "Remote unavailable"
             )
         }
         let destination: String
@@ -1232,6 +1240,7 @@ final class AppState {
                 connected: nil,
                 metrics: nil,
                 roundTripSeconds: 0,
+                connectionIssue: .authentication,
                 error: "Missing API key"
             )
         }
@@ -1261,6 +1270,7 @@ final class AppState {
                 connected: values.0,
                 metrics: values.1,
                 roundTripSeconds: Date().timeIntervalSince(started),
+                connectionIssue: nil,
                 error: nil
             )
         } catch {
@@ -1270,9 +1280,20 @@ final class AppState {
                 connected: nil,
                 metrics: nil,
                 roundTripSeconds: Date().timeIntervalSince(started),
+                connectionIssue: Self.connectionIssue(for: error),
                 error: error.localizedDescription
             )
         }
+    }
+
+    private nonisolated static func connectionIssue(
+        for error: Error
+    ) -> TeamHostConnectionIssue {
+        if case let MachBoostAPIError.server(status, _) = error,
+           status == 401 || status == 403 {
+            return .authentication
+        }
+        return .unavailable
     }
 
     private func applyTeamHostRefresh(_ result: TeamHostRefreshResult) {
@@ -1301,6 +1322,7 @@ final class AppState {
                     observed: result.roundTripSeconds
                 ),
                 isOnline: true,
+                connectionIssue: nil,
                 lastError: nil,
                 updatedAt: .now
             )
@@ -1312,6 +1334,7 @@ final class AppState {
                 metrics: teamHostSnapshots[profile.id]?.metrics,
                 roundTripSeconds: teamHostSnapshots[profile.id]?.roundTripSeconds ?? 0,
                 isOnline: false,
+                connectionIssue: result.connectionIssue,
                 lastError: result.error,
                 updatedAt: .now
             )
