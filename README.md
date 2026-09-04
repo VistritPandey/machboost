@@ -80,16 +80,16 @@ pip install -e ".[all]"
 Install the current CLI directly from its GitHub release tag:
 
 ```sh
-python3 -m pip install "machboost[mlx] @ git+https://github.com/VistritPandey/machboost.git@v0.16.12"
-python3 -m pip install "machboost[vision] @ git+https://github.com/VistritPandey/machboost.git@v0.16.12"
-python3 -m pip install "machboost[dflash] @ git+https://github.com/VistritPandey/machboost.git@v0.16.12"
+python3 -m pip install "machboost[mlx] @ git+https://github.com/VistritPandey/machboost.git@v0.16.13"
+python3 -m pip install "machboost[vision] @ git+https://github.com/VistritPandey/machboost.git@v0.16.13"
+python3 -m pip install "machboost[dflash] @ git+https://github.com/VistritPandey/machboost.git@v0.16.13"
 ```
 
 Update an existing install:
 
 ```sh
 python3 -m pip uninstall -y machboost
-python3 -m pip install "machboost[mlx] @ git+https://github.com/VistritPandey/machboost.git@v0.16.12"
+python3 -m pip install "machboost[mlx] @ git+https://github.com/VistritPandey/machboost.git@v0.16.13"
 machboost version
 ```
 
@@ -121,6 +121,17 @@ a developer API view, and a menu-bar controller. Chats and
 imported attachments remain local, model downloads always require confirmation,
 and closing the window leaves the selected models available until they expire,
 are unloaded, or MachBoost is quit.
+
+Chat generation controls show an estimated context-token count and fractional
+percentage, plus the last request's input-token count when reported by the
+backend. The estimate includes retained chat text, enabled instructions, tool
+schemas, and text attachment sizes; it is not an exact tokenizer measurement
+or an image-token count. Automatic summarization checks the configured threshold
+before the next request and after a reply. **Summarize Now** also works on short
+chats. A successful summary replaces older turns in future requests without
+deleting them from history; click the summary indicator to inspect it. Interrupted,
+empty, or token-limited summaries leave the previous context unchanged and report
+an error. Summaries are model-generated and may omit details.
 
 The Models view and chat model picker search the bundled catalog and local cache
 first, then query the public Hugging Face catalog for MLX repositories as the
@@ -270,7 +281,7 @@ MachBoost alias uses the native 4-bit MLX-VLM conversion and recommends at least
 32 GB unified memory. Higher-bit variants require more memory.
 
 ```sh
-python3 -m pip install "machboost[vision] @ git+https://github.com/VistritPandey/machboost.git@v0.16.12"
+python3 -m pip install "machboost[vision] @ git+https://github.com/VistritPandey/machboost.git@v0.16.13"
 machboost pull muse-glimmer:30b
 machboost run muse-glimmer:30b --think high --show-thinking --show-stats
 machboost run muse-glimmer:30b --image ./screenshot.png --think medium
