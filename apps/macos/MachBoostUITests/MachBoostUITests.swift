@@ -160,9 +160,9 @@ final class MachBoostUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Fixture response."].waitForExistence(timeout: 10))
         let controls = app.buttons["Generation controls"]
         focus(controls)
-        let usage = app.staticTexts["context-usage"]
+        let usage = app.descendants(matching: .any)["context-usage"]
         XCTAssertTrue(usage.waitForExistence(timeout: 3))
-        XCTAssertTrue(usage.label.contains("tokens"))
+        XCTAssertTrue("\(usage.label) \(usage.value ?? "")".contains("tokens"))
         let summarize = app.buttons["summarize-context"]
         XCTAssertTrue(summarize.isEnabled)
         summarize.click()
@@ -178,7 +178,7 @@ final class MachBoostUITests: XCTestCase {
         let controls = app.buttons["Generation controls"]
         XCTAssertTrue(controls.waitForExistence(timeout: 10))
         focus(controls)
-        let automatic = app.switches["Summarize older turns automatically"]
+        let automatic = app.descendants(matching: .any)["automatic-summary"]
         XCTAssertTrue(automatic.waitForExistence(timeout: 3))
         if automatic.value as? String != "1" && automatic.value as? Int != 1 {
             automatic.click()
