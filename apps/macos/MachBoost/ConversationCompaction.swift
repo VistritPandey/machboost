@@ -29,6 +29,16 @@ enum ConversationCompaction {
         min(95, max(70, value))
     }
 
+    static func resolvedOutputTokens(
+        configuredLimit: Int,
+        estimatedInputTokens: Int,
+        contextLength: Int
+    ) -> Int {
+        let remainingContext = max(1, max(1, contextLength) - max(0, estimatedInputTokens))
+        guard configuredLimit > 0 else { return remainingContext }
+        return min(configuredLimit, remainingContext)
+    }
+
     static func estimatedTokens(summary: String?, messages: [ChatMessage], additionalBytes: Int = 0) -> Int {
         let bytes = (summary?.utf8.count ?? 0) + max(0, additionalBytes)
             + messages.reduce(0) { $0 + $1.content.utf8.count + 24 }
