@@ -80,16 +80,16 @@ pip install -e ".[all]"
 Install the current CLI directly from its GitHub release tag:
 
 ```sh
-python3 -m pip install "machboost[mlx] @ git+https://github.com/VistritPandey/machboost.git@v0.16.11"
-python3 -m pip install "machboost[vision] @ git+https://github.com/VistritPandey/machboost.git@v0.16.11"
-python3 -m pip install "machboost[dflash] @ git+https://github.com/VistritPandey/machboost.git@v0.16.11"
+python3 -m pip install "machboost[mlx] @ git+https://github.com/VistritPandey/machboost.git@v0.16.12"
+python3 -m pip install "machboost[vision] @ git+https://github.com/VistritPandey/machboost.git@v0.16.12"
+python3 -m pip install "machboost[dflash] @ git+https://github.com/VistritPandey/machboost.git@v0.16.12"
 ```
 
 Update an existing install:
 
 ```sh
 python3 -m pip uninstall -y machboost
-python3 -m pip install "machboost[mlx] @ git+https://github.com/VistritPandey/machboost.git@v0.16.11"
+python3 -m pip install "machboost[mlx] @ git+https://github.com/VistritPandey/machboost.git@v0.16.12"
 machboost version
 ```
 
@@ -133,6 +133,11 @@ context limit, tokenizer response schema, and chat template. That metadata
 drives text, vision, reasoning, and tool capability labels for arbitrary local
 models, including compatible Qwen 3.x and DeepSeek variants; support does not
 depend on a model having a built-in MachBoost alias.
+
+Gemma 4 conversions that include Google's native `<|tool_call>` chat protocol
+are also available in Dev mode and through the OpenAI/Ollama-compatible tool
+APIs. MachBoost parses the model's structured calls and returns tool results to
+the same resident model for the final answer.
 
 Downloaded models can be loaded and compile-warmed explicitly from **Models**
 or **Server → Developer**. The Server view also makes the network boundary
@@ -265,7 +270,7 @@ MachBoost alias uses the native 4-bit MLX-VLM conversion and recommends at least
 32 GB unified memory. Higher-bit variants require more memory.
 
 ```sh
-python3 -m pip install "machboost[vision] @ git+https://github.com/VistritPandey/machboost.git@v0.16.11"
+python3 -m pip install "machboost[vision] @ git+https://github.com/VistritPandey/machboost.git@v0.16.12"
 machboost pull muse-glimmer:30b
 machboost run muse-glimmer:30b --think high --show-thinking --show-stats
 machboost run muse-glimmer:30b --image ./screenshot.png --think medium
