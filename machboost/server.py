@@ -5592,6 +5592,11 @@ _TOOL_CALL_TAG = re.compile(
     r"<tool_call\b(?P<attributes>[^>]*)>(?P<body>.*?)</tool_call>",
     flags=re.S | re.I,
 )
+_GEMMA_TOOL_CALL_TAG = re.compile(
+    r"<\|tool_call>\s*call:(?P<name>[A-Za-z_][\w.-]*)\s*"
+    r"(?P<arguments>\{.*?\})\s*<tool_call\|>",
+    flags=re.S | re.I,
+)
 _ATEM_CALLS_TAG = re.compile(
     r"<atem:function_calls>(?P<body>.*?)</atem:function_calls>",
     flags=re.S | re.I,
@@ -5659,6 +5664,149 @@ def _atem_value(raw: str) -> Any:
         return candidate
 
 
+class _GemmaValueParser:
+    """Parse Gemma's delimiter-safe tool argument notation."""
+
+    string_delimiter = '<|"|>'
+
+    def __init__(self, text: str) -> None:
+        self.text = text
+        self.index = 0
+
+    def parse(self) -> Any:
+        value = self._value()
+        self._whitespace()
+        if self.index != len(self.text):
+            raise ValueError("unexpected trailing Gemma tool arguments")
+        return value
+
+    def _value(self) -> Any:
+        self._whitespace()
+        if self.text.startswith(self.string_delimiter, self.index):
+            return self._delimited_string()
+        if self._current() == "{":
+            return self._object()
+        if self._current() == "[":
+            return self._array()
+        if self._current() == '"':
+            value, consumed = json.JSONDecoder().raw_decode(self.text[self.index :])
+            self.index += consumed
+            return value
+        return self._scalar()
+
+    def _object(self) -> dict[str, Any]:
+        self._consume("{")
+        result: dict[str, Any] = {}
+        self._whitespace()
+        if self._current() == "}":
+            self.index += 1
+            return result
+        while True:
+            key = self._key()
+            self._whitespace()
+            self._consume(":")
+            result[key] = self._value()
+            self._whitespace()
+            current = self._current()
+            if current == "}":
+                self.index += 1
+                return result
+            self._consume(",")
+
+    def _array(self) -> list[Any]:
+        self._consume("[")
+        result: list[Any] = []
+        self._whitespace()
+        if self._current() == "]":
+            self.index += 1
+            return result
+        while True:
+            result.append(self._value())
+            self._whitespace()
+            current = self._current()
+            if current == "]":
+                self.index += 1
+                return result
+            self._consume(",")
+
+    def _key(self) -> str:
+        self._whitespace()
+        if self.text.startswith(self.string_delimiter, self.index):
+            return self._delimited_string()
+        if self._current() == '"':
+            value, consumed = json.JSONDecoder().raw_decode(self.text[self.index :])
+            self.index += consumed
+            return str(value)
+        start = self.index
+        while self.index < len(self.text) and self.text[self.index] != ":":
+            self.index += 1
+        key = self.text[start : self.index].strip()
+        if not key:
+            raise ValueError("Gemma tool argument key is empty")
+        return key
+
+    def _delimited_string(self) -> str:
+        self.index += len(self.string_delimiter)
+        end = self.text.find(self.string_delimiter, self.index)
+        if end < 0:
+            raise ValueError("unterminated Gemma tool string")
+        value = self.text[self.index : end]
+        self.index = end + len(self.string_delimiter)
+        return value
+
+    def _scalar(self) -> Any:
+        start = self.index
+        while self.index < len(self.text) and self.text[self.index] not in ",]}":
+            self.index += 1
+        raw = self.text[start : self.index].strip()
+        if not raw:
+            raise ValueError("Gemma tool argument value is empty")
+        lowered = raw.lower()
+        if lowered == "true":
+            return True
+        if lowered == "false":
+            return False
+        if lowered in {"null", "none"}:
+            return None
+        try:
+            return int(raw)
+        except ValueError:
+            try:
+                return float(raw)
+            except ValueError:
+                return raw
+
+    def _current(self) -> str:
+        return self.text[self.index] if self.index < len(self.text) else ""
+
+    def _consume(self, expected: str) -> None:
+        self._whitespace()
+        if not self.text.startswith(expected, self.index):
+            raise ValueError(f"expected {expected!r} in Gemma tool arguments")
+        self.index += len(expected)
+
+    def _whitespace(self) -> None:
+        while self.index < len(self.text) and self.text[self.index].isspace():
+            self.index += 1
+
+
+def _gemma_tool_calls(raw: str) -> list[dict[str, Any]]:
+    calls: list[dict[str, Any]] = []
+    for match in _GEMMA_TOOL_CALL_TAG.finditer(raw):
+        try:
+            arguments = _GemmaValueParser(match.group("arguments")).parse()
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        if not isinstance(arguments, dict):
+            continue
+        call = _normalized_tool_call(
+            {"name": match.group("name"), "arguments": arguments}
+        )
+        if call is not None:
+            calls.append(call)
+    return calls
+
+
 def _atem_tool_calls(raw: str) -> list[dict[str, Any]]:
     calls: list[dict[str, Any]] = []
     for block in _ATEM_CALLS_TAG.finditer(raw):
@@ -5680,12 +5828,13 @@ def _atem_tool_calls(raw: str) -> list[dict[str, Any]]:
 def extract_tool_calls(text: str) -> tuple[str, list[dict[str, Any]]]:
     raw = str(text or "")
     tagged = list(_TOOL_CALL_TAG.finditer(raw))
+    gemma_tagged = list(_GEMMA_TOOL_CALL_TAG.finditer(raw))
     wrapper_names = re.findall(
         r"\bassistant\s+to\s*=\s*([A-Za-z_][\w.-]*)",
         raw,
         flags=re.I,
     )
-    calls = _atem_tool_calls(raw)
+    calls = [*_atem_tool_calls(raw), *_gemma_tool_calls(raw)]
 
     for index, match in enumerate(tagged):
         attributes = match.group("attributes") or ""
@@ -5708,7 +5857,7 @@ def extract_tool_calls(text: str) -> tuple[str, list[dict[str, Any]]]:
             calls.append(call)
 
     direct_payload = False
-    if not tagged and not calls:
+    if not tagged and not gemma_tagged and not calls:
         candidate = raw.strip()
         if candidate.startswith("```"):
             candidate = re.sub(r"^```(?:json)?\s*|\s*```$", "", candidate, flags=re.I)
@@ -5734,6 +5883,7 @@ def extract_tool_calls(text: str) -> tuple[str, list[dict[str, Any]]]:
         return "", calls
     content = _ATEM_CALLS_TAG.sub("", raw)
     content = _TOOL_CALL_TAG.sub("", content)
+    content = _GEMMA_TOOL_CALL_TAG.sub("", content)
     content = re.sub(
         r"<\|start\|>assistant(?:\s+to\s*=\s*[A-Za-z_][\w.-]*)?<\|message\|>",
         "",
@@ -5754,6 +5904,7 @@ def extract_tool_calls(text: str) -> tuple[str, list[dict[str, Any]]]:
         flags=re.I,
     )
     content = re.sub(r"<tool_call\b[^>]*(?:>.*)?$", "", content, flags=re.S | re.I)
+    content = re.sub(r"<\|tool_call>.*$", "", content, flags=re.S | re.I)
     content = re.sub(
         r"<(?:atem:)?(?:function_calls|invoke|parameter)\b[^>]*(?:>.*)?$",
         "",
