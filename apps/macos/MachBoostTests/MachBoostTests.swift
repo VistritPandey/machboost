@@ -131,6 +131,37 @@ final class MachBoostTests: XCTestCase {
         )
     }
 
+    func testHostRoutingUsesLocalAsEmergencyFallbackWhenRemotesAreOffline() {
+        XCTAssertFalse(
+            HostRoutingPolicy.shouldIncludeLocal(
+                includeLocalInPool: false,
+                prefersLocal: false,
+                hasOnlineRemote: true
+            )
+        )
+        XCTAssertTrue(
+            HostRoutingPolicy.shouldIncludeLocal(
+                includeLocalInPool: false,
+                prefersLocal: false,
+                hasOnlineRemote: false
+            )
+        )
+        XCTAssertTrue(
+            HostRoutingPolicy.shouldIncludeLocal(
+                includeLocalInPool: false,
+                prefersLocal: true,
+                hasOnlineRemote: true
+            )
+        )
+        XCTAssertTrue(
+            HostRoutingPolicy.shouldIncludeLocal(
+                includeLocalInPool: true,
+                prefersLocal: false,
+                hasOnlineRemote: true
+            )
+        )
+    }
+
     func testHostRoutingFailsOverOnlyBeforeVisibleOutput() {
         XCTAssertTrue(
             HostRoutingPolicy.canFailOver(
