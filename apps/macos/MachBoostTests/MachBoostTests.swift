@@ -31,6 +31,23 @@ final class MachBoostTests: XCTestCase {
         XCTAssertEqual(presentation.status, "Host pool (2)")
     }
 
+    @MainActor
+    func testInferencePresentationIdentifiesRemoteSignInFailure() {
+        let presentation = AppState.inferencePresentation(
+            mode: .team,
+            serverIsRunning: true,
+            onlineHostNames: [],
+            selectedOnlineName: nil,
+            remoteAuthenticationRequired: true
+        )
+
+        XCTAssertEqual(presentation.destination, "This Mac")
+        XCTAssertEqual(
+            presentation.status,
+            "Local fallback \u{00b7} remote sign-in required"
+        )
+    }
+
     func testCommunityCredentialStorePersistsUpdatesAndDeletesSecrets() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -51,6 +68,27 @@ final class MachBoostTests: XCTestCase {
         try store.delete(account: "lan-api-token")
         XCTAssertNil(store.value(account: "lan-api-token"))
         XCTAssertEqual(store.value(account: "provider-test"), "provider-secret")
+    }
+
+    func testCommunityCredentialStoreMigratesLegacySecretOnce() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = CommunityCredentialStore(root: root)
+        var legacyReads = 0
+
+        let migrated = store.value(account: "team-host") {
+            legacyReads += 1
+            return "legacy-token"
+        }
+        let restored = store.value(account: "team-host") {
+            legacyReads += 1
+            return "different-token"
+        }
+
+        XCTAssertEqual(migrated, "legacy-token")
+        XCTAssertEqual(restored, "legacy-token")
+        XCTAssertEqual(legacyReads, 1)
     }
 
     func testAppsGatewayOmitsCredentialsForOpenLocalDaemon() throws {
