@@ -835,6 +835,28 @@ public struct ChatRequest: Encodable, Sendable {
         case tools
         case machboost
     }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(requestID, forKey: .requestID)
+        try container.encode(model, forKey: .model)
+        try container.encode(messages, forKey: .messages)
+        try container.encode(context, forKey: .context)
+        try container.encode(stream, forKey: .stream)
+        try container.encode(keepAlive, forKey: .keepAlive)
+        try container.encode(options, forKey: .options)
+        try container.encodeIfPresent(workspaceID, forKey: .workspaceID)
+        try container.encodeIfPresent(workspaceTopK, forKey: .workspaceTopK)
+        try container.encodeIfPresent(workspaceMaxChars, forKey: .workspaceMaxChars)
+        if reasoningStrength == "off" {
+            // A nonempty "off" string is truthy in several native templates.
+            try container.encode(false, forKey: .reasoningStrength)
+        } else {
+            try container.encodeIfPresent(reasoningStrength, forKey: .reasoningStrength)
+        }
+        try container.encodeIfPresent(tools, forKey: .tools)
+        try container.encodeIfPresent(machboost, forKey: .machboost)
+    }
 }
 
 public struct ChatEvent: Decodable, Sendable {
