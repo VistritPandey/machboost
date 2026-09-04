@@ -58,8 +58,11 @@ struct ChatView: View {
     @State private var workspaceChangesTask: Task<Void, Never>?
     @State private var isPreparingCodingPrefix = false
     @State private var codingPrefixRequestID: String?
+    @State private var maxTokensDraft = ""
+    @State private var summaryThresholdDraft = "90"
     @FocusState private var composerIsFocused: Bool
-    @AppStorage("machboost.chat.maxTokens") private var maxTokens = 512
+    @AppStorage("machboost.chat.maxTokens") private var maxTokens = 0
+    @AppStorage("machboost.chat.optionalOutputLimitMigrated") private var optionalOutputLimitMigrated = false
     @AppStorage("machboost.chat.temperature") private var temperature = 0.2
     @AppStorage("machboost.chat.reasoningStrength") private var reasoningStrength = "off"
     @AppStorage("machboost.chat.extensionToolsEnabled") private var extensionToolsEnabled = false
@@ -139,7 +142,7 @@ struct ChatView: View {
             Text("MachBoost will approve every repository tool automatically. The model still cannot access files outside the selected repository.")
         }
         .onAppear {
-            maxTokens = ConversationCompaction.clampedMaxTokens(maxTokens)
+            migrateOptionalOutputLimit()
             summaryThreshold = ConversationCompaction.clampedThreshold(summaryThreshold)
             selectAvailableModelIfNeeded()
             selectAvailableProviderIfNeeded()
@@ -608,9 +611,16 @@ struct ChatView: View {
                 }
             }
             Divider()
-            Stepper(value: $maxTokens, in: 32...4_096, step: 32) {
-                LabeledContent("Maximum tokens", value: "\(maxTokens)")
+            LabeledContent("Maximum output tokens") {
+                TextField("No limit", text: $maxTokensDraft)
+                    .multilineTextAlignment(.trailing)
+                    .font(.body.monospacedDigit())
+                    .frame(width: 96)
+                    .onSubmit(commitGenerationControlDrafts)
             }
+            Text("Leave blank to stop at the model's end token or the context-window boundary.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 6) {
                 LabeledContent(
                     "Temperature",
@@ -657,8 +667,16 @@ struct ChatView: View {
             Toggle("Summarize older turns automatically", isOn: $autoSummarize)
                 .accessibilityIdentifier("automatic-summary")
             if autoSummarize {
-                Stepper(value: $summaryThreshold, in: 70...95, step: 5) {
-                    LabeledContent("Summarize at", value: "\(summaryThreshold)%")
+                LabeledContent("Summarize at") {
+                    HStack(spacing: 4) {
+                        TextField("90", text: $summaryThresholdDraft)
+                            .multilineTextAlignment(.trailing)
+                            .font(.body.monospacedDigit())
+                            .frame(width: 48)
+                            .onSubmit(commitGenerationControlDrafts)
+                        Text("%")
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
             Button {
@@ -668,10 +686,19 @@ struct ChatView: View {
             }
             .accessibilityIdentifier("summarize-context")
             .disabled(isGenerating || manualCompactionCandidates.isEmpty)
+            Divider()
+            Button {
+                resetGenerationControls()
+            } label: {
+                Label("Reset All to Defaults", systemImage: "arrow.counterclockwise")
+            }
+            .accessibilityIdentifier("reset-generation-defaults")
         }
         .formStyle(.grouped)
-        .frame(width: 300)
+        .frame(width: 340)
         .padding(.vertical, 6)
+        .onAppear(perform: synchronizeGenerationControlDrafts)
+        .onDisappear(perform: commitGenerationControlDrafts)
     }
 
     private func routeMenu(compact: Bool) -> some View {
@@ -1711,7 +1738,7 @@ struct ChatView: View {
                         .map(\.importedPath)
                     : [],
                 options: .init(
-                    maxTokens: maxTokens,
+                    maxTokens: resolvedMaxOutputTokens,
                     temperature: temperature,
                     // Every reasoning, tool, and final-answer round extends the
                     // same conversation prefix. Changing this key discards the
@@ -2106,6 +2133,14 @@ struct ChatView: View {
 
     private var contextWindow: Int { max(1, selectedModel?.contextLength ?? 32_768) }
 
+    private var resolvedMaxOutputTokens: Int {
+        ConversationCompaction.resolvedOutputTokens(
+            configuredLimit: maxTokens,
+            estimatedInputTokens: estimatedContextTokens,
+            contextLength: contextWindow
+        )
+    }
+
     private var estimatedContextTokens: Int {
         var additionalBytes = appState.skills.filter(\.enabled).reduce(0) {
             $0 + $1.instructions.utf8.count + $1.name.utf8.count + 24
@@ -2136,6 +2171,43 @@ struct ChatView: View {
             messages: effectiveContextMessages,
             keepRecent: 0
         )
+    }
+
+    private func migrateOptionalOutputLimit() {
+        guard !optionalOutputLimitMigrated else {
+            maxTokens = max(0, maxTokens)
+            return
+        }
+        // 512 was the old hard-coded default. Preserve any deliberate custom
+        // limit while removing the cap for installations that never changed it.
+        if maxTokens == 512 { maxTokens = 0 }
+        maxTokens = max(0, maxTokens)
+        optionalOutputLimitMigrated = true
+    }
+
+    private func synchronizeGenerationControlDrafts() {
+        maxTokensDraft = maxTokens > 0 ? String(maxTokens) : ""
+        summaryThresholdDraft = String(summaryThreshold)
+    }
+
+    private func commitGenerationControlDrafts() {
+        let outputText = maxTokensDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        maxTokens = outputText.isEmpty ? 0 : max(1, Int(outputText) ?? maxTokens)
+        summaryThreshold = ConversationCompaction.clampedThreshold(
+            Int(summaryThresholdDraft.trimmingCharacters(in: .whitespacesAndNewlines))
+                ?? summaryThreshold
+        )
+        synchronizeGenerationControlDrafts()
+    }
+
+    private func resetGenerationControls() {
+        maxTokens = 0
+        temperature = 0.2
+        reasoningStrength = "off"
+        showReasoning = true
+        autoSummarize = true
+        summaryThreshold = 90
+        synchronizeGenerationControlDrafts()
     }
 
     private func summarizeNow() {
