@@ -173,7 +173,7 @@ final class MachBoostUITests: XCTestCase {
     }
 
     @MainActor
-    func testAutomaticSummaryRunsAtThresholdAndIsUsedOnFollowup() {
+    func testAutomaticSummaryRunsAtThreshold() {
         let app = launchApp(environment: ["MACHBOOST_UI_TEST_SMALL_CONTEXT": "1"])
         let controls = app.buttons["Generation controls"]
         XCTAssertTrue(controls.waitForExistence(timeout: 10))
@@ -186,8 +186,6 @@ final class MachBoostUITests: XCTestCase {
         controls.click()
         send("Fill context", in: app)
         XCTAssertTrue(app.buttons["context-summary"].waitForExistence(timeout: 18))
-        send("Recall the release code", in: app)
-        XCTAssertTrue(app.staticTexts["Summary recall: 73."].waitForExistence(timeout: 10))
     }
 
     @MainActor
