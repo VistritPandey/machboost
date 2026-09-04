@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "machboost"
-version = "0.16.9"
+version = "0.16.10"
 description = "Resident local inference server with conditional text and visual acceleration."
 readme = "README.md"
 requires-python = ">=3.10"
