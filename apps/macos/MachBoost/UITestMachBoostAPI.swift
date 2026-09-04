@@ -378,7 +378,8 @@ final class UITestMachBoostAPI: MachBoostAPIProtocol, @unchecked Sendable {
             downloadSizeGB: size,
             diskSizeGB: cached ? size : nil,
             minimumMemoryGB: memory,
-            contextLength: contextLength,
+            contextLength: ProcessInfo.processInfo.environment["MACHBOOST_UI_TEST_SMALL_CONTEXT"] == "1"
+                ? 1_024 : contextLength,
             sourceRepository: sourceRepository,
             support: "ready",
             supportReason: "UI automation fixture"
@@ -454,6 +455,17 @@ final class UITestMachBoostAPI: MachBoostAPIProtocol, @unchecked Sendable {
         for request: ChatRequest,
         requestNumber: Int
     ) -> String {
+        if request.requestID.hasPrefix("summary-") {
+            return "Release code: 73. Deployment requires approval."
+        }
+        if request.messages.last?.content == "Recall the release code" {
+            return request.messages.contains {
+                $0.role == "system" && $0.content.contains("Release code: 73")
+            } ? "Summary recall: 73." : "SUMMARY MISSING"
+        }
+        if request.messages.last?.content == "Fill context" {
+            return String(repeating: "Release code 73 requires deployment approval. ", count: 60)
+        }
         if request.messages.last?.content == "Show a long Markdown response" {
             let lines = (1...18).map {
                 "- Check \($0): validated the repository path and retained its citation."
