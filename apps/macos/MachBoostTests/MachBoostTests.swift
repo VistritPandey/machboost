@@ -5,6 +5,32 @@ import XCTest
 @testable import MachBoost
 
 final class MachBoostTests: XCTestCase {
+    @MainActor
+    func testInferencePresentationSeparatesRemoteFailureFromLocalDestination() {
+        let presentation = AppState.inferencePresentation(
+            mode: .team,
+            serverIsRunning: true,
+            onlineHostNames: [],
+            selectedOnlineName: nil
+        )
+
+        XCTAssertEqual(presentation.destination, "This Mac")
+        XCTAssertEqual(presentation.status, "Local fallback \u{00b7} remote unavailable")
+    }
+
+    @MainActor
+    func testInferencePresentationCountsOnlyOnlineHosts() {
+        let presentation = AppState.inferencePresentation(
+            mode: .team,
+            serverIsRunning: true,
+            onlineHostNames: ["Studio", "Build Mac"],
+            selectedOnlineName: "Studio"
+        )
+
+        XCTAssertEqual(presentation.destination, "Host pool (2)")
+        XCTAssertEqual(presentation.status, "Host pool (2)")
+    }
+
     func testCommunityCredentialStorePersistsUpdatesAndDeletesSecrets() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
