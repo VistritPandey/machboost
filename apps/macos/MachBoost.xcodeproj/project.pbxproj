@@ -12,9 +12,11 @@
 		0BB1BAC9946E953370C4F975 /* MachBoostAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6AB089EC757DC3AE6A41F230 /* MachBoostAPI.swift */; };
 		1C9E4E6E69E7F0F84744660E /* UpdateController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C427B3847622D628B344F16 /* UpdateController.swift */; };
 		27E688AF9676E42DED5E32D6 /* PersistenceModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = E17FDB86433150ABA6AF28AD /* PersistenceModels.swift */; };
+		28A3C330430A225E9D3C74C5 /* ConversationCompactionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8109685D122E36CB13F3D759 /* ConversationCompactionTests.swift */; };
 		2AE014D9F9C0E3D500A7EF6C /* UITestMachBoostAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48709DA45E2A1AFBF0DCD64A /* UITestMachBoostAPI.swift */; };
 		2D01771AFB3EB6C6AAFE9E8C /* ExtensionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA086D3518F155AACDAE9AB9 /* ExtensionsView.swift */; };
 		30B2BB9AEE8AFDD0B4CEBBBA /* ConnectionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CBD9A214BE09A2CA78F95549 /* ConnectionsView.swift */; };
+		364C3919C6C88D5676D719CF /* ConversationCompaction.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB081B1B62443D267C6870D1 /* ConversationCompaction.swift */; };
 		3746FD87157D34B034B053C8 /* MachBoostHostDiscovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1710768B3904362005E5F087 /* MachBoostHostDiscovery.swift */; };
 		3D12F0E0FE2E28C6A5468B14 /* GenerationTurnMetrics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 260C7716A7D19DA6CD1CCADE /* GenerationTurnMetrics.swift */; };
 		4850300E156305AF616FE930 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = E284163CFFA3CC2C71B3C1CC /* Sparkle */; };
@@ -110,6 +112,7 @@
 		6D3E0E38EC91A702C4A3F7BB /* MachBoostTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MachBoostTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		714090FF416A6EA959EEC39B /* MachBoostApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MachBoostApp.swift; sourceTree = "<group>"; };
 		80E5D278800F3B196C7595E2 /* CodingWorkspace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodingWorkspace.swift; sourceTree = "<group>"; };
+		8109685D122E36CB13F3D759 /* ConversationCompactionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationCompactionTests.swift; sourceTree = "<group>"; };
 		84185F3311F3E768BE3347C3 /* MachBoostPersistence.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = MachBoostPersistence.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		87B97748332FB15E03C019A8 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		880BA16ED1FA2BE113A59AD6 /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
@@ -118,6 +121,7 @@
 		9AE21F9C8B888A139F3A8B1B /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A31E8B16876F4F8C49D2AB38 /* DaemonManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DaemonManager.swift; sourceTree = "<group>"; };
 		A8F16CEE5C06B74EBF5897BF /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
+		AB081B1B62443D267C6870D1 /* ConversationCompaction.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationCompaction.swift; sourceTree = "<group>"; };
 		B015F7E4554CB7BDFD22B814 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		B4E3E80C4F320139BF2EB1C4 /* MachBoostUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MachBoostUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		B5C13DB7C6E6AF6223311FA2 /* MachBoostUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MachBoostUITests.swift; sourceTree = "<group>"; };
@@ -165,6 +169,7 @@
 		3A2359EC92D6AAEEB5BE92AA /* MachBoostTests */ = {
 			isa = PBXGroup;
 			children = (
+				8109685D122E36CB13F3D759 /* ConversationCompactionTests.swift */,
 				10ECC494BAAC1C4D1DDC8EED /* MachBoostTests.swift */,
 			);
 			path = MachBoostTests;
@@ -179,6 +184,7 @@
 				880BA16ED1FA2BE113A59AD6 /* ChatView.swift */,
 				80E5D278800F3B196C7595E2 /* CodingWorkspace.swift */,
 				CBD9A214BE09A2CA78F95549 /* ConnectionsView.swift */,
+				AB081B1B62443D267C6870D1 /* ConversationCompaction.swift */,
 				A31E8B16876F4F8C49D2AB38 /* DaemonManager.swift */,
 				EE8900B13B2CE90C7E32FF10 /* DomainModels.swift */,
 				FA086D3518F155AACDAE9AB9 /* ExtensionsView.swift */,
@@ -416,6 +422,7 @@
 				A3ACD221FDF66A145D5980CF /* ChatView.swift in Sources */,
 				A1E629B42E54BCE71D379C2A /* CodingWorkspace.swift in Sources */,
 				30B2BB9AEE8AFDD0B4CEBBBA /* ConnectionsView.swift in Sources */,
+				364C3919C6C88D5676D719CF /* ConversationCompaction.swift in Sources */,
 				B13EB86E24A994C300C7858C /* DaemonManager.swift in Sources */,
 				F3A9FF23F0DBCABCEC4463E9 /* DomainModels.swift in Sources */,
 				93BC91102396CE7A20462363 /* ExtensionTools.swift in Sources */,
@@ -449,6 +456,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				28A3C330430A225E9D3C74C5 /* ConversationCompactionTests.swift in Sources */,
 				0987C108B164890D8BC63A27 /* MachBoostTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -558,7 +566,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 16012;
+				CURRENT_PROJECT_VERSION = 16013;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = "";
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -575,7 +583,7 @@
 				GENERATE_INFOPLIST_FILE = NO;
 				MACHBOOST_REPOSITORY = machboost/machboost;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 0.16.12;
+				MARKETING_VERSION = 0.16.13;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -663,7 +671,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 16012;
+				CURRENT_PROJECT_VERSION = 16013;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = "";
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -686,7 +694,7 @@
 				GENERATE_INFOPLIST_FILE = NO;
 				MACHBOOST_REPOSITORY = machboost/machboost;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 0.16.12;
+				MARKETING_VERSION = 0.16.13;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
