@@ -37,6 +37,11 @@ struct TeamHostProfile: Codable, Identifiable, Equatable, Sendable {
     var connectedAt: Date
 }
 
+enum TeamHostConnectionIssue: Equatable, Sendable {
+    case authentication
+    case unavailable
+}
+
 struct TeamHostSnapshot: Identifiable, Sendable {
     let profile: TeamHostProfile
     var catalog: [CatalogModel]
@@ -44,6 +49,7 @@ struct TeamHostSnapshot: Identifiable, Sendable {
     var metrics: ServerMetrics?
     var roundTripSeconds: Double = 0
     var isOnline: Bool
+    var connectionIssue: TeamHostConnectionIssue?
     var lastError: String?
     var updatedAt: Date
 
