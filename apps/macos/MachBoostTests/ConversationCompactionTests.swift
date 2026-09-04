@@ -135,6 +135,18 @@ final class ConversationCompactionTests: XCTestCase {
         XCTAssertTrue(transcript.contains("succeeded"))
     }
 
+    func testSummaryRedactsCredentialShapesBeforeAndAfterInference() throws {
+        let input = "Authorization: Bearer secret-token API_KEY=sk_abcdefgh1234 team=mbk_abcdefgh1234"
+        let redacted = ConversationCompaction.redactSecrets(input)
+        XCTAssertFalse(redacted.contains("secret-token"))
+        XCTAssertFalse(redacted.contains("sk_abcdefgh1234"))
+        XCTAssertFalse(redacted.contains("mbk_abcdefgh1234"))
+
+        var stream = ConversationSummaryStream()
+        try stream.absorb(event(content: "Keep API key: hf_abcdefghijkl", done: true))
+        XCTAssertEqual(try stream.result(), "Keep API key: [REDACTED]")
+    }
+
     func testSavedSummaryRetainsHistoryButExcludesOldTurnsFromContext() throws {
         let schema = Schema([Conversation.self, ChatMessage.self, ChatAttachment.self])
         let container = try ModelContainer(for: schema, configurations: .init(schema: schema, isStoredInMemoryOnly: true))
