@@ -126,7 +126,11 @@ Chat generation controls show an estimated context-token count and fractional
 percentage, plus the last request's input-token count when reported by the
 backend. The estimate includes retained chat text, enabled instructions, tool
 schemas, and text attachment sizes; it is not an exact tokenizer measurement
-or an image-token count. Automatic summarization checks the configured threshold
+or an image-token count. Maximum output tokens and the summary threshold are
+editable numeric fields. The output field is blank by default, which lets the
+model run until its end token or the remaining context boundary; a typed value
+sets a hard ceiling. **Reset All to Defaults** restores these generation settings.
+Automatic summarization checks the configured threshold
 before the next request and after a reply. **Summarize Now** also works on short
 chats. A successful summary replaces older turns in future requests without
 deleting them from history; click the summary indicator to inspect it. Interrupted,
