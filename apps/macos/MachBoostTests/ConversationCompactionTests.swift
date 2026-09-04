@@ -24,6 +24,36 @@ final class ConversationCompactionTests: XCTestCase {
         ))
     }
 
+    func testBlankOutputLimitUsesRemainingContext() {
+        XCTAssertEqual(
+            ConversationCompaction.resolvedOutputTokens(
+                configuredLimit: 0,
+                estimatedInputTokens: 1_250,
+                contextLength: 8_192
+            ),
+            6_942
+        )
+    }
+
+    func testExplicitOutputLimitIsAContextSafeCeiling() {
+        XCTAssertEqual(
+            ConversationCompaction.resolvedOutputTokens(
+                configuredLimit: 512,
+                estimatedInputTokens: 1_250,
+                contextLength: 8_192
+            ),
+            512
+        )
+        XCTAssertEqual(
+            ConversationCompaction.resolvedOutputTokens(
+                configuredLimit: 4_096,
+                estimatedInputTokens: 8_000,
+                contextLength: 8_192
+            ),
+            192
+        )
+    }
+
     func testManualSummaryAcceptsSingleCompletedExchange() {
         let messages = exchange("hi", "hello")
         XCTAssertEqual(ConversationCompaction.candidates(messages: messages, keepRecent: 0).count, 2)
