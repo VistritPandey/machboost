@@ -50,6 +50,7 @@ struct ChatView: View {
     @StateObject private var toolApproval = ToolApprovalCoordinator()
     @State private var pendingPermissionMode: CodingPermissionMode?
     @State private var isCompactingContext = false
+    @State private var showsContextSummary = false
     @State private var showsWorkspaceChanges = false
     @State private var workspaceChangeScope = WorkspaceChangeScope.conversation
     @State private var workspaceChanges = WorkspaceChangeSet.empty
@@ -639,22 +640,32 @@ struct ChatView: View {
                 LabeledContent("Context window", value: contextLength.formatted())
             }
             Divider()
+            LabeledContent("Estimated context") {
+                Text(ConversationCompaction.usageLabel(
+                    tokens: estimatedContextTokens,
+                    contextLength: contextWindow
+                ))
+                .monospacedDigit()
+                .accessibilityIdentifier("context-usage")
+            }
+            if let promptTokens = effectiveContextMessages.last(where: {
+                $0.role == .assistant && $0.promptTokens != nil
+            })?.promptTokens {
+                LabeledContent("Last request input", value: "\(promptTokens.formatted()) tokens")
+            }
             Toggle("Summarize older turns automatically", isOn: $autoSummarize)
             if autoSummarize {
                 Stepper(value: $summaryThreshold, in: 70...95, step: 5) {
                     LabeledContent("Summarize at", value: "\(summaryThreshold)%")
                 }
-                LabeledContent(
-                    "Estimated use",
-                    value: contextUsageRatio.formatted(.percent.precision(.fractionLength(0)))
-                )
             }
             Button {
                 summarizeNow()
             } label: {
-                Label("Summarize Now", systemImage: "text.append")
+                Label(isCompactingContext ? "Summarizing..." : "Summarize Now", systemImage: "text.append")
             }
-            .disabled(isGenerating || compactionCandidates.isEmpty)
+            .accessibilityIdentifier("summarize-context")
+            .disabled(isGenerating || manualCompactionCandidates.isEmpty)
         }
         .formStyle(.grouped)
         .frame(width: 300)
@@ -869,10 +880,14 @@ struct ChatView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
                     if let summaryUpdatedAt = conversation.summaryUpdatedAt {
-                        Label(
-                            "Context summarized \(summaryUpdatedAt.formatted(date: .omitted, time: .shortened))",
-                            systemImage: "text.append"
-                        )
+                        Button { showsContextSummary = true } label: {
+                            Label(
+                                "Context summarized \(summaryUpdatedAt.formatted(date: .omitted, time: .shortened))",
+                                systemImage: "text.append"
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("context-summary")
                         .font(.caption)
                         .foregroundStyle(.green)
                         .padding(.horizontal, 8)
@@ -880,6 +895,15 @@ struct ChatView: View {
                         .background(Color.green.opacity(0.1))
                         .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                         .help("Older messages remain in chat history but the model receives this summary instead")
+                        .popover(isPresented: $showsContextSummary) {
+                            ScrollView {
+                                Text(conversation.contextSummary ?? "")
+                                    .textSelection(.enabled)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(16)
+                            }
+                            .frame(width: 440, height: 320)
+                        }
                     }
                     ForEach(conversation.orderedAttachments) { attachment in
                         HStack(spacing: 6) {
@@ -1553,11 +1577,16 @@ struct ChatView: View {
         let codingActive = ((codingMode && codingSessionAvailable) || uiTestCodingFixtureEnabled)
             && workspace != nil
         generationTask = Task { @MainActor in
+            var replyCompleted = false
             do {
                 try? await appState.reportTeamPresence(
                     workspace: workspace,
                     model: conversation.model
                 )
+                if autoSummarize {
+                    try await compactContextIfNeeded(force: false, excluding: user)
+                }
+                try Task.checkCancellation()
                 let messages = try requestMessages(
                     currentUser: user,
                     excluding: assistant,
@@ -1571,13 +1600,14 @@ struct ChatView: View {
                     workspace: workspace,
                     codingActive: codingActive
                 )
+                replyCompleted = true
                 try? modelContext.save()
                 if autoSummarize {
-                    await compactContextIfNeeded(force: false)
+                    try await compactContextIfNeeded(force: false)
                 }
             } catch {
                 if isCancellation(error) {
-                    assistant.wasCancelled = true
+                    if !replyCompleted { assistant.wasCancelled = true }
                 } else {
                     if assistant.content.isEmpty,
                        assistant.reasoningContent?.isEmpty != false,
@@ -1599,7 +1629,7 @@ struct ChatView: View {
     private func stop() {
         guard let activeRequestID else { return }
         resolveToolApproval(false)
-        activeAssistant?.wasCancelled = true
+        if !isCompactingContext { activeAssistant?.wasCancelled = true }
         try? modelContext.save()
         Task { @MainActor in
             _ = await appState.cancelInference(requestID: activeRequestID)
@@ -2072,115 +2102,118 @@ struct ChatView: View {
         return String(decoding: data, as: UTF8.self)
     }
 
-    private var contextUsageRatio: Double {
-        let capacity = max(1, (selectedModel?.contextLength ?? 32_768) - maxTokens)
-        return min(
-            1,
-            Double(
-                ConversationCompaction.estimatedTokens(
-                    summary: conversation.contextSummary,
-                    messages: effectiveContextMessages
-                )
-            ) / Double(capacity)
+    private var contextWindow: Int { max(1, selectedModel?.contextLength ?? 32_768) }
+
+    private var estimatedContextTokens: Int {
+        var additionalBytes = appState.skills.filter(\.enabled).reduce(0) {
+            $0 + $1.instructions.utf8.count + $1.name.utf8.count + 24
+        }
+        if codingSessionAvailable {
+            additionalBytes += CodingWorkspace.systemPrompt(for: permissionMode).utf8.count
+            additionalBytes += (try? JSONEncoder().encode(CodingWorkspace.tools(for: permissionMode)).count) ?? 0
+        }
+        if extensionToolsEnabled && appState.mcpServers.contains(where: \.enabled) {
+            additionalBytes += (try? JSONEncoder().encode(ExtensionTools.definitions).count) ?? 0
+        }
+        additionalBytes += Int(min(200_000, conversation.orderedAttachments
+            .filter { $0.kind == .text }
+            .reduce(Int64(0)) { $0 + max(0, $1.byteCount) }))
+        return ConversationCompaction.estimatedTokens(
+            summary: conversation.contextSummary,
+            messages: effectiveContextMessages,
+            additionalBytes: additionalBytes
         )
     }
 
     private var effectiveContextMessages: [ChatMessage] {
-        conversation.orderedMessages.filter { message in
-            conversation.summarizedThrough.map({ message.createdAt > $0 }) ?? true
-        }
+        ConversationCompaction.activeMessages(in: conversation)
     }
 
-    private var compactionCandidates: [ChatMessage] {
+    private var manualCompactionCandidates: [ChatMessage] {
         ConversationCompaction.candidates(
             messages: effectiveContextMessages,
-            keepRecent: 8
+            keepRecent: 0
         )
     }
 
     private func summarizeNow() {
-        guard !isGenerating, !compactionCandidates.isEmpty else { return }
+        guard !isGenerating, !manualCompactionCandidates.isEmpty else { return }
+        cancelCodingPrefixPreparation()
+        activeRequestID = "summary-\(UUID().uuidString.lowercased())"
         generationTask = Task { @MainActor in
-            await compactContextIfNeeded(force: true)
+            do {
+                try await compactContextIfNeeded(force: true)
+            } catch {
+                if !isCancellation(error) { appState.presentedError = error.localizedDescription }
+            }
             activeRequestID = nil
             generationTask = nil
         }
     }
 
-    private func compactContextIfNeeded(force: Bool) async {
-        let estimatedTokens = ConversationCompaction.estimatedTokens(
-            summary: conversation.contextSummary,
-            messages: effectiveContextMessages
-        )
+    private func compactContextIfNeeded(force: Bool, excluding currentUser: ChatMessage? = nil) async throws {
+        try Task.checkCancellation()
         guard force || ConversationCompaction.shouldCompact(
-            estimatedTokens: estimatedTokens,
-            contextLength: selectedModel?.contextLength ?? 32_768,
+            estimatedTokens: estimatedContextTokens,
+            contextLength: contextWindow,
             reservedOutputTokens: maxTokens,
             thresholdPercent: summaryThreshold
         ) else { return }
-        let candidates = compactionCandidates
+        let eligible = effectiveContextMessages.filter { $0.id != currentUser?.id }
+        var candidates = ConversationCompaction.candidates(
+            messages: eligible, keepRecent: force ? 0 : 2
+        )
+        if candidates.isEmpty && !force {
+            candidates = ConversationCompaction.candidates(messages: eligible, keepRecent: 0)
+        }
         guard let cutoff = candidates.last?.createdAt else { return }
 
         let requestID = "summary-\(UUID().uuidString.lowercased())"
         activeRequestID = requestID
         isCompactingContext = true
-        defer { isCompactingContext = false }
+        defer {
+            isCompactingContext = false
+            _ = appState.consumeInferenceRoute(requestID: requestID)
+        }
 
-        let transcript = candidates.map {
-            "\($0.role.rawValue.uppercased()):\n\($0.content)"
-        }.joined(separator: "\n\n")
-        let prior = conversation.contextSummary.map {
-            "Existing summary:\n\($0)\n\n"
-        } ?? ""
-        let request = ChatRequest(
+        let request = ConversationCompaction.request(
             requestID: requestID,
             model: conversation.model,
-            messages: [
-                APIChatMessage(
-                    role: MessageRole.system.rawValue,
-                    content: """
-                    Compress the supplied conversation into durable working context. Preserve decisions, constraints, file paths, APIs, errors, completed work, unresolved questions, and exact identifiers that future turns may need. Remove repetition and conversational filler. Return only the summary.
-                    """
-                ),
-                APIChatMessage(
-                    role: MessageRole.user.rawValue,
-                    content: prior + transcript
-                ),
-            ],
-            context: [],
-            options: .init(
-                maxTokens: min(
-                    1_024,
-                    ConversationCompaction.clampedMaxTokens(maxTokens)
-                ),
-                temperature: 0,
-                affinityKey: conversationAffinityKey
-            ),
-            reasoningStrength: selectedModelRequiresReasoning ? "low" : nil,
-            machboost: requestExtensions()
+            transcript: ConversationCompaction.transcript(candidates),
+            priorSummary: conversation.contextSummary,
+            requiresReasoning: selectedModelRequiresReasoning,
+            extensions: requestExtensions(memory: "off")
         )
 
-        var summary = ""
+        var stream = ConversationSummaryStream()
         do {
             for try await event in try appState.streamChat(
                 request,
                 preferredHostID: conversation.preferredInferenceHostID
             ) {
-                if let error = event.error { throw MachBoostAPIError.stream(error) }
-                summary += event.message?.content ?? ""
+                try Task.checkCancellation()
+                try stream.absorb(event)
             }
-            _ = appState.consumeInferenceRoute(requestID: requestID)
-            summary = summary.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !summary.isEmpty else { return }
+            try Task.checkCancellation()
+            let summary = try stream.result()
+            let previousSummary = conversation.contextSummary
+            let previousCutoff = conversation.summarizedThrough
+            let previousDate = conversation.summaryUpdatedAt
             conversation.contextSummary = summary
             conversation.summarizedThrough = cutoff
             conversation.summaryUpdatedAt = .now
             conversation.updatedAt = .now
-            try? modelContext.save()
-        } catch is CancellationError {
-            return
+            do {
+                try modelContext.save()
+            } catch {
+                conversation.contextSummary = previousSummary
+                conversation.summarizedThrough = previousCutoff
+                conversation.summaryUpdatedAt = previousDate
+                throw error
+            }
         } catch {
-            appState.presentedError = "The reply completed, but context summarization failed: \(error.localizedDescription)"
+            if isCancellation(error) { throw CancellationError() }
+            throw MachBoostAPIError.stream("Context summarization failed: \(error.localizedDescription)")
         }
     }
 
@@ -2202,6 +2235,7 @@ struct ChatView: View {
     }
 
     private func regenerate(text: String, cutoff: Date) {
+        ConversationCompaction.invalidateSummary(in: conversation, editingFrom: cutoff)
         let replacedMessages = conversation.messages.filter { $0.createdAt >= cutoff }
         conversation.messages.removeAll { $0.createdAt >= cutoff }
         for message in replacedMessages {
@@ -2215,6 +2249,7 @@ struct ChatView: View {
         guard message.role == .user, !isGenerating else { return }
         draft = message.content
         let cutoff = message.createdAt
+        ConversationCompaction.invalidateSummary(in: conversation, editingFrom: cutoff)
         for candidate in conversation.messages where candidate.createdAt >= cutoff {
             modelContext.delete(candidate)
         }
@@ -2257,46 +2292,6 @@ struct ChatView: View {
         }
         .font(.caption)
         .foregroundStyle(.secondary)
-    }
-}
-
-enum ConversationCompaction {
-    static func clampedMaxTokens(_ value: Int) -> Int {
-        min(4_096, max(32, value))
-    }
-
-    static func clampedThreshold(_ value: Int) -> Int {
-        min(95, max(70, value))
-    }
-
-    static func estimatedTokens(summary: String?, messages: [ChatMessage]) -> Int {
-        let summaryCharacters = summary?.count ?? 0
-        let messageCharacters = messages.reduce(0) { total, message in
-            total + message.content.count + 24
-        }
-        // Local chat tokenizers vary; three characters per token is intentionally
-        // conservative so compaction runs before the backend must truncate.
-        return Int(ceil(Double(summaryCharacters + messageCharacters) / 3))
-    }
-
-    static func shouldCompact(
-        estimatedTokens: Int,
-        contextLength: Int,
-        reservedOutputTokens: Int,
-        thresholdPercent: Int
-    ) -> Bool {
-        let capacity = max(1, contextLength - clampedMaxTokens(reservedOutputTokens))
-        let threshold = Double(clampedThreshold(thresholdPercent)) / 100
-        return Double(max(0, estimatedTokens)) / Double(capacity) >= threshold
-    }
-
-    static func candidates(
-        messages: [ChatMessage],
-        keepRecent: Int
-    ) -> [ChatMessage] {
-        let completed = messages.filter { !$0.content.isEmpty && !$0.wasCancelled }
-        guard completed.count > keepRecent else { return [] }
-        return Array(completed.dropLast(keepRecent))
     }
 }
 
