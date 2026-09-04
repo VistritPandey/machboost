@@ -144,14 +144,17 @@ final class AppState {
     }
 
     var activeCatalog: [CatalogModel] {
-        inferenceMode == .team ? teamCatalog : catalog
+        inferenceMode == .team && hasOnlineTeamHost ? teamCatalog : catalog
     }
 
     var activeLoadedModels: [ModelInstance] {
-        inferenceMode == .team ? teamLoadedModels : loadedModels
+        inferenceMode == .team && hasOnlineTeamHost ? teamLoadedModels : loadedModels
     }
 
     var inferenceLabel: String {
+        if inferenceMode == .team, !hasOnlineTeamHost {
+            return "This Mac (remote offline)"
+        }
         if inferenceMode == .team, teamHosts.count > 1 {
             return "Host pool (\(teamHosts.count))"
         }
@@ -162,7 +165,7 @@ final class AppState {
     }
 
     var teamIsConnected: Bool {
-        inferenceMode == .team && teamHost != nil && !teamAPIs.isEmpty
+        inferenceMode == .team && hasOnlineTeamHost
     }
 
     var includeLocalInHostPool: Bool {
@@ -1093,17 +1096,7 @@ final class AppState {
         }
         await refreshTeamHostsConcurrently()
         rebuildTeamCatalog()
-        if let selected = teamHost, let remote = teamAPIs[selected.id] {
-            inferenceAPI = remote
-        } else if let profile = teamHosts.first(where: {
-            teamHostSnapshots[$0.id]?.isOnline == true
-        }), let remote = teamAPIs[profile.id] {
-            teamHost = profile
-            inferenceAPI = remote
-            Self.saveTeamProfile(profile)
-        } else if !includeLocalInHostPool {
-            presentedError = "No configured MachBoost host is currently reachable."
-        }
+        selectReachableInferenceAPI()
         startHeartbeat()
     }
 
@@ -1123,6 +1116,33 @@ final class AppState {
     private func reconnectTeamHostsWithoutRestartingHeartbeat() async {
         await refreshTeamHostsConcurrently()
         rebuildTeamCatalog()
+        selectReachableInferenceAPI()
+    }
+
+    private var hasOnlineTeamHost: Bool {
+        teamHostSnapshots.values.contains(where: \.isOnline)
+    }
+
+    private func selectReachableInferenceAPI() {
+        guard inferenceMode == .team else {
+            inferenceAPI = api
+            return
+        }
+        if let selected = teamHost,
+           teamHostSnapshots[selected.id]?.isOnline == true,
+           let remote = teamAPIs[selected.id] {
+            inferenceAPI = remote
+            return
+        }
+        if let profile = teamHosts.first(where: {
+            teamHostSnapshots[$0.id]?.isOnline == true
+        }), let remote = teamAPIs[profile.id] {
+            teamHost = profile
+            inferenceAPI = remote
+            Self.saveTeamProfile(profile)
+            return
+        }
+        inferenceAPI = api
     }
 
     private func refreshTeamHostsConcurrently() async {
@@ -1296,7 +1316,16 @@ final class AppState {
         let prefersLocal = preferredHostID == InferenceHostOption.localID
         let preferredRemoteID = preferredHostID.flatMap { UUID(uuidString: $0) }
         var candidates: [InferenceCandidate] = []
-        if (includeLocalInHostPool || prefersLocal),
+        let hasEligibleRemote = teamHostSnapshots.values.contains { snapshot in
+            snapshot.isOnline
+                && snapshot.supports(model: model)
+                && hostCooldownUntil[snapshot.id, default: .distantPast] <= now
+        }
+        if HostRoutingPolicy.shouldIncludeLocal(
+            includeLocalInPool: includeLocalInHostPool,
+            prefersLocal: prefersLocal,
+            hasOnlineRemote: hasEligibleRemote
+        ),
            hostCooldownUntil[Self.localPoolID, default: .distantPast] <= now,
            catalog.contains(where: {
                ($0.name == model || $0.repository == model) && $0.cached && $0.support == "ready"
