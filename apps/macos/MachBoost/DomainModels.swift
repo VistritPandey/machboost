@@ -67,6 +67,14 @@ struct TeamHostSnapshot: Identifiable, Sendable {
 }
 
 enum HostRoutingPolicy {
+    static func shouldIncludeLocal(
+        includeLocalInPool: Bool,
+        prefersLocal: Bool,
+        hasOnlineRemote: Bool
+    ) -> Bool {
+        includeLocalInPool || prefersLocal || !hasOnlineRemote
+    }
+
     static func score(
         metrics: ServerMetrics?,
         modelLoaded: Bool,
