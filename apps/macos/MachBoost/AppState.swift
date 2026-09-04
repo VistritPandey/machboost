@@ -152,16 +152,11 @@ final class AppState {
     }
 
     var inferenceLabel: String {
-        if inferenceMode == .team, !hasOnlineTeamHost {
-            return "This Mac (remote offline)"
-        }
-        if inferenceMode == .team, teamHosts.count > 1 {
-            return "Host pool (\(teamHosts.count))"
-        }
-        if inferenceMode == .team, let teamHost {
-            return teamHost.hostName
-        }
-        return "This Mac"
+        inferencePresentation.destination
+    }
+
+    var inferenceStatusLabel: String {
+        inferencePresentation.status
     }
 
     var teamIsConnected: Bool {
@@ -1121,6 +1116,50 @@ final class AppState {
 
     private var hasOnlineTeamHost: Bool {
         teamHostSnapshots.values.contains(where: \.isOnline)
+    }
+
+    private var inferencePresentation: (destination: String, status: String) {
+        let onlineProfiles = teamHosts.filter {
+            teamHostSnapshots[$0.id]?.isOnline == true
+        }
+        let selectedOnlineName = teamHost.flatMap { selected in
+            onlineProfiles.first(where: { $0.id == selected.id })?.hostName
+        }
+        return Self.inferencePresentation(
+            mode: inferenceMode,
+            serverIsRunning: serverIsRunning,
+            onlineHostNames: onlineProfiles.map(\.hostName),
+            selectedOnlineName: selectedOnlineName
+        )
+    }
+
+    static func inferencePresentation(
+        mode: InferenceMode,
+        serverIsRunning: Bool,
+        onlineHostNames: [String],
+        selectedOnlineName: String?
+    ) -> (destination: String, status: String) {
+        guard mode == .team else {
+            return (
+                "This Mac",
+                serverIsRunning ? "Local ready" : "Local offline"
+            )
+        }
+        guard !onlineHostNames.isEmpty else {
+            return (
+                "This Mac",
+                serverIsRunning
+                    ? "Local fallback \u{00b7} remote unavailable"
+                    : "Remote unavailable"
+            )
+        }
+        let destination: String
+        if onlineHostNames.count > 1 {
+            destination = "Host pool (\(onlineHostNames.count))"
+        } else {
+            destination = selectedOnlineName ?? onlineHostNames[0]
+        }
+        return (destination, destination)
     }
 
     private func selectReachableInferenceAPI() {
