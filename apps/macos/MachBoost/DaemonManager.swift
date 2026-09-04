@@ -33,6 +33,7 @@ final class DaemonManager {
         guard state != .starting, state != .running else { return }
         state = .starting
         authenticationRequired = false
+        let launch = try runtimeLaunch()
         let api = MachBoostAPI(endpoint: configuration.endpoint, apiToken: apiToken)
         if let health = try? await api.serverHealth(), health.isReady {
             authenticationRequired = health.requiresAuthentication
@@ -42,6 +43,18 @@ final class DaemonManager {
             }
             if !canAuthenticate {
                 try await reclaimBundledDaemon(on: configuration.port)
+                authenticationRequired = false
+            } else if
+                launch.prefixArguments.isEmpty,
+                !Self.listenerUsesRuntime(
+                    on: configuration.port,
+                    executablePath: launch.executable.path
+                )
+            {
+                try await stopUnexpectedDaemon(
+                    api: api,
+                    port: configuration.port
+                )
                 authenticationRequired = false
             } else if let serverVersion = health.version,
                       Self.isOlderVersion(serverVersion, than: Self.applicationVersion()) {
@@ -58,7 +71,6 @@ final class DaemonManager {
             }
         }
 
-        let launch = try runtimeLaunch()
         let teamDatabase = try teamDatabaseURL()
         let process = Process()
         process.executableURL = launch.executable
@@ -261,6 +273,31 @@ final class DaemonManager {
         )
     }
 
+    private func stopUnexpectedDaemon(
+        api: MachBoostAPI,
+        port: Int
+    ) async throws {
+        appendLog("Replacing local MachBoost daemon with this app's bundled MLX runtime.")
+        do {
+            try await api.shutdown()
+        } catch {
+            throw DaemonError.incompatibleDaemon(
+                running: "external runtime on port \(port)",
+                expected: "bundled app runtime"
+            )
+        }
+        for _ in 0..<50 {
+            if Self.listenerPIDs(on: port).isEmpty {
+                return
+            }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        throw DaemonError.incompatibleDaemon(
+            running: "external runtime on port \(port)",
+            expected: "bundled app runtime"
+        )
+    }
+
     private func appendLog(_ text: String) {
         recentLogs.append(contentsOf: text.split(whereSeparator: { $0.isNewline }).map(String.init))
         if recentLogs.count > 300 {
@@ -293,6 +330,30 @@ final class DaemonManager {
         command.contains("/Contents/Resources/runtime/python/bin/python")
             && command.contains("-m machboost.cli serve")
             && command.contains("--port \(port)")
+    }
+
+    static func daemonCommandMatchesRuntime(
+        _ command: String,
+        executablePath: String,
+        port: Int
+    ) -> Bool {
+        command.contains(executablePath)
+            && command.contains("-m machboost.cli serve")
+            && command.contains("--port \(port)")
+    }
+
+    private static func listenerUsesRuntime(
+        on port: Int,
+        executablePath: String
+    ) -> Bool {
+        let listeners = listenerPIDs(on: port)
+        return !listeners.isEmpty && listeners.allSatisfy { pid in
+            daemonCommandMatchesRuntime(
+                processCommand(pid: pid),
+                executablePath: executablePath,
+                port: port
+            )
+        }
     }
 
     private static func listenerPIDs(on port: Int) -> [Int32] {
