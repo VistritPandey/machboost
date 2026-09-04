@@ -459,6 +459,11 @@ final class MachBoostUITests: XCTestCase {
         for (key, value) in environment {
             app.launchEnvironment[key] = value
         }
+        addTeardownBlock {
+            if app.state != .notRunning {
+                app.terminate()
+            }
+        }
         app.launch()
         app.activate()
         return app
