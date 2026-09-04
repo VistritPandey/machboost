@@ -1926,6 +1926,35 @@ final class MachBoostTests: XCTestCase {
     }
 
     @MainActor
+    func testDaemonRuntimeMatchRejectsDebugPythonOnTheAppPort() {
+        let bundledRuntime = "/Applications/MachBoost.app/Contents/Resources/runtime/python/bin/python3"
+        let bundled = "\(bundledRuntime) -m machboost.cli serve --port 11435"
+        let debug = "/usr/bin/python3 -m machboost.cli serve --port 11435"
+
+        XCTAssertTrue(
+            DaemonManager.daemonCommandMatchesRuntime(
+                bundled,
+                executablePath: bundledRuntime,
+                port: 11_435
+            )
+        )
+        XCTAssertFalse(
+            DaemonManager.daemonCommandMatchesRuntime(
+                debug,
+                executablePath: bundledRuntime,
+                port: 11_435
+            )
+        )
+        XCTAssertFalse(
+            DaemonManager.daemonCommandMatchesRuntime(
+                bundled,
+                executablePath: bundledRuntime,
+                port: 11_436
+            )
+        )
+    }
+
+    @MainActor
     func testDaemonStartsAndShutsDownFromIsolatedSourceRuntime() async throws {
         let temporaryRoot = FileManager.default.temporaryDirectory
             .appendingPathComponent("machboost-source-\(UUID().uuidString)", isDirectory: true)
