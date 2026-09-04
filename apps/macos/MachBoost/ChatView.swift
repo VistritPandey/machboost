@@ -646,14 +646,16 @@ struct ChatView: View {
                     contextLength: contextWindow
                 ))
                 .monospacedDigit()
-                .accessibilityIdentifier("context-usage")
             }
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("context-usage")
             if let promptTokens = effectiveContextMessages.last(where: {
                 $0.role == .assistant && $0.promptTokens != nil
             })?.promptTokens {
                 LabeledContent("Last request input", value: "\(promptTokens.formatted()) tokens")
             }
             Toggle("Summarize older turns automatically", isOn: $autoSummarize)
+                .accessibilityIdentifier("automatic-summary")
             if autoSummarize {
                 Stepper(value: $summaryThreshold, in: 70...95, step: 5) {
                     LabeledContent("Summarize at", value: "\(summaryThreshold)%")
