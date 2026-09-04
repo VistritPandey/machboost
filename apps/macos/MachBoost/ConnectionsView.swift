@@ -8,6 +8,7 @@ struct ConnectionsView: View {
     @State private var requestNote = ""
     @State private var isConnecting = false
     @State private var pendingNearbyHost: DiscoveredMachBoostHost?
+    @State private var reconnectingHost: TeamHostProfile?
 
     var body: some View {
         ScrollView {
@@ -27,8 +28,9 @@ struct ConnectionsView: View {
         }
         .navigationTitle("Connections")
         .sheet(item: $pendingNearbyHost) { host in
-            NearbyHostConnectionSheet(
-                host: host,
+            HostConnectionSheet(
+                name: host.name,
+                endpoint: host.endpoint,
                 isConnecting: isConnecting,
                 onCancel: {
                     pendingNearbyHost = nil
@@ -37,6 +39,22 @@ struct ConnectionsView: View {
                 onConnect: { token in
                     connect(endpoint: host.endpoint.absoluteString, token: token) {
                         pendingNearbyHost = nil
+                    }
+                }
+            )
+        }
+        .sheet(item: $reconnectingHost) { host in
+            HostConnectionSheet(
+                name: host.hostName,
+                endpoint: host.endpoint,
+                isConnecting: isConnecting,
+                onCancel: {
+                    reconnectingHost = nil
+                    apiKey = ""
+                },
+                onConnect: { token in
+                    connect(endpoint: host.endpoint.absoluteString, token: token) {
+                        reconnectingHost = nil
                     }
                 }
             )
@@ -234,6 +252,7 @@ struct ConnectionsView: View {
             loaded: appState.loadedModels.count,
             latency: 0,
             useAction: appState.inferenceMode == .local ? nil : { appState.useLocalInference() },
+            reconnectAction: nil,
             removeAction: nil
         )
     }
@@ -244,9 +263,12 @@ struct ConnectionsView: View {
         let useAction: (() -> Void)? = snapshot?.isOnline == true && appState.inferenceMode == .local
             ? { appState.selectTeamHost(host) }
             : nil
+        let needsAuthentication = snapshot?.connectionIssue == .authentication
         return hostNode(
             name: host.hostName,
-            subtitle: snapshot?.isOnline == true ? host.endpoint.host ?? "Remote Mac" : "Unavailable",
+            subtitle: snapshot?.isOnline == true
+                ? host.endpoint.host ?? "Remote Mac"
+                : needsAuthentication ? "Sign in required" : "Unavailable",
             online: snapshot?.isOnline == true,
             selected: selected,
             active: snapshot?.activeRequests ?? 0,
@@ -255,6 +277,7 @@ struct ConnectionsView: View {
             loaded: snapshot?.loadedModels.count ?? 0,
             latency: snapshot?.roundTripSeconds ?? 0,
             useAction: useAction,
+            reconnectAction: needsAuthentication ? { reconnectingHost = host } : nil,
             removeAction: { appState.removeTeamHost(host) }
         )
     }
@@ -270,6 +293,7 @@ struct ConnectionsView: View {
         loaded: Int,
         latency: Double,
         useAction: (() -> Void)?,
+        reconnectAction: (() -> Void)?,
         removeAction: (() -> Void)?
     ) -> some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -310,7 +334,14 @@ struct ConnectionsView: View {
             }
 
             HStack {
-                if let useAction {
+                if let reconnectAction {
+                    Button(action: reconnectAction) {
+                        Label("Sign in", systemImage: "key")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.green)
+                    .controlSize(.small)
+                } else if let useAction {
                     Button(
                         appState.inferenceMode == .local ? "Enable Pool" : "Use This Mac",
                         action: useAction
@@ -509,12 +540,20 @@ struct ConnectionsView: View {
     }
 
     private var connectionBadge: some View {
-        Label(
-            appState.inferenceLabel,
-            systemImage: appState.inferenceMode == .team ? "network" : "desktopcomputer"
+        let isRemoteReady = appState.teamIsConnected
+        let color: Color = isRemoteReady
+            ? .green
+            : appState.inferenceMode == .team ? .orange : .secondary
+        return Label(
+            appState.inferenceStatusLabel,
+            systemImage: isRemoteReady
+                ? "network"
+                : appState.inferenceMode == .team
+                    ? "exclamationmark.triangle"
+                    : "desktopcomputer"
         )
         .font(.caption.weight(.semibold))
-        .foregroundStyle(appState.inferenceMode == .team ? Color.green : Color.secondary)
+        .foregroundStyle(color)
         .padding(.horizontal, 9)
         .frame(height: 26)
         .background(Color(nsColor: .controlBackgroundColor))
@@ -583,8 +622,9 @@ struct ConnectionsView: View {
     }
 }
 
-private struct NearbyHostConnectionSheet: View {
-    let host: DiscoveredMachBoostHost
+private struct HostConnectionSheet: View {
+    let name: String
+    let endpoint: URL
     let isConnecting: Bool
     let onCancel: () -> Void
     let onConnect: (String) -> Void
@@ -597,9 +637,9 @@ private struct NearbyHostConnectionSheet: View {
                     .font(.title2)
                     .foregroundStyle(.green)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Connect to \(host.name)")
+                    Text("Connect to \(name)")
                         .font(.title3.weight(.semibold))
-                    Text(host.endpoint.absoluteString)
+                    Text(endpoint.absoluteString)
                         .font(.caption.monospaced())
                         .foregroundStyle(.secondary)
                 }
