@@ -338,8 +338,11 @@ private struct ModelRow: View {
                     if loaded {
                         Label("Loaded", systemImage: "memorychip.fill")
                             .foregroundStyle(.green)
-                    } else if model.support == "unsupported" || model.support == "missing_runtime" {
-                        Label("Unsupported", systemImage: "exclamationmark.triangle.fill")
+                    } else if model.support == "missing_runtime" {
+                        Label("Runtime unavailable", systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                    } else if model.support == "unsupported" {
+                        Label("Architecture unsupported", systemImage: "exclamationmark.triangle.fill")
                             .foregroundStyle(.orange)
                     } else if !model.tested {
                         Label("Verify before download", systemImage: "checkmark.shield")
