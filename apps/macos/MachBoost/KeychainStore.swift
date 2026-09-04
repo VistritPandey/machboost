@@ -33,8 +33,14 @@ enum KeychainStore {
 
     private static func value(account: String) -> String? {
         if usesCommunityStore {
-            return communityStore.value(account: account)
+            return communityStore.value(account: account) {
+                keychainValue(account: account)
+            }
         }
+        return keychainValue(account: account)
+    }
+
+    private static func keychainValue(account: String) -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -226,6 +232,17 @@ final class CommunityCredentialStore: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return load()[account]
+    }
+
+    func value(account: String, migratingFrom legacyValue: () -> String?) -> String? {
+        if let stored = value(account: account) {
+            return stored
+        }
+        guard let legacy = legacyValue(), !legacy.isEmpty else {
+            return nil
+        }
+        try? save(value: legacy, account: account)
+        return legacy
     }
 
     func save(value: String, account: String) throws {
